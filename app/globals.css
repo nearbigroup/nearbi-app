@@ -1,0 +1,120 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-primary: #FFFFFF;
+  --color-brand-accent: #F5A800;
+  --color-brand-text: #111111;
+  --color-brand-text-secondary: #757575;
+  --color-brand-success: #2E7D32;
+  --color-brand-warning: #E65100;
+  --color-brand-danger: #D32F2F;
+  --color-brand-border: #E0E0E0;
+
+  --font-sans: system-ui, -apple-system, sans-serif;
+}
+
+:root {
+  --sat: env(safe-area-inset-top);
+  --sab: env(safe-area-inset-bottom);
+  --sal: env(safe-area-inset-left);
+  --sar: env(safe-area-inset-right);
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html, body {
+  overflow-x: hidden;
+  overscroll-behavior: none;
+}
+
+body {
+  background-color: var(--color-brand-primary);
+  color: var(--color-brand-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  padding-bottom: env(safe-area-inset-bottom, 20px);
+}
+
+@media (min-width: 769px) {
+  body {
+    background: #F0F0F0;
+  }
+  .app-frame {
+    max-width: 480px;
+    margin: 0 auto;
+    background: #FFFFFF;
+    min-height: 100vh;
+    box-shadow: 0 0 40px rgba(0,0,0,0.15);
+  }
+}
+
+/* Touch targets and mobile input optimizations */
+button, a, select, input[type="button"], input[type="submit"] {
+  min-height: 44px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* Form input improvements to prevent iOS zoom */
+input[type="text"], 
+input[type="number"], 
+input[type="date"], 
+input[type="password"], 
+input[type="email"], 
+select, 
+textarea {
+  font-size: 16px !important;
+  padding: 12px 14px !important;
+}
+
+select {
+  height: 48px !important;
+  min-height: 48px !important;
+  appearance: none !important;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23757575' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 14px center !important;
+  background-size: 16px !important;
+  padding-right: 40px !important;
+}
+
+/* Mobile active feedback replacement for hover */
+button:active, a:active {
+  opacity: 0.8;
+}
+
+/* Base utility classes for the requested design */
+@layer components {
+  .nearbi-card {
+    background-color: #FFFFFF;
+    border: 1px solid var(--color-brand-border);
+    border-radius: 14px;
+  }
+  
+  .nearbi-bottom-nav {
+    background-color: #FFFFFF;
+    border-top: 1px solid var(--color-brand-border);
+    box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.08);
+    padding-bottom: env(safe-area-inset-bottom, 16px);
+  }
+  
+  .nearbi-bottom-nav-item {
+    color: var(--color-brand-text-secondary);
+    min-height: 60px;
+  }
+  
+  .nearbi-bottom-nav-item.active {
+    color: var(--color-brand-accent);
+    border-top: 3px solid var(--color-brand-accent);
+    margin-top: -2px; /* Align border perfectly with the nav's top border */
+  }
+  
+  .nearbi-active-state {
+    background-color: #FFF8E7; /* Light amber highlight */
+    color: var(--color-brand-accent);
+  }
+}
