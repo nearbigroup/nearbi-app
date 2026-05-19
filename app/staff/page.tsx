@@ -79,8 +79,13 @@ export default function Staff() {
   };
 
   const fetchShifts = async () => {
-    const { data } = await supabase.from('shifts').select('*');
-    if (data) setShifts(data);
+    try {
+      const { data, error } = await supabase.from('shifts').select('*');
+      if (error) throw error;
+      if (data) setShifts(data);
+    } catch (e) {
+      console.error('Error fetching shifts:', e);
+    }
   };
 
   useEffect(() => {

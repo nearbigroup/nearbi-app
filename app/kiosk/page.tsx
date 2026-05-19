@@ -34,28 +34,33 @@ export default function KioskPage() {
   // Stats polling
   useEffect(() => {
     const fetchStats = async () => {
-      const today = new Date().toISOString().split('T')[0];
-      const { data } = await supabase
-        .from('attendance')
-        .select('status, check_in_time, check_out_time, staff:staff_id(branch_id)')
-        .eq('date', today);
-      
-      if (data) {
-        const branchData = data.filter(r => {
-          const staffObj = Array.isArray(r.staff) ? r.staff[0] : r.staff;
-          return staffObj?.branch_id === branch;
-        });
+      try {
+        const today = new Date().toISOString().split('T')[0];
+        const { data, error } = await supabase
+          .from('attendance')
+          .select('status, check_in_time, check_out_time, staff:staff_id(branch_id)')
+          .eq('date', today);
         
-        let checkedIn = 0;
-        let late = 0;
-        let checkedOut = 0;
-        
-        for (const row of branchData) {
-          if (row.check_in_time) checkedIn++;
-          if (row.status === 'late') late++;
-          if (row.check_out_time) checkedOut++;
+        if (error) throw error;
+        if (data) {
+          const branchData = data.filter(r => {
+            const staffObj = Array.isArray(r.staff) ? r.staff[0] : r.staff;
+            return staffObj?.branch_id === branch;
+          });
+          
+          let checkedIn = 0;
+          let late = 0;
+          let checkedOut = 0;
+          
+          for (const row of branchData) {
+            if (row.check_in_time) checkedIn++;
+            if (row.status === 'late') late++;
+            if (row.check_out_time) checkedOut++;
+          }
+          setStats({ checkedIn, late, checkedOut });
         }
-        setStats({ checkedIn, late, checkedOut });
+      } catch (e) {
+        console.error('Error fetching kiosk stats:', e);
       }
     };
     
@@ -73,22 +78,26 @@ export default function KioskPage() {
 
   const lookupStaff = async (enteredPin: string) => {
     setKioskState('LOADING');
-    const { data, error } = await supabase
-      .from('staff')
-      .select('*, shift:shifts(*), branch:branches(*)')
-      .eq('pin', enteredPin)
-      .single();
+    try {
+      const { data, error } = await supabase
+        .from('staff')
+        .select('*, shift:shifts(*), branch:branches(*)')
+        .eq('pin', enteredPin)
+        .single();
 
-    if (error || !data) {
+      if (error || !data) {
+        throw error || new Error('Staff not found');
+      }
+      setStaff(data);
+      setKioskState('STAFF_FOUND');
+    } catch (e) {
+      console.error('Error looking up staff:', e);
       setErrorMsg('PIN not recognised. Please try again.');
       setKioskState('ERROR');
       setTimeout(() => {
         setPin('');
         setKioskState('IDLE');
       }, 2500);
-    } else {
-      setStaff(data);
-      setKioskState('STAFF_FOUND');
     }
   };
 
