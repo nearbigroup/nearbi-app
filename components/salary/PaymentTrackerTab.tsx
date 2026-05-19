@@ -6,9 +6,21 @@ import { useAuth } from '@/lib/auth-context';
 import { Staff, SalaryConfirmation, SalaryPayment } from './types';
 import { formatCurrency, getCurrentMonthStr, formatMonthDisplay } from './utils';
 
+const SkeletonCard = () => (
+  <div style={{
+    background: 'linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%)',
+    backgroundSize: '200% 100%',
+    animation: 'shimmer 1.5s infinite',
+    borderRadius: '12px',
+    height: '72px',
+    marginBottom: '8px',
+  }} />
+);
+
 export default function PaymentTrackerTab() {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
   const month = getCurrentMonthStr();
 
   const [staffList, setStaffList] = useState<Staff[]>([]);
@@ -30,17 +42,24 @@ export default function PaymentTrackerTab() {
   const fetchData = async () => {
     try {
       setLoading(true);
+      setFetchError(false);
       
-      const { data: staffData } = await supabase.from('staff').select('*, branch:branches(name)').eq('active', true);
-      const { data: confData } = await supabase.from('salary_confirmations').select('*').eq('month', month);
-      const { data: payData } = await supabase.from('salary_payments').select('*').eq('month', month);
+      const { data: staffData, error: staffError } = await supabase.from('staff').select('*, branch:branches(name)').eq('active', true);
+      if (staffError) throw staffError;
+
+      const { data: confData, error: confError } = await supabase.from('salary_confirmations').select('*').eq('month', month);
+      if (confError) throw confError;
+
+      const { data: payData, error: payError } = await supabase.from('salary_payments').select('*').eq('month', month);
+      if (payError) throw payError;
 
       if (staffData) setStaffList(staffData);
       if (confData) setConfirmations(confData);
       if (payData) setPayments(payData);
 
     } catch (e) {
-      console.error(e);
+      console.error('Error fetching payments:', e);
+      setFetchError(true);
     } finally {
       setLoading(false);
     }
@@ -78,14 +97,40 @@ export default function PaymentTrackerTab() {
       await fetchData();
 
     } catch (e) {
-      console.error(e);
+      console.error('Error confirming payment:', e);
       alert('Failed to record payment');
     } finally {
       setSubmitting(false);
     }
   };
 
-  if (loading) return <div className="text-center py-10 text-gray-400">Loading payments...</div>;
+  if (fetchError) {
+    return (
+      <div className="py-12 text-center bg-red-50 border border-red-300 rounded-2xl p-6 my-4 text-[#111]">
+        <div className="text-4xl mb-3">⚠️</div>
+        <h3 className="text-lg font-bold text-[#111] mb-1">Could not load data. Check connection.</h3>
+        <p className="text-xs text-red-500 mb-4">Please verify your internet connection.</p>
+        <button 
+          onClick={() => fetchData()} 
+          className="bg-brand-accent text-[#111] font-bold px-6 py-2.5 rounded-xl active:scale-95 transition-transform"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="space-y-3">
+        <SkeletonCard />
+        <SkeletonCard />
+        <SkeletonCard />
+        <SkeletonCard />
+      </div>
+    );
+  }
+
 
   const totalConfirmed = confirmations.reduce((sum, c) => sum + c.net_salary, 0);
   const totalPaid = payments.reduce((sum, p) => sum + p.amount_paid, 0);

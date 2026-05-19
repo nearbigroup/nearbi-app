@@ -15,6 +15,17 @@ interface DashboardData {
   pendingLeaves: number;
 }
 
+const SkeletonCard = () => (
+  <div style={{
+    background: 'linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%)',
+    backgroundSize: '200% 100%',
+    animation: 'shimmer 1.5s infinite',
+    borderRadius: '12px',
+    height: '72px',
+    marginBottom: '8px',
+  }} />
+);
+
 export default function Dashboard() {
   const { user, canSeeSalaryBreakdown } = useAuth();
   const [data, setData] = useState<DashboardData | null>(null);
@@ -73,14 +84,17 @@ export default function Dashboard() {
             stats[b].late++;
             
             let mins = record.minutes_late;
-            if ((!mins || mins === 0) && record.check_in_time && s.shift?.start_time) {
+            const shiftObj = Array.isArray(s.shift) ? s.shift[0] : s.shift;
+            const startTime = shiftObj?.start_time;
+            
+            if ((!mins || mins === 0) && record.check_in_time && startTime) {
               const [ch, cm] = record.check_in_time.split(':').map(Number);
-              const [sh, sm] = s.shift.start_time.split(':').map(Number);
+              const [sh, sm] = startTime.split(':').map(Number);
               mins = (ch * 60 + cm) - (sh * 60 + sm);
               if (mins < 0) mins = 0;
             }
             
-            lateStaff.push({ ...s, minutes_late: mins });
+            lateStaff.push({ ...s, minutes_late: mins || 0 });
           } else if (record.status === 'absent') {
             stats[b].absent++;
             absentStaff.push(s);
@@ -99,7 +113,7 @@ export default function Dashboard() {
         pendingLeaves: pendingLeavesCount || 0,
       });
     } catch (e) {
-      console.error('Error fetching dashboard data', e);
+      console.error('Error fetching dashboard data:', e);
       setFetchError(true);
     } finally {
       setLoading(false);
@@ -129,12 +143,12 @@ export default function Dashboard() {
   }, []);
 
   const formatDate = () => {
-    return new Date().toLocaleDateString('en-US', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    });
+    const d = new Date();
+    const day = d.getDate();
+    const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    const month = months[d.getMonth()];
+    const year = d.getFullYear();
+    return `${day} ${month} ${year}`;
   };
 
   const getGreeting = () => {
@@ -146,15 +160,15 @@ export default function Dashboard() {
 
   if (fetchError) {
     return (
-      <div className="py-12 text-center bg-red-50 border border-red-200 rounded-2xl p-6">
+      <div className="py-12 text-center bg-red-50 border border-red-300 rounded-2xl p-6 my-4">
         <div className="text-4xl mb-3">⚠️</div>
-        <h3 className="text-lg font-bold text-red-700 mb-1">Failed to load dashboard</h3>
-        <p className="text-sm text-red-500 mb-4">Please check your internet connection and try again.</p>
+        <h3 className="text-lg font-bold text-red-700 mb-1">Could not load data. Check connection.</h3>
+        <p className="text-xs text-red-500 mb-4">Please verify your internet connection.</p>
         <button 
           onClick={() => fetchData()} 
-          className="bg-red-700 text-white font-bold px-6 py-2.5 rounded-xl active:scale-95 transition-transform"
+          className="bg-brand-accent text-[#111] font-bold px-6 py-2.5 rounded-xl active:scale-95 transition-transform"
         >
-          Retry Connection
+          Retry
         </button>
       </div>
     );
@@ -162,16 +176,25 @@ export default function Dashboard() {
 
   if (loading) {
     return (
-      <div className="space-y-6 animate-pulse">
-        <div className="h-16 bg-gray-200 rounded-xl"></div>
-        <div className="space-y-4">
-          <div className="h-32 bg-gray-200 rounded-xl"></div>
-          <div className="h-32 bg-gray-200 rounded-xl"></div>
+      <div className="space-y-6">
+        <div style={{
+          background: 'linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%)',
+          backgroundSize: '200% 100%',
+          animation: 'shimmer 1.5s infinite',
+          borderRadius: '12px',
+          height: '48px',
+          marginBottom: '16px'
+        }} />
+        <div className="space-y-3">
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
         </div>
-        <div className="h-48 bg-gray-200 rounded-xl"></div>
       </div>
     );
   }
+
 
   return (
     <div className="space-y-6">

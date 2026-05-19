@@ -7,6 +7,17 @@ import { useAuth } from '@/lib/auth-context';
 type StatusFilter = 'All' | 'Present' | 'Late' | 'Absent' | 'Checked Out';
 type BranchFilter = 'All' | 'daily' | 'hypermarket';
 
+const SkeletonCard = () => (
+  <div style={{
+    background: 'linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%)',
+    backgroundSize: '200% 100%',
+    animation: 'shimmer 1.5s infinite',
+    borderRadius: '12px',
+    height: '72px',
+    marginBottom: '8px',
+  }} />
+);
+
 export default function Attendance() {
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,7 +59,7 @@ export default function Attendance() {
 
       setData(combined);
     } catch (e) {
-      console.error(e);
+      console.error('Error fetching attendance:', e);
       setFetchError(true);
     } finally {
       setLoading(false);
@@ -146,30 +157,35 @@ export default function Attendance() {
 
       {/* List */}
       {fetchError ? (
-        <div className="py-12 text-center bg-red-50 border border-red-200 rounded-2xl p-6">
+        <div className="py-12 text-center bg-red-50 border border-red-300 rounded-2xl p-6 my-4">
           <div className="text-4xl mb-3">⚠️</div>
-          <h3 className="text-lg font-bold text-red-700 mb-1">Failed to load attendance register</h3>
-          <p className="text-sm text-red-500 mb-4">Please check your internet connection and try again.</p>
+          <h3 className="text-lg font-bold text-red-700 mb-1">Could not load data. Check connection.</h3>
+          <p className="text-xs text-red-500 mb-4">Please verify your internet connection.</p>
           <button 
             onClick={() => fetchAttendance()} 
-            className="bg-red-700 text-white font-bold px-6 py-2.5 rounded-xl active:scale-95 transition-transform"
+            className="bg-brand-accent text-[#111] font-bold px-6 py-2.5 rounded-xl active:scale-95 transition-transform"
           >
-            Retry Connection
+            Retry
           </button>
         </div>
       ) : loading ? (
         <div className="space-y-3">
-          {[1,2,3,4].map(i => (
-            <div key={i} className="h-24 bg-gray-200 rounded-xl animate-pulse"></div>
-          ))}
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
         </div>
       ) : filteredData.length === 0 ? (
         <div className="py-20 flex flex-col items-center justify-center text-center">
           <div className="text-6xl mb-4 opacity-50">📋</div>
-          <div className="text-lg font-bold text-gray-500">No staff found</div>
-          <p className="text-sm text-gray-400">Try changing your filters</p>
+          <div className="text-lg font-bold text-gray-500">
+            {data.length === 0 ? "No staff added yet" : "No attendance records for today yet"}
+          </div>
+          <p className="text-sm text-gray-400">Try changing your filters or checking kiosk check-ins</p>
         </div>
       ) : (
+
         <div className="space-y-3">
           {filteredData.map(item => (
             <div key={item.id} className="nearbi-card p-4 relative flex items-start space-x-3">

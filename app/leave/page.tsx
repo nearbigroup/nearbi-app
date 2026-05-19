@@ -6,6 +6,17 @@ import { useAuth } from '@/lib/auth-context';
 
 type TabType = 'pending' | 'approved' | 'rejected';
 
+const SkeletonCard = () => (
+  <div style={{
+    background: 'linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%)',
+    backgroundSize: '200% 100%',
+    animation: 'shimmer 1.5s infinite',
+    borderRadius: '12px',
+    height: '72px',
+    marginBottom: '8px',
+  }} />
+);
+
 export default function LeaveRequests() {
   const { user } = useAuth();
   const [requests, setRequests] = useState<any[]>([]);
@@ -25,7 +36,7 @@ export default function LeaveRequests() {
       if (error) throw error;
       if (data) setRequests(data);
     } catch (e) {
-      console.error(e);
+      console.error('Error fetching leave requests:', e);
       setFetchError(true);
     } finally {
       setLoading(false);
@@ -58,7 +69,7 @@ export default function LeaveRequests() {
         approved_by: user?.email 
       }).eq('id', id);
     } catch (e) {
-      console.error(e);
+      console.error('Error performing leave action:', e);
       fetchRequests(); // revert on fail
     }
   };
@@ -70,7 +81,12 @@ export default function LeaveRequests() {
   const visibleData = activeTab === 'pending' ? pending : activeTab === 'approved' ? approved : rejected;
 
   const formatDate = (dStr: string) => {
-    return new Date(dStr).toLocaleDateString('en-US', { weekday: 'short', year: 'numeric', month: 'long', day: 'numeric' });
+    const d = new Date(dStr);
+    const day = d.getDate();
+    const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+    const month = months[d.getMonth()];
+    const year = d.getFullYear();
+    return `${day} ${month} ${year}`;
   };
 
   const timeAgo = (dateStr: string) => {
@@ -117,20 +133,23 @@ export default function LeaveRequests() {
 
       {/* List */}
       {fetchError ? (
-        <div className="py-12 text-center bg-red-50 border border-red-200 rounded-2xl p-6">
+        <div className="py-12 text-center bg-red-50 border border-red-300 rounded-2xl p-6 my-4">
           <div className="text-4xl mb-3">⚠️</div>
-          <h3 className="text-lg font-bold text-red-700 mb-1">Failed to load leave requests</h3>
-          <p className="text-sm text-red-500 mb-4">Please check your internet connection and try again.</p>
+          <h3 className="text-lg font-bold text-red-700 mb-1">Could not load data. Check connection.</h3>
+          <p className="text-xs text-red-500 mb-4">Please verify your internet connection.</p>
           <button 
             onClick={() => fetchRequests()} 
-            className="bg-red-700 text-white font-bold px-6 py-2.5 rounded-xl active:scale-95 transition-transform"
+            className="bg-brand-accent text-[#111] font-bold px-6 py-2.5 rounded-xl active:scale-95 transition-transform"
           >
-            Retry Connection
+            Retry
           </button>
         </div>
       ) : loading ? (
         <div className="space-y-3">
-          {[1,2].map(i => <div key={i} className="h-40 bg-gray-200 rounded-xl animate-pulse"></div>)}
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
         </div>
       ) : visibleData.length === 0 ? (
         <div className="py-20 flex flex-col items-center justify-center text-center">
@@ -138,6 +157,7 @@ export default function LeaveRequests() {
           <div className="text-lg font-bold text-gray-500">No {activeTab} requests</div>
         </div>
       ) : (
+
         <div className="space-y-4">
           {visibleData.map(r => (
             <div key={r.id} className="nearbi-card p-4">

@@ -4,6 +4,17 @@ import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth-context';
 
+const SkeletonCard = () => (
+  <div style={{
+    background: 'linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%)',
+    backgroundSize: '200% 100%',
+    animation: 'shimmer 1.5s infinite',
+    borderRadius: '12px',
+    height: '72px',
+    marginBottom: '8px',
+  }} />
+);
+
 export default function Staff() {
   const { user, canSeeSalaryBreakdown } = useAuth();
   const [staff, setStaff] = useState<any[]>([]);
@@ -12,6 +23,8 @@ export default function Staff() {
   const [showAddPanel, setShowAddPanel] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
   const [fetchError, setFetchError] = useState(false);
+// (lines 16-282 remain unchanged)
+
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -282,26 +295,30 @@ export default function Staff() {
 
       {/* Staff List */}
       {fetchError ? (
-        <div className="py-12 text-center bg-red-50 border border-red-200 rounded-2xl p-6">
+        <div className="py-12 text-center bg-red-50 border border-red-300 rounded-2xl p-6 my-4">
           <div className="text-4xl mb-3">⚠️</div>
-          <h3 className="text-lg font-bold text-red-700 mb-1">Failed to load staff list</h3>
-          <p className="text-sm text-red-500 mb-4">Please check your internet connection and try again.</p>
+          <h3 className="text-lg font-bold text-red-700 mb-1">Could not load data. Check connection.</h3>
+          <p className="text-xs text-red-500 mb-4">Please verify your internet connection.</p>
           <button 
             onClick={() => fetchStaff()} 
-            className="bg-red-700 text-white font-bold px-6 py-2.5 rounded-xl active:scale-95 transition-transform"
+            className="bg-brand-accent text-[#111] font-bold px-6 py-2.5 rounded-xl active:scale-95 transition-transform"
           >
-            Retry Connection
+            Retry
           </button>
         </div>
       ) : loading ? (
         <div className="space-y-3">
-          {[1,2,3].map(i => <div key={i} className="h-32 bg-gray-200 rounded-xl animate-pulse"></div>)}
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
+          <SkeletonCard />
         </div>
       ) : filteredStaff.length === 0 ? (
         <div className="py-20 flex flex-col items-center justify-center text-center bg-gray-50 rounded-2xl border border-gray-100 p-6">
           <div className="text-6xl mb-4 opacity-50">👥</div>
-          <div className="text-lg font-bold text-gray-500 mb-1">No staff members found</div>
-          <p className="text-sm text-gray-400 max-w-xs">There are no active staff members in this branch yet. Tap "+ Add Staff" above to create one.</p>
+          <div className="text-lg font-bold text-gray-500 mb-1">No staff added yet. Tap + Add Staff to begin.</div>
+          <p className="text-sm text-gray-400 max-w-xs">There are no active staff members matching the search filter.</p>
         </div>
       ) : (
         <div className="space-y-4">

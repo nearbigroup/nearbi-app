@@ -5,8 +5,20 @@ import { supabase } from '@/lib/supabase';
 import { Staff, SalaryConfirmation } from './types';
 import { formatCurrency, getCurrentMonthStr, getPastMonths, formatMonthDisplay } from './utils';
 
+const SkeletonCard = () => (
+  <div style={{
+    background: 'linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%)',
+    backgroundSize: '200% 100%',
+    animation: 'shimmer 1.5s infinite',
+    borderRadius: '12px',
+    height: '72px',
+    marginBottom: '8px',
+  }} />
+);
+
 export default function PayslipTab() {
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState(false);
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [selectedStaffId, setSelectedStaffId] = useState('');
   
@@ -29,14 +41,18 @@ export default function PayslipTab() {
 
   const fetchStaff = async () => {
     try {
-      const { data } = await supabase
+      setLoading(true);
+      setFetchError(false);
+      const { data, error } = await supabase
         .from('staff')
         .select('*, branch:branches(name), shift:shifts(*)')
         .eq('active', true)
         .order('name');
+      if (error) throw error;
       if (data) setStaffList(data);
     } catch (e) {
-      console.error(e);
+      console.error('Error fetching staff for payslip:', e);
+      setFetchError(true);
     } finally {
       setLoading(false);
     }
@@ -44,16 +60,17 @@ export default function PayslipTab() {
 
   const fetchConfirmation = async () => {
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('salary_confirmations')
         .select('*')
         .eq('staff_id', selectedStaffId)
         .eq('month', selectedMonth)
         .maybeSingle();
       
+      if (error) throw error;
       setConfirmation(data || null);
     } catch (e) {
-      console.error(e);
+      console.error('Error fetching salary confirmation:', e);
     }
   };
 
@@ -66,7 +83,32 @@ export default function PayslipTab() {
     window.open(url, '_blank');
   };
 
-  if (loading) return <div className="text-center py-10 text-gray-400">Loading...</div>;
+  if (fetchError) {
+    return (
+      <div className="py-12 text-center bg-red-50 border border-red-300 rounded-2xl p-6 my-4 text-[#111]">
+        <div className="text-4xl mb-3">⚠️</div>
+        <h3 className="text-lg font-bold text-[#111] mb-1">Could not load data. Check connection.</h3>
+        <p className="text-xs text-red-600 mb-4">Please verify your internet connection.</p>
+        <button 
+          onClick={() => fetchStaff()} 
+          className="bg-brand-accent text-[#111] font-bold px-6 py-2.5 rounded-xl active:scale-95 transition-transform"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="space-y-3">
+        <SkeletonCard />
+        <SkeletonCard />
+        <SkeletonCard />
+      </div>
+    );
+  }
+
 
   return (
     <div className="space-y-6">

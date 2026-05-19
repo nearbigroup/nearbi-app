@@ -41,7 +41,10 @@ export default function KioskPage() {
         .eq('date', today);
       
       if (data) {
-        const branchData = data.filter(r => r.staff?.branch_id === branch);
+        const branchData = data.filter(r => {
+          const staffObj = Array.isArray(r.staff) ? r.staff[0] : r.staff;
+          return staffObj?.branch_id === branch;
+        });
         
         let checkedIn = 0;
         let late = 0;

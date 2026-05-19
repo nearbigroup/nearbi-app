@@ -7,10 +7,22 @@ import { calculateSalary } from '@/lib/salary';
 import { Staff, SalaryConfirmation } from './types';
 import { formatCurrency, getCurrentMonthStr, formatMonthDisplay } from './utils';
 
+const SkeletonCard = () => (
+  <div style={{
+    background: 'linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%)',
+    backgroundSize: '200% 100%',
+    animation: 'shimmer 1.5s infinite',
+    borderRadius: '12px',
+    height: '72px',
+    marginBottom: '8px',
+  }} />
+);
+
 export default function BulkConfirmTab() {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [confirming, setConfirming] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
   
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [confirmations, setConfirmations] = useState<SalaryConfirmation[]>([]);
@@ -55,24 +67,28 @@ export default function BulkConfirmTab() {
   const fetchData = async () => {
     try {
       setLoading(true);
+      setFetchError(false);
       
       // 1. Fetch active staff
-      const { data: staffData } = await supabase
+      const { data: staffData, error: staffError } = await supabase
         .from('staff')
         .select('*, branch:branches(name), shift:shifts(*)')
         .eq('active', true)
         .order('name');
-        
+         
+      if (staffError) throw staffError;
       if (!staffData) return;
 
       // 2. Fetch OT minutes from attendance for this month
       const startDate = `${month}-01`;
       const endDate = `${month}-31`;
-      const { data: attData } = await supabase
+      const { data: attData, error: attError } = await supabase
         .from('attendance')
         .select('staff_id, ot_minutes')
         .gte('date', startDate)
         .lte('date', endDate);
+
+      if (attError) throw attError;
 
       // Aggregate OT
       const otMap: Record<string, number> = {};
@@ -90,15 +106,17 @@ export default function BulkConfirmTab() {
       setStaffList(staffWithOT);
 
       // 3. Fetch existing confirmations
-      const { data: confData } = await supabase
+      const { data: confData, error: confError } = await supabase
         .from('salary_confirmations')
         .select('*')
         .eq('month', month);
 
+      if (confError) throw confError;
       if (confData) setConfirmations(confData);
 
     } catch (e) {
-      console.error('Error fetching data', e);
+      console.error('Error fetching salary confirmations:', e);
+      setFetchError(true);
     } finally {
       setLoading(false);
     }
@@ -141,16 +159,40 @@ export default function BulkConfirmTab() {
         alert('All unconfirmed salaries have been successfully confirmed.');
       }
     } catch (e) {
-      console.error(e);
+      console.error('Error confirming salaries:', e);
       alert('Error confirming salaries.');
     } finally {
       setConfirming(false);
     }
   };
 
-  if (loading) {
-    return <div className="text-center py-10 text-gray-400 animate-pulse">Loading staff data...</div>;
+  if (fetchError) {
+    return (
+      <div className="py-12 text-center bg-red-50 border border-red-300 rounded-2xl p-6 my-4">
+        <div className="text-4xl mb-3">⚠️</div>
+        <h3 className="text-lg font-bold text-red-700 mb-1">Could not load data. Check connection.</h3>
+        <p className="text-xs text-red-500 mb-4">Please verify your internet connection.</p>
+        <button 
+          onClick={() => fetchData()} 
+          className="bg-brand-accent text-[#111] font-bold px-6 py-2.5 rounded-xl active:scale-95 transition-transform"
+        >
+          Retry
+        </button>
+      </div>
+    );
   }
+
+  if (loading) {
+    return (
+      <div className="space-y-3">
+        <SkeletonCard />
+        <SkeletonCard />
+        <SkeletonCard />
+        <SkeletonCard />
+      </div>
+    );
+  }
+
 
   const filteredStaff = staffList.filter(s => filterBranch === 'all' || s.branch_id === filterBranch);
   const unconfirmedCount = filteredStaff.filter(s => !confirmations.find(c => c.staff_id === s.id)).length;

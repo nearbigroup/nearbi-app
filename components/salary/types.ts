@@ -16,7 +16,9 @@ export interface Staff {
     id: string;
     name: string;
   };
+  total_ot_minutes?: number;
 }
+
 
 export interface AttendanceSum {
   staff_id: string;
