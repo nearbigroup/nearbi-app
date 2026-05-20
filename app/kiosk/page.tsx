@@ -1,98 +1,114 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
-import { calculateOTMinutes } from '@/lib/salary';
+import { createNotification } from '@/lib/notifications';
+import { Check, LogOut, Camera, AlertCircle, UserCheck, Timer, AlertTriangle } from 'lucide-react';
 
 type KioskState = 'IDLE' | 'LOADING' | 'STAFF_FOUND' | 'CAMERA' | 'RESULT' | 'ERROR';
 type FlowType = 'CHECK_IN' | 'CHECK_OUT' | null;
 
 export default function KioskPage() {
-  const { user, branch } = useAuth();
-  
-  const [currentTime, setCurrentTime] = useState(new Date());
+  const { user, userBranch } = useAuth();
+  const [currentTime, setCurrentTime] = useState<Date | null>(null);
   const [kioskState, setKioskState] = useState<KioskState>('IDLE');
   const [pin, setPin] = useState('');
   const [staff, setStaff] = useState<any>(null);
-  
   const [flow, setFlow] = useState<FlowType>(null);
   const [errorMsg, setErrorMsg] = useState('');
-  const [resultMsg, setResultMsg] = useState<{ type: 'PRESENT' | 'LATE' | 'CHECKED_OUT' | 'ERROR', title: string, subtitle: string, sub2?: string } | null>(null);
-  
+  const [cameraError, setCameraError] = useState(false);
   const [stats, setStats] = useState({ checkedIn: 0, late: 0, checkedOut: 0 });
 
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const [resultData, setResultData] = useState<{
+    status: 'green' | 'yellow' | 'orange' | 'red' | 'blue';
+    title: string;
+    message: string;
+    details?: string;
+  } | null>(null);
 
-  // Clock
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+
+  // Initialize clock client-side to prevent SSR mismatch
   useEffect(() => {
+    setCurrentTime(new Date());
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  // Stats polling
-  useEffect(() => {
-    const fetchStats = async () => {
-      try {
-        const today = new Date().toISOString().split('T')[0];
-        const { data, error } = await supabase
-          .from('attendance')
-          .select('status, check_in_time, check_out_time, staff:staff_id(branch_id)')
-          .eq('date', today);
-        
-        if (error) throw error;
-        if (data) {
-          const branchData = data.filter(r => {
-            const staffObj = Array.isArray(r.staff) ? r.staff[0] : r.staff;
-            return staffObj?.branch_id === branch;
-          });
-          
-          let checkedIn = 0;
-          let late = 0;
-          let checkedOut = 0;
-          
-          for (const row of branchData) {
-            if (row.check_in_time) checkedIn++;
-            if (row.status === 'late') late++;
-            if (row.check_out_time) checkedOut++;
-          }
-          setStats({ checkedIn, late, checkedOut });
-        }
-      } catch (e) {
-        console.error('Error fetching kiosk stats:', e);
+  // Fetch branch-isolated stats every 30 seconds
+  const fetchStats = async () => {
+    if (!userBranch) return;
+    try {
+      const todayStr = new Date().toISOString().split('T')[0];
+      
+      // Fetch attendance for today
+      const { data: attendanceData, error } = await supabase
+        .from('attendance')
+        .select('status, check_in_time, check_out_time, staff!inner(branch_id)')
+        .eq('date', todayStr)
+        .eq('staff.branch_id', userBranch);
+
+      if (error) throw error;
+
+      let checkedIn = 0;
+      let late = 0;
+      let checkedOut = 0;
+
+      if (attendanceData) {
+        attendanceData.forEach((row) => {
+          if (row.check_in_time) checkedIn++;
+          if (row.status === 'late') late++;
+          if (row.check_out_time) checkedOut++;
+        });
       }
-    };
-    
-    fetchStats();
-    const timer = setInterval(fetchStats, 30000);
-    return () => clearInterval(timer);
-  }, [branch]);
 
-  // Handle PIN entry
-  useEffect(() => {
-    if (pin.length === 4 && kioskState === 'IDLE') {
-      lookupStaff(pin);
+      setStats({ checkedIn, late, checkedOut });
+    } catch (err) {
+      console.error('Error fetching kiosk stats:', err);
     }
-  }, [pin, kioskState]);
+  };
 
-  const lookupStaff = async (enteredPin: string) => {
+  useEffect(() => {
+    fetchStats();
+    const interval = setInterval(fetchStats, 30000);
+    return () => clearInterval(interval);
+  }, [userBranch]);
+
+  // Submit PIN automatic lookups
+  useEffect(() => {
+    if (pin.length === 4) {
+      handleLookup(pin);
+    }
+  }, [pin]);
+
+  const handleLookup = async (enteredPin: string) => {
     setKioskState('LOADING');
     try {
-      const { data, error } = await supabase
+      // Find active staff member in the current branch with this PIN
+      let query = supabase
         .from('staff')
-        .select('*, shift:shifts(*), branch:branches(*)')
+        .select('*, shift:shifts(*)')
         .eq('pin', enteredPin)
-        .single();
+        .eq('active', true);
 
-      if (error || !data) {
-        throw error || new Error('Staff not found');
+      if (userBranch) {
+        query = query.eq('branch_id', userBranch);
       }
+
+      const { data, error } = await query.maybeSingle();
+
+      if (error) throw error;
+      if (!data) {
+        throw new Error('PIN not recognised');
+      }
+
       setStaff(data);
       setKioskState('STAFF_FOUND');
-    } catch (e) {
-      console.error('Error looking up staff:', e);
-      setErrorMsg('PIN not recognised. Please try again.');
+    } catch (err: any) {
+      console.error(err);
+      setErrorMsg('PIN not recognised');
       setKioskState('ERROR');
       setTimeout(() => {
         setPin('');
@@ -101,36 +117,14 @@ export default function KioskPage() {
     }
   };
 
-  const handleKeyPress = (key: string) => {
-    if (kioskState !== 'IDLE') return;
-    if (key === 'DEL') {
-      setPin(prev => prev.slice(0, -1));
-    } else if (pin.length < 4) {
-      setPin(prev => prev + key);
+  const handleKeyPress = (num: string) => {
+    if (pin.length < 4) {
+      setPin((prev) => prev + num);
     }
   };
 
-  const startCamera = async (type: FlowType) => {
-    setFlow(type);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
-      setCameraStream(stream);
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
-      setKioskState('CAMERA');
-    } catch (err) {
-      setErrorMsg('Camera access required. Please allow camera access in your browser settings.');
-      setKioskState('ERROR');
-      setTimeout(() => resetKiosk(), 3000);
-    }
-  };
-
-  const stopCamera = () => {
-    if (cameraStream) {
-      cameraStream.getTracks().forEach(track => track.stop());
-      setCameraStream(null);
-    }
+  const handleBackspace = () => {
+    setPin((prev) => prev.slice(0, -1));
   };
 
   const resetKiosk = () => {
@@ -138,266 +132,534 @@ export default function KioskPage() {
     setPin('');
     setStaff(null);
     setFlow(null);
+    setResultData(null);
+    setCameraError(false);
     setKioskState('IDLE');
-    setResultMsg(null);
   };
 
-  const capturePhoto = async (): Promise<Blob | null> => {
-    if (!videoRef.current) return null;
-    const canvas = document.createElement('canvas');
-    canvas.width = videoRef.current.videoWidth;
-    canvas.height = videoRef.current.videoHeight;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
-    ctx.drawImage(videoRef.current, 0, 0);
-    return new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.8));
+  const startCamera = async (type: FlowType) => {
+    setFlow(type);
+    setCameraError(false);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 640 } },
+      });
+      streamRef.current = stream;
+      setKioskState('CAMERA');
+      // Wait for video element ref to populate
+      setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      }, 100);
+    } catch (err) {
+      console.error('Camera access denied:', err);
+      setCameraError(true);
+    }
   };
 
-  const uploadPhoto = async (blob: Blob, path: string) => {
-    const { data, error } = await supabase.storage.from('attendance-photos').upload(path, blob, { upsert: true });
-    if (error) throw error;
-    const { data: { publicUrl } } = supabase.storage.from('attendance-photos').getPublicUrl(path);
-    return publicUrl;
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
   };
 
-  const handleAction = async () => {
+  const takePhotoBlob = (): Promise<Blob> => {
+    return new Promise((resolve, reject) => {
+      if (!videoRef.current) {
+        reject(new Error('Video element not ready'));
+        return;
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = videoRef.current.videoWidth || 640;
+      canvas.height = videoRef.current.videoHeight || 480;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        reject(new Error('Canvas context failed'));
+        return;
+      }
+      ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(
+        (blob) => {
+          if (blob) {
+            resolve(blob);
+          } else {
+            reject(new Error('Blob conversion failed'));
+          }
+        },
+        'image/jpeg',
+        0.85
+      );
+    });
+  };
+
+  const uploadPhoto = async (blob: Blob, filename: string): Promise<string> => {
+    const filePath = `${staff.id}/${filename}`;
+    const { error: uploadError } = await supabase.storage
+      .from('attendance-photos')
+      .upload(filePath, blob, {
+        contentType: 'image/jpeg',
+        upsert: true,
+      });
+
+    if (uploadError) throw uploadError;
+
+    const { data } = supabase.storage.from('attendance-photos').getPublicUrl(filePath);
+    return data.publicUrl;
+  };
+
+  const handleCapture = async () => {
     if (!staff || !flow) return;
     setKioskState('LOADING');
-    
+
     try {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const blob = await takePhotoBlob();
+      stopCamera();
+
       if (flow === 'CHECK_IN') {
-        // Pre-check if already checked in today
-        const today = new Date().toISOString().split('T')[0];
-        const { data: existing } = await supabase.from('attendance').select('id').eq('staff_id', staff.id).eq('date', today).single();
-        
-        if (existing) {
-          setErrorMsg('Already checked in today.');
-          setKioskState('ERROR');
-          setTimeout(() => resetKiosk(), 2500);
-          return;
-        }
-
-        const blob = await capturePhoto();
-        stopCamera();
-        
-        let photoUrl = '';
-        if (blob) {
-          const path = `${staff.id}/${today}_checkin.jpg`;
-          photoUrl = await uploadPhoto(blob, path);
-        }
-
+        const photoUrl = await uploadPhoto(blob, `${todayStr}_checkin.jpg`);
         const now = new Date();
-        const checkInTimeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-        
-        const shiftStartStr = staff.shift.start_time;
+        const checkInTimeStr = now.toTimeString().split(' ')[0].substring(0, 5); // "HH:MM"
+
+        const shiftStartStr = staff.shift.start_time; // "HH:MM"
         const [sh, sm] = shiftStartStr.split(':').map(Number);
         const shiftMins = sh * 60 + sm;
         const currentMins = now.getHours() * 60 + now.getMinutes();
-        
-        let status = 'present';
+
+        // Calculate early in
+        let earlyInMinutes = 0;
+        if (currentMins < shiftMins) {
+          earlyInMinutes = shiftMins - currentMins;
+        }
+
+        // Calculate minutes late
         let minutesLate = 0;
-        
-        if (currentMins > shiftMins + 5) {
-          status = 'late';
+        let status: 'present' | 'late' = 'present';
+        let colorCode: 'green' | 'yellow' | 'orange' | 'red' = 'green';
+
+        if (currentMins > shiftMins) {
           minutesLate = currentMins - shiftMins;
+          if (minutesLate > 5) {
+            status = 'late';
+          }
+          
+          if (minutesLate <= 15) {
+            colorCode = 'yellow';
+          } else if (minutesLate <= 30) {
+            colorCode = 'orange';
+          } else {
+            colorCode = 'red';
+          }
         }
 
-        await supabase.from('attendance').upsert({
-          staff_id: staff.id,
-          date: today,
-          check_in_time: checkInTimeStr,
-          status,
-          check_in_photo: photoUrl,
-          minutes_late: minutesLate,
-          marked_by: 'kiosk'
-        }, { onConflict: 'staff_id,date' });
+        // Check fine exemptions
+        const { data: exemption } = await supabase
+          .from('staff_fine_exemptions')
+          .select('id')
+          .eq('staff_id', staff.id)
+          .maybeSingle();
 
-        if (status === 'late') {
-          setResultMsg({
-            type: 'LATE',
-            title: 'CHECKED IN — LATE',
-            subtitle: `You are ${minutesLate} minutes late`,
-            sub2: `${staff.department} • ${staff.branch?.name}`
+        const isExempt = !!exemption;
+        let fineAmount = 0;
+
+        if (colorCode !== 'green' && !isExempt) {
+          // Read fine settings
+          const { data: fineSettings } = await supabase
+            .from('fine_settings')
+            .select('*')
+            .limit(1)
+            .maybeSingle();
+
+          const settings = fineSettings || {
+            yellow_fine: 50,
+            orange_fine: 100,
+            red_fine: 200,
+            yellow_free_passes: 4,
+          };
+
+          if (colorCode === 'yellow') {
+            // Check free passes count in current month
+            const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+            const { count, error: countErr } = await supabase
+              .from('attendance')
+              .select('*', { count: 'exact', head: true })
+              .eq('staff_id', staff.id)
+              .eq('color_code', 'yellow')
+              .gte('date', firstDayOfMonth)
+              .lte('date', todayStr);
+
+            if (!countErr && count !== null && count >= settings.yellow_free_passes) {
+              fineAmount = Number(settings.yellow_fine);
+            }
+          } else if (colorCode === 'orange') {
+            fineAmount = Number(settings.orange_fine);
+          } else if (colorCode === 'red') {
+            fineAmount = Number(settings.red_fine);
+          }
+        }
+
+        // Upsert attendance
+        const { error: attendanceErr } = await supabase.from('attendance').upsert(
+          {
+            staff_id: staff.id,
+            date: todayStr,
+            check_in_time: checkInTimeStr,
+            status,
+            color_code: colorCode,
+            minutes_late: minutesLate,
+            early_in_minutes: earlyInMinutes,
+            early_in_approved: false,
+            check_in_photo: photoUrl,
+            marked_by: 'kiosk',
+          },
+          { onConflict: 'staff_id,date' }
+        );
+
+        if (attendanceErr) throw attendanceErr;
+
+        // Insert late fines if any
+        if (fineAmount > 0) {
+          const currentMonthStr = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}`;
+          await supabase.from('late_fines').insert({
+            staff_id: staff.id,
+            date: todayStr,
+            late_minutes: minutesLate,
+            color_code: colorCode,
+            fine_amount: fineAmount,
+            waived: false,
+            month: currentMonthStr,
           });
-        } else {
-          setResultMsg({
-            type: 'PRESENT',
-            title: 'CHECKED IN ✓',
-            subtitle: 'Have a great shift!',
-            sub2: `${staff.department} • ${staff.branch?.name}`
+
+          // Insert notification for late_fine (ensure no money in msg for staff_executive)
+          await createNotification({
+            type: 'late_fine',
+            title: 'Late Fine Incurred',
+            message: `${staff.name} is ${minutesLate}m late (${colorCode} warning).`,
+            branchId: userBranch,
+            staffId: staff.id,
+            relatedId: todayStr,
+            targetRole: 'staff_executive',
           });
         }
+
+        // Insert notification if early check-in needs approval
+        if (earlyInMinutes > 0) {
+          await supabase.from('attendance_adjustments').insert({
+            staff_id: staff.id,
+            date: todayStr,
+            type: 'early_in',
+            minutes: earlyInMinutes,
+            status: 'pending',
+          });
+
+          await createNotification({
+            type: 'early_in_pending',
+            title: 'Early Check-in Approval Required',
+            message: `${staff.name} checked in ${earlyInMinutes}m early.`,
+            branchId: userBranch,
+            staffId: staff.id,
+            relatedId: todayStr,
+            targetRole: 'staff_executive',
+          });
+        }
+
+        // Set result screen parameters
+        let resTitle = 'On Time ✅';
+        let resMsg = 'Have a great shift!';
+        let resDetails = '';
+
+        if (colorCode === 'yellow') {
+          resTitle = `${minutesLate} mins late 🟡`;
+          resMsg = fineAmount > 0 ? `Late arrival fine applied: ₹${fineAmount}` : 'Yellow free pass applied (no fine)';
+        } else if (colorCode === 'orange') {
+          resTitle = `${minutesLate} mins late 🟠`;
+          resMsg = `Late arrival fine: ₹${fineAmount}`;
+        } else if (colorCode === 'red') {
+          resTitle = `${minutesLate} mins late 🔴`;
+          resMsg = `Late arrival fine: ₹${fineAmount}`;
+        }
+
+        if (earlyInMinutes > 0) {
+          resDetails = `Early In: ${earlyInMinutes} mins (Pending approval)`;
+        }
+
+        setResultData({
+          status: colorCode,
+          title: resTitle,
+          message: resMsg,
+          details: resDetails,
+        });
+
+        setKioskState('RESULT');
+        setTimeout(() => {
+          resetKiosk();
+          fetchStats();
+        }, 4000);
 
       } else if (flow === 'CHECK_OUT') {
-        const today = new Date().toISOString().split('T')[0];
-        const { data: record, error } = await supabase.from('attendance').select('*').eq('staff_id', staff.id).eq('date', today).single();
-        
+        // Query today's attendance record
+        const { data: record, error: recError } = await supabase
+          .from('attendance')
+          .select('*')
+          .eq('staff_id', staff.id)
+          .eq('date', todayStr)
+          .maybeSingle();
+
+        if (recError) throw recError;
+
         if (!record) {
-          stopCamera();
-          setErrorMsg("You haven't checked in today");
+          setErrorMsg("Haven't checked in today");
           setKioskState('ERROR');
           setTimeout(() => resetKiosk(), 2500);
           return;
         }
 
         if (record.check_out_time) {
-          stopCamera();
-          setErrorMsg("Already checked out");
+          setErrorMsg('Already checked out');
           setKioskState('ERROR');
           setTimeout(() => resetKiosk(), 2500);
           return;
         }
 
-        const blob = await capturePhoto();
-        stopCamera();
-        
-        let photoUrl = '';
-        if (blob) {
-          const path = `${staff.id}/${today}_checkout.jpg`;
-          photoUrl = await uploadPhoto(blob, path);
+        const photoUrl = await uploadPhoto(blob, `${todayStr}_checkout.jpg`);
+        const now = new Date();
+        const checkOutTimeStr = now.toTimeString().split(' ')[0].substring(0, 5); // "HH:MM"
+
+        // Calculate hours worked
+        const [ciH, ciM] = record.check_in_time.split(':').map(Number);
+        const checkInMins = ciH * 60 + ciM;
+        const checkOutMins = now.getHours() * 60 + now.getMinutes();
+
+        const actualHoursWorked = Math.max(0, (checkOutMins - checkInMins) / 60);
+        const shiftHours = Number(staff.shift.hours);
+
+        let otMinutes = 0;
+        let isEarlyLeave = false;
+        let earlyLeaveMinutes = 0;
+
+        if (actualHoursWorked > shiftHours + 0.5) {
+          otMinutes = Math.round((actualHoursWorked - shiftHours - 0.5) * 60);
+        } else if (actualHoursWorked < shiftHours) {
+          isEarlyLeave = true;
+          earlyLeaveMinutes = Math.round((shiftHours - actualHoursWorked) * 60);
         }
 
-        const now = new Date();
-        const checkOutTimeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-        
-        const [eh, em] = staff.shift.end_time.split(':').map(Number);
-        const shiftEndMins = eh * 60 + em;
-        const currentMins = now.getHours() * 60 + now.getMinutes();
-        const diff = currentMins - shiftEndMins;
-        const otMinutes = diff >= 30 ? diff - 30 : 0;
+        // Update attendance
+        const { error: checkoutErr } = await supabase
+          .from('attendance')
+          .update({
+            check_out_time: checkOutTimeStr,
+            check_out_photo: photoUrl,
+            actual_hours_worked: Math.round(actualHoursWorked * 100) / 100,
+            ot_minutes: otMinutes,
+            ot_approved: false, // pending approval
+          })
+          .eq('id', record.id);
 
-        await supabase.from('attendance').update({
-          check_out_time: checkOutTimeStr,
-          check_out_photo: photoUrl,
-          ot_minutes: otMinutes
-        }).eq('id', record.id);
+        if (checkoutErr) throw checkoutErr;
 
-        let otText = "No overtime today";
+        // Create OT adjustments and notifications if OT is > 0
+        if (otMinutes > 0) {
+          await supabase.from('attendance_adjustments').insert({
+            staff_id: staff.id,
+            date: todayStr,
+            type: 'ot',
+            minutes: otMinutes,
+            status: 'pending',
+          });
+
+          await createNotification({
+            type: 'ot_pending',
+            title: 'OT Approval Required',
+            message: `${staff.name} completed ${otMinutes}m Overtime.`,
+            branchId: userBranch,
+            staffId: staff.id,
+            relatedId: todayStr,
+            targetRole: 'staff_executive',
+          });
+        }
+
+        let resMsg = 'Checked out successfully!';
+        let resDetails = '';
+
         if (otMinutes > 0) {
           const h = Math.floor(otMinutes / 60);
           const m = otMinutes % 60;
-          otText = `OT: ${h > 0 ? h + 'h ' : ''}${m}min recorded`;
+          resDetails = `OT pending approval: ${h > 0 ? h + 'h ' : ''}${m}m`;
+        } else if (isEarlyLeave) {
+          const h = Math.floor(earlyLeaveMinutes / 60);
+          const m = earlyLeaveMinutes % 60;
+          resDetails = `Left early: ${h > 0 ? h + 'h ' : ''}${m}m (deduction applies)`;
         }
 
-        setResultMsg({
-          type: 'CHECKED_OUT',
+        setResultData({
+          status: 'blue',
           title: 'CHECKED OUT ✓',
-          subtitle: otText
+          message: resMsg,
+          details: resDetails,
         });
-      }
 
-      setKioskState('RESULT');
-      setTimeout(() => resetKiosk(), 4000);
-      
-    } catch (err) {
+        setKioskState('RESULT');
+        setTimeout(() => {
+          resetKiosk();
+          fetchStats();
+        }, 4000);
+      }
+    } catch (err: any) {
       console.error(err);
-      stopCamera();
-      setErrorMsg('An error occurred. Please try again.');
+      setErrorMsg(err.message || 'An error occurred during submission.');
       setKioskState('ERROR');
       setTimeout(() => resetKiosk(), 3000);
     }
   };
 
   const formatDate = (d: Date) => {
-    return d.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-  };
-  
-  const formatTime = (d: Date) => {
-    return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+    return d.toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+    });
   };
 
+  const formatTime = (d: Date) => {
+    return d.toLocaleTimeString('en-US', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true,
+    });
+  };
+
+  if (!currentTime) return null;
+
   return (
-    <div className="fixed inset-0 bg-[#0A0A0A] text-white flex flex-col font-sans overflow-hidden">
-      {/* Top Section */}
-      <div className="flex-none flex flex-col items-center pt-10 pb-6">
-        <div className="font-bold text-5xl tracking-tight flex mb-2">
-          <span className="text-gray-100">near</span>
-          <span className="text-brand-accent">bi</span>
+    <div className="fixed inset-0 bg-[#1E2028] text-white flex flex-col font-sans overflow-hidden select-none">
+      {/* Top Header */}
+      <div className="flex flex-col items-center pt-8 pb-4">
+        <div className="font-[900] text-[40px] tracking-tight flex items-center leading-none mb-1">
+          <span className="text-white">near</span>
+          <span className="text-white">bi</span>
         </div>
-        <div className="text-gray-500 font-medium tracking-wide">Staff Attendance Kiosk</div>
+        <div className="text-[#6B7280] text-xs font-bold uppercase tracking-widest">
+          Staff Attendance Kiosk
+        </div>
       </div>
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col items-center justify-center relative px-4 w-full max-w-md mx-auto">
+      <div className="flex-1 flex flex-col items-center justify-center px-4 relative w-full max-w-sm mx-auto">
         
         {kioskState === 'IDLE' && (
-          <div className="w-full flex flex-col items-center animate-in fade-in zoom-in duration-300">
-            <div className="text-brand-accent text-5xl font-bold mb-2 tracking-wider">
+          <div className="w-full flex flex-col items-center">
+            {/* Live Clock */}
+            <div className="text-white text-4xl font-extrabold mb-1 tracking-wide">
               {formatTime(currentTime)}
             </div>
-            <div className="text-gray-400 font-medium mb-12">
+            <div className="text-[#6B7280] text-xs font-medium mb-8">
               {formatDate(currentTime)}
             </div>
 
-            <div className="text-gray-400 mb-6 font-medium tracking-wide">Enter your 4-digit PIN</div>
-            
-            <div className="flex space-x-6 mb-12">
-              {[0, 1, 2, 3].map(i => (
-                <div 
-                  key={i} 
-                  className={`w-5 h-5 rounded-full transition-all duration-300 ${
-                    pin.length > i 
-                      ? 'bg-brand-accent scale-110 shadow-[0_0_15px_rgba(245,168,0,0.5)]' 
-                      : 'border-2 border-gray-700 bg-transparent'
+            <div className="text-[#9CA3AF] text-xs font-bold uppercase tracking-wider mb-4">
+              Enter your 4-digit PIN
+            </div>
+
+            {/* PIN Dots */}
+            <div className="flex space-x-5 mb-8">
+              {[0, 1, 2, 3].map((i) => (
+                <div
+                  key={i}
+                  className={`w-4.5 h-4.5 rounded-full transition-all duration-200 ${
+                    pin.length > i
+                      ? 'bg-white scale-110 shadow-[0_0_12px_rgba(255,255,255,0.6)]'
+                      : 'border-2 border-[#2A2D38] bg-transparent'
                   }`}
                 />
               ))}
             </div>
 
-            <div className="grid grid-cols-3 gap-4 w-full px-6">
-              {['1','2','3','4','5','6','7','8','9','DEL','0','✓'].map((key) => (
+            {/* Numeric Keypad */}
+            <div className="grid grid-cols-3 gap-3 w-full px-4">
+              {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((num) => (
                 <button
-                  key={key}
-                  onClick={() => handleKeyPress(key)}
-                  className={`py-5 rounded-2xl text-2xl font-semibold transition-all active:scale-95 ${
-                    key === 'DEL' ? 'bg-[#1A1A1A] text-gray-400' :
-                    key === '✓' ? 'bg-brand-accent/20 text-brand-accent' :
-                    'bg-[#1A1A1A] text-white hover:bg-[#222]'
-                  }`}
+                  key={num}
+                  type="button"
+                  onClick={() => handleKeyPress(num)}
+                  className="bg-[#252830] hover:bg-[#2E3140] active:bg-[#2E3140] active:scale-95 text-white py-4 text-xl font-bold rounded-xl transition-all border border-[#2A2D38]"
                 >
-                  {key}
+                  {num}
                 </button>
               ))}
+              <button
+                type="button"
+                onClick={handleBackspace}
+                className="bg-[#252830] hover:bg-[#2E3140] active:bg-[#2E3140] active:scale-95 text-[#F87171] py-4 text-sm font-bold rounded-xl transition-all border border-[#2A2D38] flex items-center justify-center"
+              >
+                DEL
+              </button>
+              <button
+                type="button"
+                onClick={() => handleKeyPress('0')}
+                className="bg-[#252830] hover:bg-[#2E3140] active:bg-[#2E3140] active:scale-95 text-white py-4 text-xl font-bold rounded-xl transition-all border border-[#2A2D38]"
+              >
+                0
+              </button>
+              <button
+                type="button"
+                onClick={() => {}}
+                className="bg-[#252830] text-gray-500 py-4 text-xl font-bold rounded-xl border border-[#2A2D38] cursor-default"
+                disabled
+              >
+                ✓
+              </button>
             </div>
           </div>
         )}
 
         {kioskState === 'LOADING' && (
-          <div className="flex flex-col items-center">
-            <div className="w-12 h-12 border-4 border-gray-800 border-t-brand-accent rounded-full animate-spin mb-4"></div>
-            <div className="text-gray-400">Processing...</div>
+          <div className="flex flex-col items-center space-y-3">
+            <div className="w-10 h-10 border-4 border-[#2E3140] border-t-white rounded-full animate-spin"></div>
+            <div className="text-gray-400 text-sm font-semibold">Processing...</div>
           </div>
         )}
 
         {kioskState === 'STAFF_FOUND' && staff && (
-          <div className="w-full flex flex-col items-center animate-in fade-in slide-in-from-bottom-8 duration-300">
-            <div className="text-gray-400 mb-2">Welcome,</div>
-            <div className="text-4xl font-bold text-white mb-2 text-center">{staff.name}</div>
-            <div className="text-brand-accent mb-12 font-medium bg-brand-accent/10 px-4 py-1.5 rounded-full">
-              Shift: {staff.shift?.label}
+          <div className="w-full flex flex-col items-center">
+            <div className="text-[#6B7280] text-xs font-bold uppercase tracking-wider mb-1">
+              Welcome back
+            </div>
+            <div className="text-3xl font-extrabold text-white text-center mb-1">
+              {staff.name}
+            </div>
+            <div className="text-white text-xs font-bold mb-8 bg-white/10 px-3 py-1 rounded-full border border-white/20">
+              Shift: {staff.shift?.label} ({staff.shift?.start_time} - {staff.shift?.end_time})
             </div>
 
-            <div className="w-full space-y-4 px-4">
+            <div className="w-full space-y-3.5 px-4">
               <button
+                type="button"
                 onClick={() => startCamera('CHECK_IN')}
-                className="w-full bg-[#2E7D32] text-white py-5 rounded-2xl text-2xl font-bold flex items-center justify-center space-x-3 active:scale-95 transition-all shadow-[0_0_20px_rgba(46,125,50,0.3)]"
+                className="w-full bg-[rgba(74,222,128,0.15)] border border-[rgba(74,222,128,0.3)] hover:bg-[rgba(74,222,128,0.25)] text-[#4ADE80] py-[18px] rounded-xl text-base font-bold flex items-center justify-center space-x-2 active:scale-[0.98] transition-all"
               >
-                <span>✅</span>
+                <UserCheck size={22} strokeWidth={1.5} />
                 <span>CHECK IN</span>
               </button>
-              
+
               <button
+                type="button"
                 onClick={() => startCamera('CHECK_OUT')}
-                className="w-full bg-[#185FA5] text-white py-5 rounded-2xl text-2xl font-bold flex items-center justify-center space-x-3 active:scale-95 transition-all shadow-[0_0_20px_rgba(24,95,165,0.3)]"
+                className="w-full bg-[rgba(96,165,250,0.15)] border border-[rgba(96,165,250,0.3)] hover:bg-[rgba(96,165,250,0.25)] text-[#60A5FA] py-[18px] rounded-xl text-base font-bold flex items-center justify-center space-x-2 active:scale-[0.98] transition-all"
               >
-                <span>🚪</span>
+                <LogOut size={22} strokeWidth={1.5} />
                 <span>CHECK OUT</span>
               </button>
             </div>
-            
-            <button 
+
+            <button
+              type="button"
               onClick={resetKiosk}
-              className="mt-10 text-gray-500 font-medium px-6 py-2"
+              className="mt-8 border border-[#363A48] text-[#9CA3AF] hover:text-white px-4 py-2 rounded-xl text-xs font-bold bg-transparent transition-all"
             >
               Cancel
             </button>
@@ -405,110 +667,133 @@ export default function KioskPage() {
         )}
 
         {kioskState === 'CAMERA' && (
-          <div className="absolute inset-0 bg-black z-50 flex flex-col animate-in fade-in duration-300">
-            <button onClick={resetKiosk} className="absolute top-8 left-6 text-white font-medium z-50 bg-black/50 px-4 py-2 rounded-full">
+          <div className="absolute inset-0 bg-[#1E2028] z-50 flex flex-col">
+            <button
+              type="button"
+              onClick={resetKiosk}
+              className="absolute top-6 left-6 text-white font-bold bg-[#252830]/80 border border-[#363A48] px-4 py-2 rounded-full text-xs z-50 active:scale-95"
+            >
               Cancel
             </button>
-            
-            <div className="flex-1 relative overflow-hidden flex items-center justify-center">
-              <video 
-                ref={videoRef} 
-                autoPlay 
-                playsInline 
-                muted 
-                className="absolute w-full h-full object-cover"
-              />
-              <div className="absolute inset-0 bg-black/40"></div>
-              
-              <div className="z-10 w-72 h-72 rounded-full border-4 border-brand-accent shadow-[0_0_0_9999px_rgba(0,0,0,0.6)] flex items-center justify-center relative overflow-hidden">
-                <div className="absolute inset-0 border-[8px] border-transparent rounded-full animate-[pulse_2s_ease-in-out_infinite]"></div>
+
+            {cameraError ? (
+              <div className="flex-1 flex flex-col items-center justify-center p-6 text-center space-y-4">
+                <Camera size={48} strokeWidth={1.5} className="text-[#9CA3AF]" />
+                <h3 className="text-lg font-bold">Camera access required</h3>
+                <p className="text-sm text-[#9CA3AF]">
+                  Please allow camera permissions in your browser settings to verify your identity.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => startCamera(flow)}
+                  className="bg-white text-[#1E2028] font-bold px-6 py-2.5 rounded-lg text-sm active:scale-95"
+                >
+                  Retry Camera
+                </button>
               </div>
-              
-              <div className="absolute top-1/4 z-10 text-center w-full">
-                <div className="bg-black/60 text-white px-6 py-3 rounded-full inline-block font-medium border border-gray-700">
-                  Position your face in the frame
+            ) : (
+              <>
+                <div className="flex-1 relative flex items-center justify-center overflow-hidden">
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="absolute w-full h-full object-cover"
+                  />
+                  <div className="absolute inset-0 bg-black/40" />
+
+                  {/* Circular Face Overlay */}
+                  <div className="z-10 w-64 h-64 rounded-full border-4 border-white shadow-[0_0_0_9999px_rgba(30,32,40,0.85)] flex items-center justify-center relative">
+                    <div className="absolute inset-0 border-2 border-transparent rounded-full animate-pulse" />
+                  </div>
                 </div>
-              </div>
-            </div>
-            
-            <div className="p-8 pb-16 bg-gradient-to-t from-black via-black/90 to-transparent absolute bottom-0 w-full flex justify-center">
-              <button 
-                onClick={handleAction}
-                className="bg-brand-accent text-[#111] font-bold text-xl py-4 px-12 rounded-full active:scale-95 transition-transform flex items-center space-x-2"
-              >
-                <span>📸</span>
-                <span>Take Photo</span>
-              </button>
-            </div>
+
+                <div className="p-6 bg-[#252830] border-t border-[#2A2D38] flex justify-center pb-12">
+                  <button
+                    type="button"
+                    onClick={handleCapture}
+                    className="bg-white hover:bg-gray-200 text-[#1E2028] font-black text-base py-3.5 px-10 rounded-full active:scale-95 transition-transform flex items-center space-x-2 shadow-lg"
+                  >
+                    <Camera size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
+                    <span>Take Photo</span>
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         )}
 
-        {/* Error Overlay */}
+        {/* Error Modal */}
         {kioskState === 'ERROR' && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in">
-            <div className="bg-[#D32F2F] text-white p-8 rounded-3xl max-w-sm w-full text-center shadow-2xl mx-4">
-              <div className="text-5xl mb-4">❌</div>
-              <h3 className="text-xl font-bold mb-2">{errorMsg}</h3>
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm">
+            <div className="bg-[#2E3140] border border-[#363A48] text-white p-6 rounded-2xl max-w-[280px] w-full text-center shadow-2xl flex flex-col items-center">
+              <AlertCircle size={48} strokeWidth={1.5} className="text-[#F87171] mb-3" />
+              <h3 className="text-base font-black leading-tight">{errorMsg}</h3>
             </div>
           </div>
         )}
 
         {/* Result Overlay */}
-        {kioskState === 'RESULT' && resultMsg && staff && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/90 backdrop-blur-md animate-in zoom-in duration-300">
-            <div className={`p-10 rounded-[2rem] max-w-sm w-full text-center shadow-2xl mx-4 flex flex-col items-center ${
-              resultMsg.type === 'PRESENT' ? 'bg-[#2E7D32]' :
-              resultMsg.type === 'LATE' ? 'bg-[#E65100]' :
-              resultMsg.type === 'CHECKED_OUT' ? 'bg-[#185FA5]' : 'bg-[#111]'
-            }`}>
-              <div className="text-7xl mb-6">
-                {resultMsg.type === 'PRESENT' ? '✅' : resultMsg.type === 'LATE' ? '⏰' : '👋'}
-              </div>
-              
-              <div className="text-3xl font-bold text-white mb-2">{staff.name}</div>
-              
-              <div className="bg-black/20 px-6 py-2 rounded-full text-white font-bold text-2xl mb-6">
-                {formatTime(currentTime).replace(/:\d{2} /, ' ')}
-              </div>
-              
-              <div className="text-2xl font-bold text-white mb-3">{resultMsg.title}</div>
-              
-              <div className={`text-lg font-medium px-4 py-2 rounded-lg mb-2 ${
-                resultMsg.type === 'LATE' ? 'bg-red-900/50 text-[#FFCDD2]' : 
-                resultMsg.type === 'CHECKED_OUT' && resultMsg.subtitle.includes('OT') ? 'bg-blue-900/50 text-[#BBDEFB]' :
-                'text-white/90'
-              }`}>
-                {resultMsg.subtitle}
+        {kioskState === 'RESULT' && resultData && staff && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md">
+            <div
+              className={`p-8 rounded-[24px] max-w-[300px] w-full text-center shadow-2xl flex flex-col items-center border ${
+                resultData.status === 'green'
+                  ? 'bg-[rgba(74,222,128,0.12)] border-[rgba(74,222,128,0.3)] text-[#4ADE80]'
+                  : resultData.status === 'yellow'
+                  ? 'bg-[rgba(251,191,36,0.12)] border-[rgba(251,191,36,0.3)] text-[#FBBF24]'
+                  : resultData.status === 'orange'
+                  ? 'bg-[rgba(251,146,60,0.12)] border-[rgba(251,146,60,0.3)] text-[#FB923C]'
+                  : resultData.status === 'red'
+                  ? 'bg-[rgba(248,113,113,0.12)] border-[rgba(248,113,113,0.3)] text-[#F87171]'
+                  : 'bg-[rgba(96,165,250,0.12)] border-[rgba(96,165,250,0.3)] text-[#60A5FA]'
+              }`}
+            >
+              <div className="mb-4">
+                {resultData.status === 'green' ? (
+                  <UserCheck size={48} strokeWidth={1.5} className="text-[#4ADE80]" />
+                ) : resultData.status === 'blue' ? (
+                  <LogOut size={48} strokeWidth={1.5} className="text-[#60A5FA]" />
+                ) : (
+                  <AlertTriangle size={48} strokeWidth={1.5} className="text-[#FBBF24]" />
+                )}
               </div>
 
-              {resultMsg.sub2 && (
-                <div className="text-white/70 text-sm mt-4">
-                  {resultMsg.sub2}
-                </div>
+              <h2 className="text-2xl font-black mb-1 truncate max-w-full text-white">{staff.name}</h2>
+              <div className="bg-white/10 border border-white/20 text-xs font-bold px-3 py-1 rounded-full mb-5 text-white">
+                {formatTime(currentTime).split(' ')[0]}
+              </div>
+
+              <h3 className="text-lg font-bold mb-1 leading-snug">{resultData.title}</h3>
+              <p className="text-sm opacity-90 leading-normal">{resultData.message}</p>
+              {resultData.details && (
+                <p className="text-xs mt-3 bg-white/10 border border-white/20 px-3 py-1.5 rounded text-white font-semibold">
+                  {resultData.details}
+                </p>
               )}
             </div>
           </div>
         )}
-        
       </div>
 
-      {/* Bottom Stats Bar */}
+      {/* Kiosk Status Bar */}
       {kioskState !== 'CAMERA' && (
-        <div className="flex-none bg-[#111111] border-t border-[#222] py-4 px-6 flex justify-between items-center text-sm font-medium tracking-wide">
-          <div className="flex items-center space-x-2 text-gray-400">
-            <span>✅</span>
-            <span className="text-white">{stats.checkedIn}</span>
-            <span className="hidden sm:inline">Checked in</span>
+        <div className="bg-[#252830] border-t border-[#2A2D38] py-4 px-6 flex justify-between items-center text-xs font-black tracking-wider text-[#6B7280] select-none pb-[calc(16px+env(safe-area-inset-bottom,0px))]">
+          <div className="flex items-center space-x-1.5">
+            <UserCheck size={16} strokeWidth={1.5} className="text-[#4ADE80]" />
+            <span className="text-white font-bold">{stats.checkedIn}</span>
+            <span>Checked in</span>
           </div>
-          <div className="flex items-center space-x-2 text-gray-400">
-            <span>⏰</span>
-            <span className="text-white">{stats.late}</span>
-            <span className="hidden sm:inline">Late</span>
+          <div className="flex items-center space-x-1.5">
+            <Timer size={16} strokeWidth={1.5} className="text-[#FBBF24]" />
+            <span className="text-white font-bold">{stats.late}</span>
+            <span>Late</span>
           </div>
-          <div className="flex items-center space-x-2 text-gray-400">
-            <span>🚪</span>
-            <span className="text-white">{stats.checkedOut}</span>
-            <span className="hidden sm:inline">Checked out</span>
+          <div className="flex items-center space-x-1.5">
+            <LogOut size={16} strokeWidth={1.5} className="text-[#60A5FA]" />
+            <span className="text-white font-bold">{stats.checkedOut}</span>
+            <span>Checked out</span>
           </div>
         </div>
       )}

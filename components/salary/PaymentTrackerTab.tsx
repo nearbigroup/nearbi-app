@@ -1,26 +1,17 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth-context';
 import { Staff, SalaryConfirmation, SalaryPayment } from './types';
 import { formatCurrency, getCurrentMonthStr, formatMonthDisplay } from './utils';
-
-const SkeletonCard = () => (
-  <div style={{
-    background: 'linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%)',
-    backgroundSize: '200% 100%',
-    animation: 'shimmer 1.5s infinite',
-    borderRadius: '12px',
-    height: '72px',
-    marginBottom: '8px',
-  }} />
-);
+import { Check, X } from 'lucide-react';
 
 export default function PaymentTrackerTab() {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
-  const [fetchError, setFetchError] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [toastMsg, setToastMsg] = useState('');
   const month = getCurrentMonthStr();
 
   const [staffList, setStaffList] = useState<Staff[]>([]);
@@ -35,35 +26,52 @@ export default function PaymentTrackerTab() {
   const [payNotes, setPayNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    fetchData();
-  }, []);
+  const showToast = (msg: string) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(''), 3000);
+  };
 
   const fetchData = async () => {
     try {
       setLoading(true);
-      setFetchError(false);
+      setErrorMsg('');
       
-      const { data: staffData, error: staffError } = await supabase.from('staff').select('*, branch:branches(name)').eq('active', true);
+      const { data: staffData, error: staffError } = await supabase
+        .from('staff')
+        .select('*, branch:branches(name)')
+        .eq('active', true);
+      
       if (staffError) throw staffError;
 
-      const { data: confData, error: confError } = await supabase.from('salary_confirmations').select('*').eq('month', month);
+      const { data: confData, error: confError } = await supabase
+        .from('salary_confirmations')
+        .select('*')
+        .eq('month', month);
+      
       if (confError) throw confError;
 
-      const { data: payData, error: payError } = await supabase.from('salary_payments').select('*').eq('month', month);
+      const { data: payData, error: payError } = await supabase
+        .from('salary_payments')
+        .select('*')
+        .eq('month', month);
+      
       if (payError) throw payError;
 
-      if (staffData) setStaffList(staffData);
-      if (confData) setConfirmations(confData);
-      if (payData) setPayments(payData);
+      setStaffList((staffData || []) as unknown as Staff[]);
+      setConfirmations(confData || []);
+      setPayments(payData || []);
 
-    } catch (e) {
-      console.error('Error fetching payments:', e);
-      setFetchError(true);
+    } catch (err) {
+      console.error(err);
+      setErrorMsg('Failed to load payments data.');
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    fetchData();
+  }, []);
 
   const handleOpenPayment = (conf: SalaryConfirmation) => {
     setSelectedConf(conf);
@@ -77,229 +85,305 @@ export default function PaymentTrackerTab() {
     if (!user || !selectedConf) return;
     setSubmitting(true);
     try {
-      const staffInfo = staffList.find(s => s.id === selectedConf.staff_id);
+      const staffInfo = staffList.find((s) => s.id === selectedConf.staff_id);
+      const pKey = 'pay_' + Math.random().toString(36).substr(2, 9);
       
       const { error } = await supabase.from('salary_payments').insert({
+        id: pKey,
         staff_id: selectedConf.staff_id,
         month: month,
         amount_paid: Number(payAmount),
         payment_mode: payMode,
         paid_at: new Date(payDate).toISOString(),
-        paid_by: user.email,
-        branch_id: staffInfo?.branch_id,
-        notes: payNotes
+        paid_by: user.email || 'Admin',
+        branch_id: staffInfo?.branch_id || 'daily',
+        notes: payNotes,
       });
 
       if (error) throw error;
       
-      alert('Payment recorded ✓');
+      showToast('Payment recorded');
       setSelectedConf(null);
       await fetchData();
-
-    } catch (e) {
-      console.error('Error confirming payment:', e);
-      alert('Failed to record payment');
+    } catch (err) {
+      console.error(err);
+      showToast('Failed to record payment.');
     } finally {
       setSubmitting(false);
     }
   };
 
-  if (fetchError) {
-    return (
-      <div className="py-12 text-center bg-red-50 border border-red-300 rounded-2xl p-6 my-4 text-[#111]">
-        <div className="text-4xl mb-3">⚠️</div>
-        <h3 className="text-lg font-bold text-[#111] mb-1">Could not load data. Check connection.</h3>
-        <p className="text-xs text-red-500 mb-4">Please verify your internet connection.</p>
-        <button 
-          onClick={() => fetchData()} 
-          className="bg-brand-accent text-[#111] font-bold px-6 py-2.5 rounded-xl active:scale-95 transition-transform"
-        >
-          Retry
-        </button>
-      </div>
-    );
-  }
-
   if (loading) {
     return (
       <div className="space-y-3">
-        <SkeletonCard />
-        <SkeletonCard />
-        <SkeletonCard />
-        <SkeletonCard />
+        <div className="skeleton h-[90px] w-full" />
+        <div className="skeleton h-[110px] w-full" />
       </div>
     );
   }
 
-
   const totalConfirmed = confirmations.reduce((sum, c) => sum + c.net_salary, 0);
   const totalPaid = payments.reduce((sum, p) => sum + p.amount_paid, 0);
-  const pendingAmount = totalConfirmed - totalPaid;
+  const pendingAmount = Math.max(0, totalConfirmed - totalPaid);
 
-  // Filter staff who have confirmations
-  const confirmedStaffIds = confirmations.map(c => c.staff_id);
-  const relevantStaff = staffList.filter(s => confirmedStaffIds.includes(s.id));
-
-  const pendingList = confirmations.filter(c => !payments.find(p => p.staff_id === c.staff_id));
-  const paidList = payments.filter(p => confirmations.find(c => c.staff_id === p.staff_id));
+  const pendingList = confirmations.filter((c) => !payments.find((p) => p.staff_id === c.staff_id));
+  const paidList = payments.filter((p) => confirmations.find((c) => c.staff_id === p.staff_id));
 
   return (
-    <div className="space-y-6 relative">
+    <div className="space-y-5 select-none pb-6">
+      {/* Title */}
       <div className="print:hidden">
-        <h2 className="text-xl font-bold text-white">Salary Payments — {formatMonthDisplay(month)}</h2>
+        <h2 className="text-white text-base font-bold">
+          Salary Payments — {formatMonthDisplay(month)}
+        </h2>
       </div>
 
-      {/* Summary Bar */}
-      <div className="grid grid-cols-2 gap-3">
-        <div className="bg-[#1A1A1A] border border-[#333] rounded-xl p-4">
-          <div className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-1">Total Confirmed</div>
-          <div className="text-xl font-bold text-white">{formatCurrency(totalConfirmed)}</div>
+      {errorMsg && (
+        <div className="bg-[var(--danger-bg)] border border-[var(--danger)] text-[#F87171] text-xs font-bold px-4 py-3 rounded-[10px] flex items-center justify-between">
+          <span>{errorMsg}</span>
+          <button onClick={fetchData} className="text-xs underline font-bold">
+            Retry
+          </button>
         </div>
-        <div className="bg-[#1A1A1A] border border-[#333] rounded-xl p-4">
-          <div className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-1">Paid ({paidList.length}/{confirmations.length})</div>
-          <div className="text-xl font-bold text-[#69F0AE]">{formatCurrency(totalPaid)}</div>
+      )}
+
+      {/* Summary grid */}
+      <div className="grid grid-cols-2 gap-3.5">
+        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 shadow-sm">
+          <div className="text-[10px] text-[var(--text-muted)] font-bold uppercase tracking-wider mb-1">
+            Total Confirmed
+          </div>
+          <div className="text-lg font-bold text-white">
+            {formatCurrency(totalConfirmed)}
+          </div>
         </div>
-        <div className="col-span-2 bg-brand-accent/10 border border-brand-accent/20 rounded-xl p-4 flex justify-between items-center">
-          <div className="text-sm text-brand-accent font-bold uppercase tracking-wider">Pending Amount</div>
-          <div className="text-2xl font-black text-brand-accent">{formatCurrency(pendingAmount)}</div>
+
+        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 shadow-sm">
+          <div className="text-[10px] text-[var(--text-muted)] font-bold uppercase tracking-wider mb-1">
+            Paid ({paidList.length}/{confirmations.length})
+          </div>
+          <div className="text-lg font-bold text-[#4ADE80]">
+            {formatCurrency(totalPaid)}
+          </div>
+        </div>
+
+        <div className="col-span-2 bg-[var(--warning-bg)] border border-[var(--warning)]/20 rounded-[14px] p-4 flex justify-between items-center animate-pulse">
+          <span className="text-xs font-bold text-[#FBBF24] uppercase tracking-wider">
+            Outstanding Amount
+          </span>
+          <span className="text-xl font-bold text-[#FBBF24]">
+            {formatCurrency(pendingAmount)}
+          </span>
         </div>
       </div>
 
-      {/* Pending Section */}
+      {/* Pending payments list */}
       <div className="space-y-3">
-        <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest border-b border-[#333] pb-2 mt-4">Pending Payment ({pendingList.length})</h3>
+        <h3 className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-widest border-b border-[var(--border)] pb-2">
+          Pending Payment ({pendingList.length})
+        </h3>
         
-        {pendingList.length === 0 && (
-          <div className="text-center py-6 text-gray-600 italic">No pending payments.</div>
+        {pendingList.length === 0 ? (
+          <p className="text-xs text-[var(--text-muted)] font-bold italic text-center py-4">
+            No pending payouts found.
+          </p>
+        ) : (
+          pendingList.map((conf) => {
+            const s = staffList.find((x) => x.id === conf.staff_id);
+            if (!s) return null;
+            return (
+              <div
+                key={conf.id}
+                className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 flex justify-between items-center shadow-sm"
+              >
+                <div>
+                  <h4 className="font-bold text-sm text-white">{s.name}</h4>
+                  <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-1">
+                    {s.branch?.name || s.branch_id} • {s.department}
+                  </p>
+                </div>
+                <div className="text-right flex flex-col items-end">
+                  <div className="text-sm font-bold text-[#FBBF24] mb-2">
+                    {formatCurrency(conf.net_salary)}
+                  </div>
+                  <button
+                    onClick={() => handleOpenPayment(conf)}
+                    className="bg-[var(--warning-bg)] text-[#FBBF24] border border-[var(--warning)]/20 px-3.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider active:scale-95 transition-transform"
+                  >
+                    Mark Paid
+                  </button>
+                </div>
+              </div>
+            );
+          })
         )}
-
-        {pendingList.map(conf => {
-          const s = staffList.find(x => x.id === conf.staff_id);
-          if (!s) return null;
-          return (
-            <div key={conf.id} className="bg-[#111] border border-[#333] rounded-2xl p-4 flex justify-between items-center">
-              <div>
-                <div className="font-bold text-white">{s.name}</div>
-                <div className="text-xs text-gray-400">{s.branch?.name} • {s.department}</div>
-              </div>
-              <div className="text-right flex flex-col items-end">
-                <div className="text-lg font-bold text-brand-accent mb-2">{formatCurrency(conf.net_salary)}</div>
-                <button 
-                  onClick={() => handleOpenPayment(conf)}
-                  className="bg-brand-accent/20 text-brand-accent border border-brand-accent/30 px-4 py-1.5 rounded-lg text-xs font-bold uppercase tracking-wider active:scale-95"
-                >
-                  Mark as Paid
-                </button>
-              </div>
-            </div>
-          );
-        })}
       </div>
 
-      {/* Paid Section */}
+      {/* Paid section history */}
       <div className="space-y-3">
-        <h3 className="text-sm font-bold text-gray-400 uppercase tracking-widest border-b border-[#333] pb-2 mt-8">Paid ({paidList.length})</h3>
-        
-        {paidList.map(pay => {
-          const s = staffList.find(x => x.id === pay.staff_id);
-          if (!s) return null;
-          return (
-            <div key={pay.id} className="bg-[#1A1A1A] border border-[#2E7D32]/30 rounded-2xl p-4 flex justify-between items-center opacity-80">
-              <div>
-                <div className="font-bold text-white flex items-center">
-                  {s.name}
-                  <span className="ml-2 bg-[#2E7D32]/20 text-[#69F0AE] text-[9px] px-1.5 py-0.5 rounded uppercase font-bold border border-[#2E7D32]/30">
-                    {pay.payment_mode}
+        <h3 className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-widest border-b border-[var(--border)] pb-2 pt-2">
+          Payments Completed ({paidList.length})
+        </h3>
+
+        {paidList.length === 0 ? (
+          <p className="text-xs text-[var(--text-muted)] font-bold italic text-center py-4">
+            No payments completed yet.
+          </p>
+        ) : (
+          paidList.map((pay) => {
+            const s = staffList.find((x) => x.id === pay.staff_id);
+            if (!s) return null;
+            return (
+              <div
+                key={pay.id}
+                className="bg-[var(--bg-surface)] border border-[rgba(74,222,128,0.2)] rounded-[14px] p-4 flex justify-between items-center shadow-sm opacity-90"
+              >
+                <div>
+                  <h4 className="font-bold text-sm text-white flex items-center">
+                    {s.name}
+                    <span className="ml-2 bg-[rgba(74,222,128,0.12)] text-[#4ADE80] border border-[rgba(74,222,128,0.2)] text-[8px] font-bold px-1.5 py-0.5 rounded uppercase">
+                      {pay.payment_mode}
+                    </span>
+                  </h4>
+                  <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-1">
+                    {s.branch?.name || s.branch_id} • Paid {new Date(pay.paid_at).toLocaleDateString()}
+                  </p>
+                </div>
+                <div className="text-right flex flex-col items-end">
+                  <div className="text-sm font-bold text-[#4ADE80]">
+                    {formatCurrency(pay.amount_paid)}
+                  </div>
+                  <span className="text-[8px] font-bold text-[#4ADE80] uppercase tracking-wider mt-1.5 flex items-center justify-end space-x-0.5">
+                    <Check size={10} strokeWidth={1.5} />
+                    <span>Paid</span>
                   </span>
                 </div>
-                <div className="text-xs text-gray-400">{s.branch?.name} • Paid on {new Date(pay.paid_at).toLocaleDateString()}</div>
               </div>
-              <div className="text-right flex flex-col items-end">
-                <div className="text-lg font-bold text-[#69F0AE]">{formatCurrency(pay.amount_paid)}</div>
-                <div className="text-[10px] text-[#2E7D32] uppercase font-bold tracking-widest flex items-center mt-1">
-                  <span className="mr-1">✓</span> Paid
-                </div>
-              </div>
-            </div>
-          );
-        })}
+            );
+          })
+        )}
       </div>
 
-      {/* Payment Bottom Sheet */}
+      {/* Payment Slide-up Drawer Form */}
       {selectedConf && (
-        <div className="fixed inset-0 z-[200] flex items-end justify-center sm:items-center bg-black/60 backdrop-blur-sm p-0 sm:p-4 animate-in fade-in">
-          <div className="bg-[#111] border border-[#333] w-full max-w-md rounded-t-3xl sm:rounded-3xl p-6 shadow-2xl animate-in slide-in-from-bottom-10">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="text-lg font-bold text-white">Record Payment</h3>
-              <button onClick={() => setSelectedConf(null)} className="text-gray-400 hover:text-white p-2">✕</button>
+        <div className="fixed inset-0 z-[11000] flex flex-col justify-end">
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setSelectedConf(null)}
+          />
+          <div
+            className="bg-[var(--bg-surface)] rounded-t-3xl shadow-2xl relative z-10 p-5 flex flex-col max-h-[85vh] overflow-y-auto w-full max-w-md mx-auto border-t border-[var(--border-strong)]"
+            style={{ paddingBottom: 'calc(24px + env(safe-area-inset-bottom, 16px))' }}
+          >
+            {/* Grabber */}
+            <div className="w-12 h-1 bg-[var(--border-strong)] rounded-full mx-auto mb-4 flex-shrink-0" />
+
+            <div className="flex justify-between items-center mb-5 flex-shrink-0">
+              <h3 className="text-sm font-bold text-white">Record Payment</h3>
+              <button
+                onClick={() => setSelectedConf(null)}
+                className="text-[var(--text-muted)] hover:text-white flex items-center justify-center p-1"
+              >
+                <X size={16} strokeWidth={1.5} style={{ color: 'currentColor' }} />
+              </button>
             </div>
 
-            <div className="space-y-4">
+            <div className="space-y-4 flex-1">
               <div>
-                <label className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1 block">Staff Name</label>
-                <div className="bg-[#1A1A1A] border border-[#333] text-gray-300 p-3 rounded-xl">
-                  {staffList.find(s => s.id === selectedConf.staff_id)?.name}
+                <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                  Staff Name
+                </label>
+                <div className="w-full bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-[10px] p-3 text-xs font-bold text-white">
+                  {staffList.find((s) => s.id === selectedConf.staff_id)?.name}
                 </div>
               </div>
 
               <div>
-                <label className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1 block">Amount (₹)</label>
-                <input 
-                  type="number" 
+                <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                  Amount to Pay (₹)
+                </label>
+                <input
+                  type="number"
                   value={payAmount}
                   onChange={(e) => setPayAmount(e.target.value)}
-                  className="w-full bg-[#1A1A1A] border border-[#333] text-white p-3 rounded-xl focus:outline-none focus:border-brand-accent text-xl font-bold"
+                  className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-sm font-bold focus:outline-none focus:border-white/40 text-white"
+                  required
                 />
               </div>
 
               <div>
-                <label className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1 block">Payment Mode</label>
-                <div className="flex space-x-2">
-                  <button 
+                <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1.5">
+                  Payment Mode
+                </label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
                     onClick={() => setPayMode('upi')}
-                    className={`flex-1 py-3 rounded-xl font-bold border transition-colors ${payMode === 'upi' ? 'bg-brand-accent text-[#111] border-brand-accent' : 'bg-[#1A1A1A] text-gray-400 border-[#333]'}`}
+                    className={`flex-1 py-2.5 rounded-[10px] border text-xs font-bold transition-all ${
+                      payMode === 'upi'
+                        ? 'bg-white text-[#1E2028] border-white'
+                        : 'bg-[var(--bg-input)] text-[var(--text-secondary)] border-[var(--border)]'
+                    }`}
                   >
-                    UPI
+                    UPI / Transfer
                   </button>
-                  <button 
+                  <button
+                    type="button"
                     onClick={() => setPayMode('cash')}
-                    className={`flex-1 py-3 rounded-xl font-bold border transition-colors ${payMode === 'cash' ? 'bg-brand-accent text-[#111] border-brand-accent' : 'bg-[#1A1A1A] text-gray-400 border-[#333]'}`}
+                    className={`flex-1 py-2.5 rounded-[10px] border text-xs font-bold transition-all ${
+                      payMode === 'cash'
+                        ? 'bg-white text-[#1E2028] border-white'
+                        : 'bg-[var(--bg-input)] text-[var(--text-secondary)] border-[var(--border)]'
+                    }`}
                   >
-                    CASH
+                    Cash Payment
                   </button>
                 </div>
               </div>
 
               <div>
-                <label className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1 block">Date Paid</label>
-                <input 
-                  type="date" 
+                <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                  Date of Payment
+                </label>
+                <input
+                  type="date"
                   value={payDate}
                   onChange={(e) => setPayDate(e.target.value)}
-                  className="w-full bg-[#1A1A1A] border border-[#333] text-white p-3 rounded-xl focus:outline-none focus:border-brand-accent"
+                  className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-xs focus:outline-none focus:border-white/40 text-white font-bold"
+                  required
                 />
               </div>
 
               <div>
-                <label className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1 block">Notes (Optional)</label>
-                <input 
-                  type="text" 
+                <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                  Notes (Optional)
+                </label>
+                <input
+                  type="text"
                   value={payNotes}
                   onChange={(e) => setPayNotes(e.target.value)}
-                  placeholder="e.g. advance deduction"
-                  className="w-full bg-[#1A1A1A] border border-[#333] text-white p-3 rounded-xl focus:outline-none focus:border-brand-accent"
+                  placeholder="e.g. Paid via HR account"
+                  className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-xs focus:outline-none focus:border-white/40 text-white"
                 />
               </div>
 
-              <button 
+              <button
+                type="button"
                 onClick={handleConfirmPayment}
                 disabled={submitting || !payAmount}
-                className="w-full bg-brand-accent text-[#111] font-bold text-lg py-4 rounded-xl shadow-[0_4px_14px_rgba(245,168,0,0.4)] active:scale-95 transition-all mt-4 disabled:opacity-50"
+                className="w-full min-h-[44px] bg-white text-[#1E2028] font-bold text-xs rounded-[10px] active:scale-95 transition-all mt-4"
               >
-                {submitting ? 'Recording...' : 'Confirm Payment'}
+                {submitting ? 'Recording Payout...' : 'Record Payment Confirmation'}
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Global Toast Alert */}
+      {toastMsg && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[15000] bg-[var(--success-bg)] border border-[var(--success)] text-[#4ADE80] font-bold text-xs px-4 py-2.5 rounded-full shadow-lg">
+          {toastMsg}
         </div>
       )}
     </div>

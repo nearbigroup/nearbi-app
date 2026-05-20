@@ -1,24 +1,14 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Staff, SalaryConfirmation, SalaryPayment } from './types';
 import { formatCurrency, getPastMonths, formatMonthDisplay } from './utils';
-
-const SkeletonCard = () => (
-  <div style={{
-    background: 'linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%)',
-    backgroundSize: '200% 100%',
-    animation: 'shimmer 1.5s infinite',
-    borderRadius: '12px',
-    height: '72px',
-    marginBottom: '8px',
-  }} />
-);
+import { Download } from 'lucide-react';
 
 export default function MonthlyReportTab() {
   const [loading, setLoading] = useState(true);
-  const [fetchError, setFetchError] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
   
   const months = getPastMonths(6);
   const [selectedMonth, setSelectedMonth] = useState(months[0]);
@@ -27,42 +17,51 @@ export default function MonthlyReportTab() {
   const [confirmations, setConfirmations] = useState<SalaryConfirmation[]>([]);
   const [payments, setPayments] = useState<SalaryPayment[]>([]);
 
-  useEffect(() => {
-    fetchData();
-  }, [selectedMonth]);
-
   const fetchData = async () => {
     try {
       setLoading(true);
-      setFetchError(false);
+      setErrorMsg('');
       
-      const { data: staffData, error: staffError } = await supabase.from('staff').select('*, branch:branches(name)').order('name');
+      const { data: staffData, error: staffError } = await supabase
+        .from('staff')
+        .select('*, branch:branches(name)')
+        .order('name');
       if (staffError) throw staffError;
 
-      const { data: confData, error: confError } = await supabase.from('salary_confirmations').select('*').eq('month', selectedMonth);
+      const { data: confData, error: confError } = await supabase
+        .from('salary_confirmations')
+        .select('*')
+        .eq('month', selectedMonth);
       if (confError) throw confError;
 
-      const { data: payData, error: payError } = await supabase.from('salary_payments').select('*').eq('month', selectedMonth);
+      const { data: payData, error: payError } = await supabase
+        .from('salary_payments')
+        .select('*')
+        .eq('month', selectedMonth);
       if (payError) throw payError;
 
-      if (staffData) setStaffList(staffData);
+      if (staffData) setStaffList(staffData as unknown as Staff[]);
       if (confData) setConfirmations(confData);
       if (payData) setPayments(payData);
 
-    } catch (e) {
-      console.error('Error fetching monthly report data:', e);
-      setFetchError(true);
+    } catch (err) {
+      console.error(err);
+      setErrorMsg('Failed to load report data.');
     } finally {
       setLoading(false);
     }
   };
 
+  useEffect(() => {
+    fetchData();
+  }, [selectedMonth]);
+
   const getBranchStats = (branchId: string) => {
-    const branchStaff = staffList.filter(s => s.branch_id === branchId);
-    const branchStaffIds = branchStaff.map(s => s.id);
+    const branchStaff = staffList.filter((s) => s.branch_id === branchId);
+    const branchStaffIds = branchStaff.map((s) => s.id);
     
-    const branchConfs = confirmations.filter(c => branchStaffIds.includes(c.staff_id));
-    const branchPays = payments.filter(p => branchStaffIds.includes(p.staff_id));
+    const branchConfs = confirmations.filter((c) => branchStaffIds.includes(c.staff_id));
+    const branchPays = payments.filter((p) => branchStaffIds.includes(p.staff_id));
 
     const totalPayroll = branchConfs.reduce((sum, c) => sum + c.net_salary, 0);
     const totalOT = branchConfs.reduce((sum, c) => sum + c.ot_pay, 0);
@@ -73,7 +72,7 @@ export default function MonthlyReportTab() {
       totalOT,
       totalDed,
       staffPaid: branchPays.length,
-      staffTotal: branchConfs.length
+      staffTotal: branchConfs.length,
     };
   };
 
@@ -85,211 +84,242 @@ export default function MonthlyReportTab() {
   const totalDed = confirmations.reduce((sum, c) => sum + c.leave_deduction, 0);
   const netPayroll = confirmations.reduce((sum, c) => sum + c.net_salary, 0);
 
-  if (fetchError) {
+  if (loading) {
     return (
-      <div className="py-12 text-center bg-red-50 border border-red-300 rounded-2xl p-6 my-4">
-        <div className="text-4xl mb-3">⚠️</div>
-        <h3 className="text-lg font-bold text-red-700 mb-1">Could not load data. Check connection.</h3>
-        <p className="text-xs text-red-500 mb-4">Please verify your internet connection.</p>
-        <button 
-          onClick={() => fetchData()} 
-          className="bg-brand-accent text-[#111] font-bold px-6 py-2.5 rounded-xl active:scale-95 transition-transform"
-        >
-          Retry
-        </button>
+      <div className="space-y-3">
+        <div className="skeleton h-[42px] w-full" />
+        <div className="skeleton h-[200px] w-full" />
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5 select-none pb-6">
+      {/* Selection row (Hidden on print) */}
       <div className="print:hidden space-y-4">
         <div>
-          <label className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1 block">Select Month</label>
-          <select 
+          <label className="block text-xs font-bold text-[var(--text-muted)] mb-1.5">
+            Select Report Month
+          </label>
+          <select
             value={selectedMonth}
             onChange={(e) => setSelectedMonth(e.target.value)}
-            className="w-full bg-[#1A1A1A] border border-[#333] text-white p-3 rounded-xl focus:outline-none focus:border-brand-accent"
+            className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-xs focus:outline-none focus:border-white/40 text-white font-bold"
           >
-            {months.map(m => (
-              <option key={m} value={m}>{formatMonthDisplay(m)}</option>
+            {months.map((m) => (
+              <option key={m} value={m} className="bg-[var(--bg-surface)]">
+                {formatMonthDisplay(m)}
+              </option>
             ))}
           </select>
         </div>
-        <button 
+
+        <button
           onClick={() => window.print()}
-          className="w-full bg-brand-accent text-[#111] font-bold py-3 rounded-xl flex items-center justify-center shadow-lg active:scale-95 transition-all"
+          className="w-full min-h-[44px] bg-white text-[#1E2028] font-bold text-xs rounded-xl flex items-center justify-center space-x-1.5 active:scale-95 transition-all shadow hover:bg-gray-200"
         >
-          <span className="mr-2">🖨️</span> Download / Print Report
+          <Download size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
+          <span>Download / Print Report</span>
         </button>
       </div>
 
-      {loading ? (
-        <div className="space-y-3">
-          <SkeletonCard />
-          <SkeletonCard />
-          <SkeletonCard />
-          <SkeletonCard />
-        </div>
-      ) : (
-
-        <div className="bg-white text-black p-6 rounded-none sm:rounded-2xl print:m-0 w-full overflow-hidden shadow-2xl">
-          <div className="border-b-4 border-[#111] pb-4 mb-6 flex justify-between items-end">
-            <div>
-              <div className="font-bold text-3xl tracking-tight flex mb-1">
-                <span className="text-[#111]">near</span>
-                <span className="text-brand-accent">bi</span>
-              </div>
-              <h1 className="text-xl font-bold uppercase tracking-wider text-gray-800">Monthly Salary Report</h1>
-            </div>
-            <div className="text-right">
-              <div className="text-xl font-bold text-brand-accent">{formatMonthDisplay(selectedMonth)}</div>
-              <div className="text-xs text-gray-500 font-bold uppercase">Generated {new Date().toLocaleDateString()}</div>
-            </div>
-          </div>
-
-          <div className="space-y-8">
-            {/* Overview */}
-            <section>
-              <h2 className="text-sm font-bold text-gray-400 uppercase tracking-widest border-b border-gray-200 pb-2 mb-4">Overview</h2>
-              <div className="grid grid-cols-3 gap-4 text-center">
-                <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
-                  <div className="text-3xl font-bold text-[#111]">{staffList.length}</div>
-                  <div className="text-xs text-gray-500 font-bold uppercase">Total Staff</div>
-                </div>
-                <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
-                  <div className="text-3xl font-bold text-brand-accent">{confirmations.length}</div>
-                  <div className="text-xs text-gray-500 font-bold uppercase">Confirmed Salaries</div>
-                </div>
-                <div className="bg-[#2E7D32]/10 rounded-xl p-3 border border-[#2E7D32]/30">
-                  <div className="text-3xl font-bold text-[#2E7D32]">{payments.length} <span className="text-sm">/ {confirmations.length}</span></div>
-                  <div className="text-xs text-[#2E7D32] font-bold uppercase">Payments Done</div>
-                </div>
-              </div>
-            </section>
-
-            {/* Branch Summary */}
-            <section>
-              <h2 className="text-sm font-bold text-gray-400 uppercase tracking-widest border-b border-gray-200 pb-2 mb-4">Branch Summary</h2>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="border border-gray-200 rounded-xl p-4">
-                  <h3 className="font-bold text-lg mb-3">Nearbi Daily</h3>
-                  <div className="space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Total Payroll:</span>
-                      <span className="font-bold">{formatCurrency(dailyStats.totalPayroll)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Total OT Paid:</span>
-                      <span className="text-green-600 font-bold">+{formatCurrency(dailyStats.totalOT)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Deductions:</span>
-                      <span className="text-red-600 font-bold">-{formatCurrency(dailyStats.totalDed)}</span>
-                    </div>
-                    <div className="flex justify-between pt-2 border-t border-gray-100 mt-2">
-                      <span className="text-gray-500">Staff Paid:</span>
-                      <span className="font-bold">{dailyStats.staffPaid} / {dailyStats.staffTotal}</span>
-                    </div>
-                  </div>
-                </div>
-                <div className="border border-gray-200 rounded-xl p-4">
-                  <h3 className="font-bold text-lg mb-3">Hypermarket</h3>
-                  <div className="space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Total Payroll:</span>
-                      <span className="font-bold">{formatCurrency(hyperStats.totalPayroll)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Total OT Paid:</span>
-                      <span className="text-green-600 font-bold">+{formatCurrency(hyperStats.totalOT)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-500">Deductions:</span>
-                      <span className="text-red-600 font-bold">-{formatCurrency(hyperStats.totalDed)}</span>
-                    </div>
-                    <div className="flex justify-between pt-2 border-t border-gray-100 mt-2">
-                      <span className="text-gray-500">Staff Paid:</span>
-                      <span className="font-bold">{hyperStats.staffPaid} / {hyperStats.staffTotal}</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            {/* Combined Totals */}
-            <section>
-              <h2 className="text-sm font-bold text-gray-400 uppercase tracking-widest border-b border-gray-200 pb-2 mb-4">Combined Totals</h2>
-              <div className="bg-gray-50 border border-gray-200 rounded-xl p-5 space-y-3">
-                <div className="flex justify-between items-center text-sm">
-                  <span className="text-gray-600 font-bold uppercase tracking-wider">Total Base Salary</span>
-                  <span className="font-bold text-lg">{formatCurrency(totalBase)}</span>
-                </div>
-                <div className="flex justify-between items-center text-sm">
-                  <span className="text-gray-600 font-bold uppercase tracking-wider">Total OT Paid</span>
-                  <span className="font-bold text-lg text-green-600">+{formatCurrency(totalOT)}</span>
-                </div>
-                <div className="flex justify-between items-center text-sm pb-3 border-b border-gray-300">
-                  <span className="text-gray-600 font-bold uppercase tracking-wider">Total Leave Deductions</span>
-                  <span className="font-bold text-lg text-red-600">-{formatCurrency(totalDed)}</span>
-                </div>
-                <div className="flex justify-between items-end pt-2">
-                  <span className="font-black text-[#111] uppercase tracking-widest">Net Payroll</span>
-                  <span className="font-black text-3xl text-brand-accent">{formatCurrency(netPayroll)}</span>
-                </div>
-              </div>
-            </section>
-
-            {/* Staff Breakdown Table */}
-            <section className="overflow-x-auto">
-              <h2 className="text-sm font-bold text-gray-400 uppercase tracking-widest border-b border-gray-200 pb-2 mb-4">Staff Breakdown</h2>
-              <table className="w-full text-left text-sm whitespace-nowrap">
-                <thead>
-                  <tr className="text-gray-500 uppercase tracking-wider text-[10px] bg-gray-50">
-                    <th className="p-3 rounded-l-lg">Name</th>
-                    <th className="p-3">Branch</th>
-                    <th className="p-3 text-right">Base</th>
-                    <th className="p-3 text-right">OT</th>
-                    <th className="p-3 text-right">Ded.</th>
-                    <th className="p-3 text-right font-bold text-black">Net</th>
-                    <th className="p-3 text-center rounded-r-lg">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                  {confirmations.map(conf => {
-                    const s = staffList.find(x => x.id === conf.staff_id);
-                    if (!s) return null;
-                    const isPaid = payments.find(p => p.staff_id === conf.staff_id);
-                    
-                    return (
-                      <tr key={conf.id} className="hover:bg-gray-50 transition-colors">
-                        <td className="p-3 font-bold">{s.name}</td>
-                        <td className="p-3 text-xs text-gray-500">{s.branch?.name}</td>
-                        <td className="p-3 text-right">{formatCurrency(conf.base_salary)}</td>
-                        <td className="p-3 text-right text-green-600">{formatCurrency(conf.ot_pay)}</td>
-                        <td className="p-3 text-right text-red-600">{formatCurrency(conf.leave_deduction)}</td>
-                        <td className="p-3 text-right font-bold text-black">{formatCurrency(conf.net_salary)}</td>
-                        <td className="p-3 text-center">
-                          {isPaid ? (
-                            <span className="bg-green-100 text-green-700 text-[10px] font-bold px-2 py-1 rounded uppercase">Paid</span>
-                          ) : (
-                            <span className="bg-amber-100 text-amber-700 text-[10px] font-bold px-2 py-1 rounded uppercase">Pending</span>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                  {confirmations.length === 0 && (
-                    <tr>
-                      <td colSpan={7} className="p-6 text-center text-gray-400 italic">No salary data for this month.</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </section>
-          </div>
+      {errorMsg && (
+        <div className="bg-[var(--danger-bg)] border border-[var(--danger)] text-[#F87171] text-xs font-bold px-4 py-3 rounded-[10px] flex items-center justify-between">
+          <span>{errorMsg}</span>
+          <button onClick={fetchData} className="text-xs underline font-bold">
+            Retry
+          </button>
         </div>
       )}
+
+      {/* Main printable report page wrapper */}
+      <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-6 shadow-sm overflow-hidden print:bg-white print:text-black print:border-none print:shadow-none print:p-0">
+        
+        {/* Document Header */}
+        <div className="border-b-2 border-white print:border-black pb-4 mb-5 flex justify-between items-end">
+          <div>
+            <div className="font-[900] text-xl tracking-tight flex mb-1 leading-none">
+              <span className="text-white print:text-black">near</span>
+              <span className="text-white/60 print:text-[#F5A800]">bi</span>
+            </div>
+            <h1 className="text-xs font-bold uppercase tracking-wider text-[var(--text-muted)] print:text-gray-500">
+              Monthly Salary Ledger
+            </h1>
+          </div>
+          <div className="text-right leading-tight">
+            <div className="text-sm font-bold text-[#FBBF24] print:text-black">
+              {formatMonthDisplay(selectedMonth)}
+            </div>
+            <div className="text-[9px] text-[var(--text-muted)] print:text-gray-500 font-semibold uppercase mt-0.5">
+              Issued {new Date().toLocaleDateString()}
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-6">
+          {/* Overview Grid */}
+          <section>
+            <h2 className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2.5">
+              1. Ledger Overview
+            </h2>
+            <div className="grid grid-cols-3 gap-3 text-center">
+              <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-3 print:bg-gray-50 print:border-gray-150">
+                <div className="text-lg font-bold text-white print:text-black">{staffList.length}</div>
+                <div className="text-[9px] text-[var(--text-muted)] print:text-gray-500 font-bold uppercase mt-0.5">Active Staff</div>
+              </div>
+              <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-3 print:bg-gray-50 print:border-gray-150">
+                <div className="text-lg font-bold text-[#FBBF24] print:text-black">{confirmations.length}</div>
+                <div className="text-[9px] text-[var(--text-muted)] print:text-gray-500 font-bold uppercase mt-0.5">Confirmed</div>
+              </div>
+              <div className="bg-[rgba(74,222,128,0.08)] border border-[rgba(74,222,128,0.2)] rounded-xl p-3 text-[#4ADE80] print:bg-green-50 print:border-green-100 print:text-green-800">
+                <div className="text-lg font-bold">{payments.length}</div>
+                <div className="text-[9px] font-bold uppercase mt-0.5">Paid Payouts</div>
+              </div>
+            </div>
+          </section>
+
+          {/* Branch summaries */}
+          <section>
+            <h2 className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2.5">
+              2. Branch Payroll Breaks
+            </h2>
+            <div className="grid grid-cols-2 gap-3.5">
+              <div className="border border-[var(--border)] print:border-gray-200 rounded-lg p-3.5 space-y-2">
+                <h3 className="font-bold text-xs text-white print:text-black border-b border-[var(--border-strong)] print:border-gray-100 pb-1.5">
+                  Nearbi Daily
+                </h3>
+                <div className="space-y-1.5 text-xs text-[var(--text-secondary)] print:text-gray-500 font-semibold">
+                  <div className="flex justify-between">
+                    <span>Gross Salary:</span>
+                    <span className="text-white print:text-black font-bold">{formatCurrency(dailyStats.totalPayroll)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Overtime Paid:</span>
+                    <span className="text-[#4ADE80] print:text-green-700">+{formatCurrency(dailyStats.totalOT)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Deductions:</span>
+                    <span className="text-[#F87171] print:text-red-700">-{formatCurrency(dailyStats.totalDed)}</span>
+                  </div>
+                  <div className="flex justify-between pt-1.5 border-t border-[var(--border-strong)] print:border-gray-100 mt-1.5 text-[10px]">
+                    <span>Payout ratio:</span>
+                    <span className="text-white print:text-black font-bold">{dailyStats.staffPaid} / {dailyStats.staffTotal} staff</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="border border-[var(--border)] print:border-gray-200 rounded-lg p-3.5 space-y-2">
+                <h3 className="font-bold text-xs text-white print:text-black border-b border-[var(--border-strong)] print:border-gray-100 pb-1.5">
+                  Nearbi Hypermarket
+                </h3>
+                <div className="space-y-1.5 text-xs text-[var(--text-secondary)] print:text-gray-500 font-semibold">
+                  <div className="flex justify-between">
+                    <span>Gross Salary:</span>
+                    <span className="text-white print:text-black font-bold">{formatCurrency(hyperStats.totalPayroll)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Overtime Paid:</span>
+                    <span className="text-[#4ADE80] print:text-green-700">+{formatCurrency(hyperStats.totalOT)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Deductions:</span>
+                    <span className="text-[#F87171] print:text-red-700">-{formatCurrency(hyperStats.totalDed)}</span>
+                  </div>
+                  <div className="flex justify-between pt-1.5 border-t border-[var(--border-strong)] print:border-gray-100 mt-1.5 text-[10px]">
+                    <span>Payout ratio:</span>
+                    <span className="text-white print:text-black font-bold">{hyperStats.staffPaid} / {hyperStats.staffTotal} staff</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* Combined totals bar */}
+          <section>
+            <h2 className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2.5">
+              3. Aggregate Financial Metrics
+            </h2>
+            <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-lg p-4 space-y-2.5 text-xs font-semibold text-[var(--text-secondary)] print:bg-gray-50 print:border-gray-150 print:text-gray-700">
+              <div className="flex justify-between items-center">
+                <span>Combined Base Salaries:</span>
+                <span className="text-white print:text-black font-bold">{formatCurrency(totalBase)}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span>Combined OT Earnings:</span>
+                <span className="text-[#4ADE80] print:text-green-700 font-bold">+{formatCurrency(totalOT)}</span>
+              </div>
+              <div className="flex justify-between items-center pb-2.5 border-b border-[var(--border-strong)] print:border-gray-200">
+                <span>Combined Leave Deductions:</span>
+                <span className="text-[#F87171] print:text-red-700 font-bold">-{formatCurrency(totalDed)}</span>
+              </div>
+              <div className="flex justify-between items-end pt-1">
+                <span className="text-[10px] font-bold uppercase text-white print:text-black tracking-widest">
+                  Total Net Payroll
+                </span>
+                <span className="text-xl font-bold text-[#FBBF24] print:text-black">
+                  {formatCurrency(netPayroll)}
+                </span>
+              </div>
+            </div>
+          </section>
+
+          {/* Staff table registry */}
+          <section className="overflow-x-auto">
+            <h2 className="text-[10px] font-bold text-[var(--text-secondary)] uppercase tracking-wider mb-2.5">
+              4. Complete Staff Registry list
+            </h2>
+            <table className="w-full text-left text-xs whitespace-nowrap border-collapse">
+              <thead>
+                <tr className="text-[var(--text-muted)] print:text-gray-500 uppercase font-bold text-[9px] bg-[var(--bg-elevated)] border-b border-[var(--border-strong)] print:bg-gray-50 print:border-gray-200">
+                  <th className="p-2">Name</th>
+                  <th className="p-2">Branch</th>
+                  <th className="p-2 text-right">Base</th>
+                  <th className="p-2 text-right">OT</th>
+                  <th className="p-2 text-right">Ded.</th>
+                  <th className="p-2 text-right font-bold text-white print:text-black">Net</th>
+                  <th className="p-2 text-center">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[var(--border)] print:divide-gray-100">
+                {confirmations.map((conf) => {
+                  const s = staffList.find((x) => x.id === conf.staff_id);
+                  if (!s) return null;
+                  const isPaid = payments.find((p) => p.staff_id === conf.staff_id);
+                  
+                  return (
+                    <tr key={conf.id} className="hover:bg-[var(--bg-elevated)]/50 print:hover:bg-gray-50 transition-colors">
+                      <td className="p-2 font-bold text-white print:text-black">{s.name}</td>
+                      <td className="p-2 text-[var(--text-secondary)] print:text-gray-500 capitalize">{s.branch_id}</td>
+                      <td className="p-2 text-right font-semibold text-white print:text-black">{formatCurrency(conf.base_salary)}</td>
+                      <td className="p-2 text-right text-[#4ADE80] print:text-green-700 font-semibold">+{formatCurrency(conf.ot_pay)}</td>
+                      <td className="p-2 text-right text-[#F87171] print:text-red-700 font-semibold">-{formatCurrency(conf.leave_deduction)}</td>
+                      <td className="p-2 text-right font-bold text-white print:text-black">{formatCurrency(conf.net_salary)}</td>
+                      <td className="p-2 text-center">
+                        {isPaid ? (
+                          <span className="bg-[rgba(74,222,128,0.12)] text-[#4ADE80] text-[8px] font-bold px-2 py-0.5 rounded uppercase border border-[rgba(74,222,128,0.2)] print:bg-green-50 print:text-green-700 print:border-green-150">
+                            Paid
+                          </span>
+                        ) : (
+                          <span className="bg-[rgba(251,191,36,0.1)] text-[#FBBF24] text-[8px] font-bold px-2 py-0.5 rounded uppercase border border-[rgba(251,191,36,0.2)] print:bg-amber-50 print:text-[#E65100] print:border-amber-150">
+                            Pending
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {confirmations.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="p-6 text-center text-[var(--text-muted)] print:text-gray-400 italic font-medium">
+                      No records generated for this month.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </section>
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,73 +1,78 @@
-# Nearbi Staff Management
+# Nearbi Staff Management System
 
-A production-ready staff management system for the Nearbi supermarket chain, built with Next.js 15, Tailwind CSS v4, and Supabase. 
+A production-ready, beautiful, and secure staff management portal for the Nearbi supermarket chain. Built with Next.js 15 (App Router), Tailwind CSS, TypeScript, and Supabase.
 
-## Features
+Designed to operate flawlessly on both desktop browsers and Android Chrome (PWA-enabled).
 
-- **Role-based Access Control**: Hardcoded roles (`admin`, `ops_manager`, `staff_executive`, `kiosk`) with strict routing and visibility permissions.
-- **Kiosk Mode**: Fullscreen, dark-themed interface for staff to check in/out using a 4-digit PIN and live camera photo capture.
-- **Attendance Tracking**: Real-time tracking of staff check-ins, check-outs, lateness, and overtime (OT).
-- **Staff Management**: Add and manage staff members with real-time syncing across all active clients.
-- **Leave Requests**: Approve or reject leave requests with optimistic UI updates.
-- **Salary Calculation engine**: Automated engine calculating base salary, leave deductions, and overtime pay with strict privacy guards.
+## Domain & DNS
+- Target Domain: `nearbicrew.online`
 
-## Tech Stack
+---
 
-- **Framework**: Next.js 15 (App Router)
-- **Language**: TypeScript
-- **Styling**: Tailwind CSS v4
-- **Backend & Database**: Supabase (PostgreSQL, Storage, Auth)
+## Brand Guidelines
+- **Background:** `#FFFFFF` (White)
+- **Accent:** `#F5A800` (Amber)
+- **Text:** `#111111` (Near Black)
+- **Muted Text:** `#757575` (Gray)
+- **Success:** `#2E7D32` (Green)
+- **Danger:** `#D32F2F` (Red)
+- **Warning:** `#E65100` (Orange)
+- **Info:** `#185FA5` (Blue)
+- **Cards:** White background, 1px `#E0E0E0` border, 12px corner radius
+- **Bottom Navigation:** White background, 3px active amber border indicator at the top
+
+---
+
+## Role Permissions & Login Directory
+
+Authentication is gated at both the frontend context and verified via PostgreSQL RLS rules.
+
+| Email | Password | Role | Scope / Permissions |
+| :--- | :--- | :--- | :--- |
+| `adminnearbi@gmail.com` | `nearbi@123` | `admin` | Owner. Full database access, can view/edit salaries, delete staff, configure fine rates. |
+| `ops@nearbi.com` | `ops@123` | `ops_manager` | Operations Manager. Full database access, can view/edit salaries, delete staff, configure fine rates. |
+| `hr@nearbi.com` | `hr@123` | `staff_executive` | Head HR. Access to both branches, cannot see/modify salaries (locked screens), cannot delete staff, cannot edit settings. |
+| `daily.hr@nearbi.com` | `daily@123` | `staff_executive` | Daily Branch HR. Same permissions as Head HR, but isolated *strictly* to the "Nearbi Daily" branch. |
+| `hyper.hr@nearbi.com` | `hyper@123` | `staff_executive` | Hypermarket Branch HR. Same permissions as Head HR, but isolated *strictly* to the "Nearbi Hypermarket" branch. |
+| `staffkiosk@gmail.com` | `staff@123` | `kiosk` | Kiosk Portal. Redirects to `/kiosk` immediately. Allows camera check-in/out via staff PIN keys. |
+
+---
+
+## Key Features
+
+1. **Facial Check-In / Out (Kiosk):** Keypad PIN verification, automatic camera feed capture (facing-mode "user"), image blob uploads, auto late arrival pass checks, and transaction status toast feedbacks.
+2. **Real-time Attendance Register:** Today's check-in/out timestamps, circular photo snapshots, adjustment labels, and branch-specific isolated filters.
+3. **Overtime & Early-In Approvals:** Supervisors approve or reject early entry/overtime minute logs.
+4. **Late Fines Waiver:** Automated late fine system (Yellow/Orange/Red tier fines) with single-click waiving or confirmation capabilities.
+5. **Private Salary Ledgers:** Net salary calculations, extra leave day modifiers, print-ready PDF layouts, and direct-to-WhatsApp share links (restricted to Owner & Ops roles).
+6. **Alert Notifications:** Real-time push alert toasts, scoped logs (read/unread statuses), and type-specific click redirection.
+7. **System Configurations:** Customize fine tiers, free pass allowances, and add staff-specific exemption toggles.
+
+---
 
 ## Setup Instructions
 
-### 1. Supabase Setup
+### 1. Database Setup
+1. Create a project at [Supabase](https://supabase.com).
+2. Open the **SQL Editor** in the Supabase Dashboard.
+3. Run the complete contents of [supabase-schema.sql](file:///Users/abdulhadimehthash/Downloads/Works/nearbi-staff/supabase-schema.sql) to initialize tables, seeds, and disable active RLS.
+4. Go to **Storage**, create a public bucket named `attendance-photos` and enable public read access.
 
-1. Create a new project on [Supabase](https://supabase.com).
-2. Go to the **SQL Editor** and run the exact contents of `supabase-schema.sql` to initialize the database tables and seed data.
-3. Go to **Storage** and create a new bucket named `attendance-photos` and ensure it is set to **Public**.
-4. Go to **Project Settings -> API** to get your Project URL and Anon Key.
+### 2. Local Setup
+1. Clone the project files to your workstation.
+2. Create a `.env.local` file using the configuration schema in `.env.example`:
+   ```env
+   NEXT_PUBLIC_SUPABASE_URL=https://your-project-id.supabase.co
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key-here
+   ```
+3. Install the dependencies and initiate the dev web server:
+   ```bash
+   npm install
+   npm run dev
+   ```
+4. Access the web portal locally at `http://localhost:3000`.
 
-### 2. Environment Variables
-
-Create a `.env.local` file in the root directory (use `.env.example` as a template):
-
-```env
-NEXT_PUBLIC_SUPABASE_URL=https://your-project-id.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key-here
-DATABASE_URL=postgresql://postgres:your-db-password@db.your-project-id.supabase.co:5432/postgres
-```
-
-### 3. Local Development
-
-Install dependencies and start the development server:
-
-```bash
-npm install
-npm run dev
-```
-
-The app will be available at [http://localhost:3000](http://localhost:3000).
-
-### 4. Test Logins
-
-The application uses hardcoded frontend login validation for simplicity. Valid accounts are:
-
-| Email | Password | Role | Description |
-|-------|----------|------|-------------|
-| adminnearbi@gmail.com | nearbi@123 | admin | Full access |
-| ops@nearbi.com | ops@123 | ops_manager | Full access |
-| hr@nearbi.com | hr@123 | staff_executive | Cannot see salary |
-| staffkiosk@gmail.com | staff@123 | kiosk | Kiosk mode only |
-
-## Deployment
-
-This app is optimized for Vercel. 
-
-1. Push your code to a GitHub repository.
-2. Go to [Vercel](https://vercel.com) and create a new project.
-3. Import your repository.
-4. In the Environment Variables section, add `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
-5. Click **Deploy**.
+---
 
 ## License
 Private and Confidential. Developed for Nearbi.

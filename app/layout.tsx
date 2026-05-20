@@ -1,7 +1,14 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
+import { Outfit } from 'next/font/google';
 import './globals.css';
 import { AuthProvider } from '@/lib/auth-context';
 import AppShell from '@/components/AppShell';
+
+const outfit = Outfit({
+  subsets: ['latin'],
+  weight: ['300', '400', '500', '600', '700', '900'],
+  variable: '--font-outfit',
+});
 
 export const metadata: Metadata = {
   title: 'Nearbi Staff',
@@ -10,16 +17,17 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     statusBarStyle: 'black-translucent',
+    title: 'Nearbi Staff',
   },
   other: {
     'mobile-web-app-capable': 'yes',
   },
 };
 
-export const viewport = {
+export const viewport: Viewport = {
   width: 'device-width',
-  initialScale: 1.0,
-  maximumScale: 1.0,
+  initialScale: 1,
+  maximumScale: 1,
   userScalable: false,
   viewportFit: 'cover',
   themeColor: '#111111',
@@ -31,8 +39,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body className="antialiased min-h-screen flex flex-col bg-brand-primary text-brand-text">
+    <html lang="en" className={`${outfit.variable}`}>
+      <body className="antialiased min-h-screen flex flex-col bg-white text-[#111111] font-sans">
         <AuthProvider>
           <AppShell>
             {children}

@@ -1,24 +1,14 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Staff, SalaryConfirmation } from './types';
-import { formatCurrency, getCurrentMonthStr, getPastMonths, formatMonthDisplay } from './utils';
-
-const SkeletonCard = () => (
-  <div style={{
-    background: 'linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%)',
-    backgroundSize: '200% 100%',
-    animation: 'shimmer 1.5s infinite',
-    borderRadius: '12px',
-    height: '72px',
-    marginBottom: '8px',
-  }} />
-);
+import { formatCurrency, getPastMonths, formatMonthDisplay } from './utils';
+import { AlertTriangle, FileText, Share2 } from 'lucide-react';
 
 export default function PayslipTab() {
   const [loading, setLoading] = useState(true);
-  const [fetchError, setFetchError] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [selectedStaffId, setSelectedStaffId] = useState('');
   
@@ -27,32 +17,20 @@ export default function PayslipTab() {
   
   const [confirmation, setConfirmation] = useState<SalaryConfirmation | null>(null);
 
-  useEffect(() => {
-    fetchStaff();
-  }, []);
-
-  useEffect(() => {
-    if (selectedStaffId && selectedMonth) {
-      fetchConfirmation();
-    } else {
-      setConfirmation(null);
-    }
-  }, [selectedStaffId, selectedMonth]);
-
   const fetchStaff = async () => {
     try {
       setLoading(true);
-      setFetchError(false);
+      setErrorMsg('');
       const { data, error } = await supabase
         .from('staff')
         .select('*, branch:branches(name), shift:shifts(*)')
         .eq('active', true)
         .order('name');
       if (error) throw error;
-      if (data) setStaffList(data);
-    } catch (e) {
-      console.error('Error fetching staff for payslip:', e);
-      setFetchError(true);
+      setStaffList((data || []) as unknown as Staff[]);
+    } catch (err) {
+      console.error(err);
+      setErrorMsg('Failed to load staff list.');
     } finally {
       setLoading(false);
     }
@@ -69,186 +47,213 @@ export default function PayslipTab() {
       
       if (error) throw error;
       setConfirmation(data || null);
-    } catch (e) {
-      console.error('Error fetching salary confirmation:', e);
+    } catch (err) {
+      console.error(err);
     }
   };
 
-  const staff = staffList.find(s => s.id === selectedStaffId);
+  useEffect(() => {
+    fetchStaff();
+  }, []);
+
+  useEffect(() => {
+    if (selectedStaffId && selectedMonth) {
+      fetchConfirmation();
+    } else {
+      setConfirmation(null);
+    }
+  }, [selectedStaffId, selectedMonth]);
+
+  const staff = staffList.find((s) => s.id === selectedStaffId);
 
   const handleWhatsApp = () => {
     if (!staff || !confirmation) return;
-    const msg = `Salary slip for ${staff.name} - ${formatMonthDisplay(selectedMonth)}: \nNet salary ${formatCurrency(confirmation.net_salary)}.\nFor details contact management.`;
+    const msg = `*SALARY SLIP - ${formatMonthDisplay(selectedMonth).toUpperCase()}*\n\n` +
+      `*Name:* ${staff.name}\n` +
+      `*Department:* ${staff.department}\n` +
+      `*Branch:* ${staff.branch?.name || staff.branch_id}\n\n` +
+      `*Base Salary:* ${formatCurrency(confirmation.base_salary)}\n` +
+      `*OT Pay:* +${formatCurrency(confirmation.ot_pay)}\n` +
+      `*Leave Deduction:* -${formatCurrency(confirmation.leave_deduction)}\n` +
+      `----------------------------------------\n` +
+      `*NET PAYABLE:* ${formatCurrency(confirmation.net_salary)}\n\n` +
+      `Generated via Nearbi Staff Portal.`;
+    
     const url = `https://wa.me/?text=${encodeURIComponent(msg)}`;
     window.open(url, '_blank');
   };
 
-  if (fetchError) {
-    return (
-      <div className="py-12 text-center bg-red-50 border border-red-300 rounded-2xl p-6 my-4 text-[#111]">
-        <div className="text-4xl mb-3">⚠️</div>
-        <h3 className="text-lg font-bold text-[#111] mb-1">Could not load data. Check connection.</h3>
-        <p className="text-xs text-red-600 mb-4">Please verify your internet connection.</p>
-        <button 
-          onClick={() => fetchStaff()} 
-          className="bg-brand-accent text-[#111] font-bold px-6 py-2.5 rounded-xl active:scale-95 transition-transform"
-        >
-          Retry
-        </button>
-      </div>
-    );
-  }
-
   if (loading) {
     return (
       <div className="space-y-3">
-        <SkeletonCard />
-        <SkeletonCard />
-        <SkeletonCard />
+        <div className="skeleton h-[48px] w-full" />
+        <div className="skeleton h-[90px] w-full" />
       </div>
     );
   }
 
-
   return (
-    <div className="space-y-6">
-      {/* Controls - Hidden on print */}
+    <div className="space-y-5 select-none">
+      {/* Selection controls (Hidden when printing) */}
       <div className="print:hidden space-y-4">
         <div>
-          <label className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1 block">Select Staff</label>
-          <select 
+          <label className="block text-xs font-bold text-[var(--text-muted)] mb-1.5">
+            Select Staff Member
+          </label>
+          <select
             value={selectedStaffId}
             onChange={(e) => setSelectedStaffId(e.target.value)}
-            className="w-full bg-[#1A1A1A] border border-[#333] text-white p-3 rounded-xl focus:outline-none focus:border-brand-accent"
+            className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-xs focus:outline-none focus:border-white/40 text-white font-bold"
           >
-            <option value="">-- Choose Staff --</option>
-            {staffList.map(s => (
-              <option key={s.id} value={s.id}>{s.name} ({s.branch?.name})</option>
+            <option value="" className="bg-[var(--bg-surface)]">Choose staff...</option>
+            {staffList.map((s) => (
+              <option key={s.id} value={s.id} className="bg-[var(--bg-surface)]">
+                {s.name} ({s.branch?.name || s.branch_id})
+              </option>
             ))}
           </select>
         </div>
 
         <div>
-          <label className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-1 block">Select Month</label>
-          <div className="grid grid-cols-3 gap-2">
-            {months.map(m => (
-              <button
-                key={m}
-                onClick={() => setSelectedMonth(m)}
-                className={`py-2 text-sm font-bold rounded-lg border transition-colors ${
-                  selectedMonth === m 
-                    ? 'bg-brand-accent/20 border-brand-accent text-brand-accent' 
-                    : 'bg-[#1A1A1A] border-[#333] text-gray-400'
-                }`}
-              >
-                {formatMonthDisplay(m)}
-              </button>
-            ))}
+          <label className="block text-xs font-bold text-[var(--text-muted)] mb-1.5">
+            Select Month
+          </label>
+          <div className="flex gap-2">
+            {months.map((m) => {
+              const isActive = selectedMonth === m;
+              return (
+                <button
+                  key={m}
+                  onClick={() => setSelectedMonth(m)}
+                  className={`flex-1 py-2.5 rounded-[10px] border text-xs font-bold transition-all ${
+                    isActive
+                      ? 'bg-white text-[#1E2028] border-white'
+                      : 'bg-[var(--bg-surface)] text-[var(--text-secondary)] border-[var(--border)] hover:border-white/20 active:scale-95'
+                  }`}
+                >
+                  {formatMonthDisplay(m)}
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>
 
-      {/* Content Area */}
-      {selectedStaffId && !confirmation && (
-        <div className="bg-[#FFF8E7] border border-amber-300 rounded-xl p-6 text-center print:hidden">
-          <div className="text-4xl mb-2">⚠️</div>
-          <h3 className="text-amber-900 font-bold text-lg mb-1">Salary not confirmed</h3>
-          <p className="text-amber-700 text-sm mb-4">Salary for {formatMonthDisplay(selectedMonth)} has not been confirmed yet.</p>
+      {errorMsg && (
+        <div className="bg-[var(--danger-bg)] border border-[var(--danger)] text-[#F87171] text-xs font-bold px-4 py-3 rounded-[10px] flex items-center justify-between">
+          <span>{errorMsg}</span>
+          <button onClick={fetchStaff} className="text-xs underline font-bold">
+            Retry
+          </button>
         </div>
       )}
 
+      {/* Alert when Salary is Not Confirmed */}
+      {selectedStaffId && !confirmation && (
+        <div className="bg-[var(--warning-bg)] border border-[var(--warning)] rounded-[12px] p-6 text-center print:hidden flex flex-col items-center">
+          <AlertTriangle size={32} strokeWidth={1.5} className="mb-2 text-[#FBBF24]" />
+          <h3 className="text-sm font-bold text-[#FBBF24]">Salary Not Confirmed</h3>
+          <p className="text-xs text-[var(--text-muted)] mt-1">
+            The salary slip for {formatMonthDisplay(selectedMonth)} hasn't been confirmed yet.
+          </p>
+        </div>
+      )}
+
+      {/* Payslip preview box */}
       {selectedStaffId && confirmation && staff && (
-        <div className="space-y-6">
-          {/* Action Buttons - Hidden on Print */}
+        <div className="space-y-4">
+          {/* Actions Bar (Hidden on Print) */}
           <div className="grid grid-cols-2 gap-3 print:hidden">
-            <button 
+            <button
               onClick={() => window.print()}
-              className="bg-brand-accent text-[#111] font-bold py-3 rounded-xl flex items-center justify-center shadow-lg active:scale-95 transition-all"
+              className="min-h-[42px] bg-transparent border border-[var(--border-strong)] text-[var(--text-secondary)] hover:text-white hover:border-white font-bold text-xs rounded-[10px] flex items-center justify-center space-x-1.5 active:scale-95 transition-all"
             >
-              <span className="mr-2">📄</span> Download PDF
+              <FileText size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
+              <span>Print Slip</span>
             </button>
-            <button 
+            <button
               onClick={handleWhatsApp}
-              className="bg-[#25D366] text-white font-bold py-3 rounded-xl flex items-center justify-center shadow-lg active:scale-95 transition-all"
+              className="min-h-[42px] bg-[rgba(74,222,128,0.15)] border border-[rgba(74,222,128,0.3)] text-[#4ADE80] hover:bg-[rgba(74,222,128,0.25)] font-bold text-xs rounded-[10px] flex items-center justify-center space-x-1.5 active:scale-95 transition-all"
             >
-              <span className="mr-2">💬</span> Share on WA
+              <Share2 size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
+              <span>WhatsApp</span>
             </button>
           </div>
 
-          {/* Payslip Preview - Visible on Print */}
-          <div className="bg-white text-black p-6 rounded-none sm:rounded-xl border-t-8 border-brand-accent shadow-2xl print:shadow-none print:border-t-4 print:m-0 w-full max-w-md mx-auto">
-            {/* Header */}
-            <div className="text-center mb-6">
-              <div className="font-bold text-3xl tracking-tight flex justify-center mb-1">
-                <span className="text-[#111]">near</span>
-                <span className="text-brand-accent">bi</span>
+          {/* Actual Payslip Card layout */}
+          <div className="bg-[var(--bg-surface)] border border-[var(--border)] p-6 rounded-[14px] shadow-sm max-w-sm mx-auto print:bg-white print:text-black print:border-none print:shadow-none print:p-0">
+            {/* Header branding */}
+            <div className="text-center border-b border-[var(--border)] print:border-gray-200 pb-4 mb-4">
+              <div className="font-[900] text-2xl tracking-tight flex justify-center items-center mb-0.5 leading-none">
+                <span className="text-white print:text-black">near</span>
+                <span className="text-white/60 print:text-[#F5A800]">bi</span>
               </div>
-              <div className="text-xs text-gray-500 font-bold uppercase tracking-widest border-b border-gray-200 pb-4">
-                Salary Slip — {formatMonthDisplay(selectedMonth)}
+              <p className="text-[10px] text-[var(--text-muted)] print:text-gray-500 font-bold uppercase tracking-widest mt-1">
+                Payslip — {formatMonthDisplay(selectedMonth)}
+              </p>
+            </div>
+
+            {/* Employee Metadata */}
+            <div className="space-y-2 text-xs font-semibold text-[var(--text-secondary)] print:text-gray-500 border-b border-[var(--border)] print:border-gray-200 pb-4 mb-4">
+              <div className="flex justify-between">
+                <span>Name:</span>
+                <span className="text-white print:text-black font-bold">{staff.name}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Department:</span>
+                <span className="text-white print:text-black">{staff.department}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Branch:</span>
+                <span className="text-white print:text-black capitalize">{staff.branch?.name || staff.branch_id}</span>
+              </div>
+              {staff.shift && (
+                <div className="flex justify-between">
+                  <span>Shift Hour profile:</span>
+                  <span className="text-white print:text-black">{staff.shift.label} ({staff.shift.hours}h)</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span>Joining Date:</span>
+                <span className="text-white print:text-black">{new Date(staff.join_date).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
               </div>
             </div>
 
-            {/* Staff Info */}
-            <div className="space-y-2 mb-6 text-sm border-b border-gray-200 pb-6">
-              <div className="flex justify-between">
-                <span className="text-gray-500">Name</span>
-                <span className="font-bold">{staff.name}</span>
+            {/* Calculations Breakdown */}
+            <div className="space-y-2.5 text-xs text-[var(--text-secondary)] print:text-gray-700 border-b border-dashed border-[var(--border)] print:border-gray-200 pb-4 mb-4">
+              <div className="flex justify-between items-center bg-[var(--bg-elevated)] print:bg-gray-50 p-2 rounded">
+                <span className="font-bold text-white print:text-black">Base Salary (30 days):</span>
+                <span className="font-bold text-white print:text-black">{formatCurrency(confirmation.base_salary)}</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Department</span>
-                <span className="font-bold text-gray-700">{staff.department}</span>
+              <div className="flex justify-between px-1">
+                <span>OT Earnings ({(confirmation.ot_minutes / 60).toFixed(1)}h):</span>
+                <span className="text-[#4ADE80] print:text-green-700 font-bold">+{formatCurrency(confirmation.ot_pay)}</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Branch</span>
-                <span className="font-bold text-gray-700">{staff.branch?.name}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Shift</span>
-                <span className="font-bold text-gray-700">{staff.shift?.label}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-500">Join Date</span>
-                <span className="font-bold text-gray-700">{new Date(staff.join_date).toLocaleDateString()}</span>
+              <div className="flex justify-between px-1">
+                <span>Leave Deduction ({confirmation.extra_leave_days}d):</span>
+                <span className="text-[#F87171] print:text-red-700 font-bold">-{formatCurrency(confirmation.leave_deduction)}</span>
               </div>
             </div>
 
-            {/* Salary Calculation */}
-            <div className="space-y-3 mb-6 text-sm border-b border-gray-200 pb-6">
-              <div className="flex justify-between items-center bg-gray-50 p-2 rounded">
-                <span className="text-gray-600 font-medium">Base Salary (30 days)</span>
-                <span className="font-bold">{formatCurrency(confirmation.base_salary)}</span>
+            {/* Grand net totals */}
+            <div className="flex justify-between items-end mb-6 px-1">
+              <div>
+                <div className="text-[10px] text-[var(--text-muted)] print:text-gray-500 font-bold uppercase tracking-wider leading-none">
+                  Net Salary Payable
+                </div>
+                <div className="text-[9px] text-[var(--text-muted)] print:text-gray-400 font-semibold mt-0.5">
+                  Calculated based on 30-day index
+                </div>
               </div>
-              <div className="flex justify-between px-2">
-                <span className="text-gray-500">Working days entitled</span>
-                <span className="font-bold text-gray-700">{30 - staff.off_days_per_month} days</span>
-              </div>
-              <div className="flex justify-between px-2 text-xs text-gray-400">
-                <span>Daily Rate</span>
-                <span>{formatCurrency(confirmation.base_salary / 30)}/day</span>
-              </div>
+              <span className="text-2xl font-bold text-white print:text-black leading-none">
+                {formatCurrency(confirmation.net_salary)}
+              </span>
             </div>
 
-            {/* Deductions & Additions */}
-            <div className="space-y-3 mb-6 text-sm border-b border-dashed border-gray-300 pb-6">
-              <div className="flex justify-between px-2">
-                <span className="text-gray-500">Leave Deduction ({confirmation.extra_leave_days} days)</span>
-                <span className="font-bold text-red-600">- {formatCurrency(confirmation.leave_deduction)}</span>
-              </div>
-              <div className="flex justify-between px-2">
-                <span className="text-gray-500">OT Pay ({(confirmation.ot_minutes / 60).toFixed(1)} hrs)</span>
-                <span className="font-bold text-green-600">+ {formatCurrency(confirmation.ot_pay)}</span>
-              </div>
-            </div>
-
-            {/* Net Total */}
-            <div className="flex justify-between items-end px-2 mb-8">
-              <span className="font-bold text-gray-400 uppercase tracking-widest text-xs mb-1">Net Salary</span>
-              <span className="text-3xl font-black text-brand-accent">{formatCurrency(confirmation.net_salary)}</span>
-            </div>
-
-            <div className="text-center text-[10px] text-gray-400 uppercase tracking-widest pt-4 border-t border-gray-100">
-              <div>Generated by Nearbi Staff</div>
-              <div>{new Date().toLocaleString()}</div>
+            {/* Bottom stamp */}
+            <div className="text-center text-[9px] text-[var(--text-muted)] print:text-gray-400 font-bold uppercase tracking-wider pt-2">
+              <div>Generated via Nearbi Crew System</div>
+              <div className="mt-0.5">{new Date().toLocaleString()}</div>
             </div>
           </div>
         </div>
