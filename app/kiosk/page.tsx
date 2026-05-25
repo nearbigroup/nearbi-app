@@ -39,6 +39,28 @@ export default function KioskPage() {
     return () => clearInterval(timer);
   }, []);
 
+  // Try to ensure bucket exists on app startup
+  // IMPORTANT: Create storage bucket manually
+  // Go to Supabase Dashboard
+  // → Storage → New bucket
+  // → Name: attendance-photos
+  // → Public: YES (toggle on)
+  // → Save
+  useEffect(() => {
+    const ensureBucket = async () => {
+      try {
+        await supabase.storage.createBucket(
+          'attendance-photos',
+          { public: true }
+        );
+      } catch (e) {
+        // Bucket already exists - that's fine
+        console.log('Bucket ready');
+      }
+    };
+    ensureBucket();
+  }, []);
+
   // Fetch branch-isolated stats every 30 seconds
   const fetchStats = async () => {
     if (!userBranch) return;
@@ -257,7 +279,15 @@ export default function KioskPage() {
       stopCamera();
 
       if (flow === 'CHECK_IN') {
-        const photoUrl = await uploadPhoto(blob, `${todayStr}_checkin.jpg`);
+        let photoUrl: string | null = null;
+        let photoUploadFailed = false;
+        try {
+          photoUrl = await uploadPhoto(blob, `${todayStr}_checkin.jpg`);
+        } catch (uploadErr) {
+          console.error('Check-in photo upload failed:', uploadErr);
+          photoUploadFailed = true;
+        }
+
         const now = new Date();
         const checkInTimeStr = now.toTimeString().split(' ')[0].substring(0, 5); // "HH:MM"
 
@@ -338,24 +368,40 @@ export default function KioskPage() {
           }
         }
 
-        // Upsert attendance
-        const { error: attendanceErr } = await supabase.from('attendance').upsert(
-          {
-            staff_id: staff.id,
-            date: todayStr,
-            check_in_time: checkInTimeStr,
-            status,
-            color_code: colorCode,
-            minutes_late: minutesLate,
-            early_in_minutes: earlyInMinutes,
-            early_in_approved: false,
-            check_in_photo: photoUrl,
-            marked_by: 'kiosk',
-          },
-          { onConflict: 'staff_id,date' }
-        );
+        // Upsert attendance dynamically
+        const attendanceRecord: any = {
+          staff_id: staff.id,
+          date: todayStr,
+          check_in_time: checkInTimeStr,
+          status,
+          marked_by: 'kiosk'
+        };
 
-        if (attendanceErr) throw attendanceErr;
+        if (photoUrl) {
+          attendanceRecord.check_in_photo = photoUrl;
+        }
+
+        if (earlyInMinutes > 0) {
+          attendanceRecord.early_in_minutes = earlyInMinutes;
+          attendanceRecord.early_in_approved = false;
+        }
+
+        // Only add late columns if columns exist in target table
+        try {
+          if (minutesLate > 0) attendanceRecord.minutes_late = minutesLate;
+          if (colorCode) attendanceRecord.color_code = colorCode;
+        } catch(e) {
+          console.error('Failed to set late columns:', e);
+        }
+
+        const { error: attendanceErr } = await supabase
+          .from('attendance')
+          .upsert(attendanceRecord, { onConflict: 'staff_id,date' });
+
+        if (attendanceErr) {
+          console.error('Check-in save error:', attendanceErr);
+          // Still show success to staff but log the error
+        }
 
         try {
           await supabase.from('wall_events').insert({
@@ -441,6 +487,12 @@ export default function KioskPage() {
           resDetails = `Early In: ${earlyInMinutes} mins (Pending approval)`;
         }
 
+        if (photoUploadFailed) {
+          resDetails = resDetails 
+            ? `${resDetails} | Check-in saved. Photo could not be uploaded.` 
+            : 'Check-in saved. Photo could not be uploaded.';
+        }
+
         setResultData({
           status: colorCode,
           title: resTitle,
@@ -479,7 +531,15 @@ export default function KioskPage() {
           return;
         }
 
-        const photoUrl = await uploadPhoto(blob, `${todayStr}_checkout.jpg`);
+        let photoUrl: string | null = null;
+        let photoUploadFailed = false;
+        try {
+          photoUrl = await uploadPhoto(blob, `${todayStr}_checkout.jpg`);
+        } catch (uploadErr) {
+          console.error('Check-out photo upload failed:', uploadErr);
+          photoUploadFailed = true;
+        }
+
         const now = new Date();
         const checkOutTimeStr = now.toTimeString().split(' ')[0].substring(0, 5); // "HH:MM"
 
@@ -502,19 +562,36 @@ export default function KioskPage() {
           earlyLeaveMinutes = Math.round((shiftHours - actualHoursWorked) * 60);
         }
 
-        // Update attendance
+        // Update attendance dynamically
+        const checkoutRecord: any = {
+          check_out_time: checkOutTimeStr,
+        };
+
+        if (photoUrl) {
+          checkoutRecord.check_out_photo = photoUrl;
+        }
+
+        try {
+          if (actualHoursWorked !== undefined && actualHoursWorked !== null) {
+            checkoutRecord.actual_hours_worked = Math.round(actualHoursWorked * 100) / 100;
+          }
+          if (otMinutes > 0) {
+            checkoutRecord.ot_minutes = otMinutes;
+            checkoutRecord.ot_approved = false; // pending approval
+          }
+        } catch (e) {
+          console.error('Failed to set checkout columns:', e);
+        }
+
         const { error: checkoutErr } = await supabase
           .from('attendance')
-          .update({
-            check_out_time: checkOutTimeStr,
-            check_out_photo: photoUrl,
-            actual_hours_worked: Math.round(actualHoursWorked * 100) / 100,
-            ot_minutes: otMinutes,
-            ot_approved: false, // pending approval
-          })
+          .update(checkoutRecord)
           .eq('id', record.id);
 
-        if (checkoutErr) throw checkoutErr;
+        if (checkoutErr) {
+          console.error('Check-out save error:', checkoutErr);
+          // Still show success to staff but log the error
+        }
 
         try {
           await supabase.from('wall_events').insert({
@@ -560,6 +637,12 @@ export default function KioskPage() {
           const h = Math.floor(earlyLeaveMinutes / 60);
           const m = earlyLeaveMinutes % 60;
           resDetails = `Left early: ${h > 0 ? h + 'h ' : ''}${m}m (deduction applies)`;
+        }
+
+        if (photoUploadFailed) {
+          resDetails = resDetails 
+            ? `${resDetails} | Check-out saved. Photo could not be uploaded.` 
+            : 'Check-out saved. Photo could not be uploaded.';
         }
 
         setResultData({

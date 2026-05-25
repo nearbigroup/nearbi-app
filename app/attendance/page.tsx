@@ -780,14 +780,13 @@ export default function AttendancePage() {
           .select('*')
           .eq('date', todayStr);
         if (aErr) {
-          console.error('Attendance fetch error:', aErr);
-          setAttendance([]);
-        } else {
-          setAttendance(attRecords || []);
+          console.error('Attendance load error:', aErr);
+          throw aErr;
         }
+        setAttendance(attRecords || []);
       } catch (err: any) {
         console.error('Attendance fetch error:', err);
-        setAttendance([]);
+        setErrorMsg('Could not load data. Check connection.');
       }
 
       // 3. Fetch today's late fines
@@ -832,9 +831,9 @@ export default function AttendancePage() {
     setLoading(true);
     fetchData();
 
-    // Realtime attendance channel
+    // Realtime attendance channel (FIX 2 - Step 4)
     const channel = supabase
-      .channel('attendance-page-updates')
+      .channel('attendance-realtime')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'attendance' },
@@ -845,11 +844,11 @@ export default function AttendancePage() {
       .subscribe();
 
     return () => {
-      channel.unsubscribe();
+      supabase.removeChannel(channel);
     };
   }, [userBranch]);
 
-  // Combine staff with today's metrics
+  // Combine staff with today's metrics (FIX 2 - Step 3)
   const combinedData = staff.map((s) => {
     const record = attendance.find((a) => a.staff_id === s.id);
     const lateFine = fines.find((f) => f.staff_id === s.id);
@@ -858,8 +857,14 @@ export default function AttendancePage() {
     return {
       ...s,
       record: record || null,
+      attendance: record || null,
       fine: lateFine || null,
       adjustments: staffAdjustments,
+      status: record?.check_in_time 
+        ? (record.status || 'present')
+        : 'absent',
+      checkInTime: record?.check_in_time || null,
+      checkOutTime: record?.check_out_time || null,
     };
   });
 
