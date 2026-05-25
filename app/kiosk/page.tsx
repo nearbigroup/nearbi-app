@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { createNotification } from '@/lib/notifications';
-import { Check, LogOut, Camera, AlertCircle, UserCheck, Timer, AlertTriangle } from 'lucide-react';
+import { Check, LogOut, Camera, AlertCircle, UserCheck, Timer, AlertTriangle, Coffee, RotateCcw, CircleCheck } from 'lucide-react';
 
 type KioskState = 'IDLE' | 'LOADING' | 'STAFF_FOUND' | 'CAMERA' | 'RESULT' | 'ERROR';
 type FlowType = 'CHECK_IN' | 'CHECK_OUT' | null;
@@ -18,13 +18,14 @@ export default function KioskPage() {
   const [flow, setFlow] = useState<FlowType>(null);
   const [errorMsg, setErrorMsg] = useState('');
   const [cameraError, setCameraError] = useState(false);
-  const [stats, setStats] = useState({ checkedIn: 0, late: 0, checkedOut: 0 });
+  const [stats, setStats] = useState({ checkedIn: 0, late: 0, checkedOut: 0, onBreak: 0 });
 
   const [resultData, setResultData] = useState<{
     status: 'green' | 'yellow' | 'orange' | 'red' | 'blue';
-    title: string;
-    message: string;
+    title: React.ReactNode;
+    message: React.ReactNode;
     details?: string;
+    icon?: string;
   } | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -34,6 +35,7 @@ export default function KioskPage() {
   useEffect(() => {
     setCurrentTime(new Date());
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    autoCloseBreaks();
     return () => clearInterval(timer);
   }, []);
 
@@ -43,28 +45,64 @@ export default function KioskPage() {
     try {
       const todayStr = new Date().toISOString().split('T')[0];
       
-      // Fetch attendance for today
-      const { data: attendanceData, error } = await supabase
-        .from('attendance')
-        .select('status, check_in_time, check_out_time, staff!inner(branch_id)')
-        .eq('date', todayStr)
-        .eq('staff.branch_id', userBranch);
+      const { data: branchStaffIds, error: staffErr } = await supabase
+        .from('staff')
+        .select('id')
+        .eq('branch_id', userBranch)
+        .eq('active', true);
 
-      if (error) throw error;
+      if (staffErr) throw staffErr;
+      const staffIds = branchStaffIds?.map(s => s.id) || [];
 
-      let checkedIn = 0;
-      let late = 0;
-      let checkedOut = 0;
-
-      if (attendanceData) {
-        attendanceData.forEach((row) => {
-          if (row.check_in_time) checkedIn++;
-          if (row.status === 'late') late++;
-          if (row.check_out_time) checkedOut++;
-        });
+      if (staffIds.length === 0) {
+        setStats({ checkedIn: 0, late: 0, checkedOut: 0, onBreak: 0 });
+        return;
       }
 
-      setStats({ checkedIn, late, checkedOut });
+      const { count: checkedInCount, error: ciErr } = await supabase
+        .from('attendance')
+        .select('*', { count: 'exact', head: true })
+        .eq('date', todayStr)
+        .in('staff_id', staffIds)
+        .not('check_in_time', 'is', null);
+
+      if (ciErr) throw ciErr;
+
+      const { count: lateCount, error: lateErr } = await supabase
+        .from('attendance')
+        .select('*', { count: 'exact', head: true })
+        .eq('date', todayStr)
+        .in('staff_id', staffIds)
+        .eq('status', 'late');
+
+      if (lateErr) throw lateErr;
+
+      const { count: checkedOutCount, error: coErr } = await supabase
+        .from('attendance')
+        .select('*', { count: 'exact', head: true })
+        .eq('date', todayStr)
+        .in('staff_id', staffIds)
+        .not('check_out_time', 'is', null);
+
+      if (coErr) throw coErr;
+
+      // Fetch open breaks count today
+      const { count: onBreakCount, error: breakErr } = await supabase
+        .from('break_logs')
+        .select('*', { count: 'exact', head: true })
+        .eq('date', todayStr)
+        .is('break_end', null)
+        .in('staff_id', staffIds);
+
+      if (breakErr) throw breakErr;
+      const onBreak = onBreakCount || 0;
+
+      setStats({
+        checkedIn: checkedInCount || 0,
+        late: lateCount || 0,
+        checkedOut: checkedOutCount || 0,
+        onBreak
+      });
     } catch (err) {
       console.error('Error fetching kiosk stats:', err);
     }
@@ -86,29 +124,29 @@ export default function KioskPage() {
   const handleLookup = async (enteredPin: string) => {
     setKioskState('LOADING');
     try {
+      if (!userBranch) {
+        throw new Error('Branch not set for kiosk');
+      }
+
       // Find active staff member in the current branch with this PIN
-      let query = supabase
+      const { data, error } = await supabase
         .from('staff')
         .select('*, shift:shifts(*)')
         .eq('pin', enteredPin)
-        .eq('active', true);
-
-      if (userBranch) {
-        query = query.eq('branch_id', userBranch);
-      }
-
-      const { data, error } = await query.maybeSingle();
+        .eq('branch_id', userBranch)
+        .eq('active', true)
+        .maybeSingle();
 
       if (error) throw error;
       if (!data) {
-        throw new Error('PIN not recognised');
+        throw new Error('PIN not found for this branch');
       }
 
       setStaff(data);
       setKioskState('STAFF_FOUND');
     } catch (err: any) {
       console.error(err);
-      setErrorMsg('PIN not recognised');
+      setErrorMsg(err.message || 'PIN not recognised');
       setKioskState('ERROR');
       setTimeout(() => {
         setPin('');
@@ -319,6 +357,18 @@ export default function KioskPage() {
 
         if (attendanceErr) throw attendanceErr;
 
+        try {
+          await supabase.from('wall_events').insert({
+            event_type: 'check_in',
+            staff_id: staff.id,
+            staff_name: staff.name,
+            branch_id: staff.branch_id,
+            description: `${staff.name} checked in at ${checkInTimeStr} (${status === 'late' ? `${minutesLate}m late` : 'on time'})`
+          });
+        } catch (e) {
+          console.error('Silent insert wall event failed:', e);
+        }
+
         // Insert late fines if any
         if (fineAmount > 0) {
           const currentMonthStr = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}`;
@@ -366,18 +416,24 @@ export default function KioskPage() {
         }
 
         // Set result screen parameters
-        let resTitle = 'On Time ✅';
+        let resTitle: React.ReactNode = (
+          <div className="flex flex-col items-center">
+            <CircleCheck size={64} strokeWidth={1}
+              style={{color:'#4ADE80', marginBottom:'12px'}} />
+            <span>On Time</span>
+          </div>
+        );
         let resMsg = 'Have a great shift!';
         let resDetails = '';
 
         if (colorCode === 'yellow') {
-          resTitle = `${minutesLate} mins late 🟡`;
+          resTitle = <span style={{color:'#FBBF24'}}>{minutesLate} mins late — Yellow</span>;
           resMsg = fineAmount > 0 ? `Late arrival fine applied: ₹${fineAmount}` : 'Yellow free pass applied (no fine)';
         } else if (colorCode === 'orange') {
-          resTitle = `${minutesLate} mins late 🟠`;
+          resTitle = <span style={{color:'#FB923C'}}>{minutesLate} mins late — Orange</span>;
           resMsg = `Late arrival fine: ₹${fineAmount}`;
         } else if (colorCode === 'red') {
-          resTitle = `${minutesLate} mins late 🔴`;
+          resTitle = <span style={{color:'#F87171'}}>{minutesLate} mins late — Red</span>;
           resMsg = `Late arrival fine: ₹${fineAmount}`;
         }
 
@@ -460,6 +516,18 @@ export default function KioskPage() {
 
         if (checkoutErr) throw checkoutErr;
 
+        try {
+          await supabase.from('wall_events').insert({
+            event_type: 'check_out',
+            staff_id: staff.id,
+            staff_name: staff.name,
+            branch_id: staff.branch_id,
+            description: `${staff.name} checked out at ${checkOutTimeStr} (${Math.round(actualHoursWorked * 10) / 10}h worked)`
+          });
+        } catch (e) {
+          console.error('Silent insert wall event failed:', e);
+        }
+
         // Create OT adjustments and notifications if OT is > 0
         if (otMinutes > 0) {
           await supabase.from('attendance_adjustments').insert({
@@ -496,7 +564,7 @@ export default function KioskPage() {
 
         setResultData({
           status: 'blue',
-          title: 'CHECKED OUT ✓',
+          title: 'CHECKED OUT',
           message: resMsg,
           details: resDetails,
         });
@@ -510,6 +578,330 @@ export default function KioskPage() {
     } catch (err: any) {
       console.error(err);
       setErrorMsg(err.message || 'An error occurred during submission.');
+      setKioskState('ERROR');
+      setTimeout(() => resetKiosk(), 3000);
+    }
+  };
+
+  const autoCloseBreaks = async () => {
+    try {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const { data: openBreaks, error } = await supabase
+        .from('break_logs')
+        .select('*, staff:staff(*)')
+        .eq('date', todayStr)
+        .is('break_end', null);
+
+      if (error) throw error;
+      if (!openBreaks || openBreaks.length === 0) return;
+
+      const now = new Date();
+      for (const ob of openBreaks) {
+        const start = new Date(ob.break_start);
+        const diffMins = Math.max(0, Math.round((now.getTime() - start.getTime()) / (60 * 1000)));
+        const threshold = ob.allowed_minutes + 30;
+        if (diffMins > threshold) {
+          const { error: updateErr } = await supabase
+            .from('break_logs')
+            .update({
+              break_end: now.toISOString(),
+              duration_minutes: diffMins,
+              over_minutes: Math.max(0, diffMins - ob.allowed_minutes),
+              auto_closed: true
+            })
+            .eq('id', ob.id);
+
+          if (updateErr) throw updateErr;
+
+          await createNotification({
+            type: 'absent_alert',
+            title: 'Break Auto-closed',
+            message: `${ob.staff.name}'s break auto-closed after ${diffMins} mins.`,
+            branchId: ob.staff.branch_id,
+            staffId: ob.staff.id,
+            relatedId: ob.id,
+            targetRole: 'staff_executive'
+          });
+
+          try {
+            await supabase.from('wall_events').insert({
+              event_type: 'break_auto_closed',
+              staff_id: ob.staff.id,
+              staff_name: ob.staff.name,
+              branch_id: ob.staff.branch_id,
+              description: `${ob.staff.name} break auto-closed after ${diffMins} mins`
+            });
+          } catch (e) {
+            console.error('Silent insert wall event failed:', e);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Error auto closing breaks:', err);
+    }
+  };
+
+  const handleBreakStart = async () => {
+    if (!staff) return;
+    setKioskState('LOADING');
+    try {
+      const todayStr = new Date().toISOString().split('T')[0];
+
+      // 1. Check staff has checked in today
+      const { data: attToday, error: attErr } = await supabase
+        .from('attendance')
+        .select('*')
+        .eq('staff_id', staff.id)
+        .eq('date', todayStr)
+        .maybeSingle();
+
+      if (attErr) throw attErr;
+      if (!attToday || !attToday.check_in_time) {
+        setResultData({
+          status: 'red',
+          icon: 'alert-triangle',
+          title: 'Check In Required',
+          message: 'Please check in first'
+        });
+        setKioskState('RESULT');
+        setTimeout(() => resetKiosk(), 4000);
+        return;
+      }
+
+      // 2. Check no active break exists
+      const { data: activeBreak, error: breakErr } = await supabase
+        .from('break_logs')
+        .select('*')
+        .eq('staff_id', staff.id)
+        .eq('date', todayStr)
+        .is('break_end', null)
+        .maybeSingle();
+
+      if (breakErr) throw breakErr;
+      if (activeBreak) {
+        setResultData({
+          status: 'red',
+          icon: 'alert-triangle',
+          title: 'Already on Break',
+          message: 'Already on break'
+        });
+        setKioskState('RESULT');
+        setTimeout(() => resetKiosk(), 4000);
+        return;
+      }
+
+      // 3. Fetch break_settings from Supabase
+      const { data: breakSettings, error: settingsErr } = await supabase
+        .from('break_settings')
+        .select('*')
+        .limit(1)
+        .maybeSingle();
+
+      if (settingsErr) throw settingsErr;
+      
+      const settings = breakSettings || {
+        morning_tea_duration: 10,
+        morning_tea_start: '09:30',
+        morning_tea_end: '11:30',
+        food_break_duration: 25,
+        food_break_start: '12:00',
+        food_break_end: '15:00',
+        evening_tea_duration: 10,
+        evening_tea_start: '16:00',
+        evening_tea_end: '18:30',
+      };
+
+      // 4. Determine break type by current time
+      const now = new Date();
+      const current_time_mins = now.getHours() * 60 + now.getMinutes();
+
+      const parseTimeToMins = (tStr: string) => {
+        const [h, m] = tStr.split(':').map(Number);
+        return h * 60 + m;
+      };
+
+      const morning_start = parseTimeToMins(settings.morning_tea_start);
+      const morning_end = parseTimeToMins(settings.morning_tea_end);
+      const food_start = parseTimeToMins(settings.food_break_start);
+      const food_end = parseTimeToMins(settings.food_break_end);
+      const evening_start = parseTimeToMins(settings.evening_tea_start);
+      const evening_end = parseTimeToMins(settings.evening_tea_end);
+
+      let break_type: 'morning_tea' | 'food_break' | 'evening_tea' | 'unscheduled' = 'unscheduled';
+      let allowed = 15;
+      let breakLabel = 'Unscheduled';
+
+      if (current_time_mins >= morning_start && current_time_mins <= morning_end) {
+        break_type = 'morning_tea';
+        allowed = settings.morning_tea_duration;
+        breakLabel = 'Morning Tea';
+      } else if (current_time_mins >= food_start && current_time_mins <= food_end) {
+        break_type = 'food_break';
+        allowed = settings.food_break_duration;
+        breakLabel = 'Food Break';
+      } else if (current_time_mins >= evening_start && current_time_mins <= evening_end) {
+        break_type = 'evening_tea';
+        allowed = settings.evening_tea_duration;
+        breakLabel = 'Evening Tea';
+      }
+
+      // 5. Insert into break_logs
+      const { error: insertBreakErr } = await supabase.from('break_logs').insert({
+        staff_id: staff.id,
+        date: todayStr,
+        break_type,
+        break_start: now.toISOString(),
+        allowed_minutes: allowed
+      });
+      if (insertBreakErr) throw insertBreakErr;
+
+      // 6. Insert wall_event
+      try {
+        await supabase.from('wall_events').insert({
+          event_type: 'break_start',
+          staff_id: staff.id,
+          staff_name: staff.name,
+          branch_id: staff.branch_id,
+          description: `${staff.name} started ${breakLabel}`
+        });
+      } catch (e) {
+        console.error('Silent insert wall event failed:', e);
+      }
+
+      // 7. Show amber overlay
+      setResultData({
+        status: 'yellow',
+        icon: 'coffee',
+        title: 'Break Started',
+        message: `You have ${allowed} minutes`,
+        details: `Break type: ${breakLabel}`,
+      });
+      setKioskState('RESULT');
+      setTimeout(() => {
+        resetKiosk();
+        fetchStats();
+      }, 4000);
+    } catch (err: any) {
+      console.error(err);
+      setErrorMsg(err.message || 'Error starting break.');
+      setKioskState('ERROR');
+      setTimeout(() => resetKiosk(), 3000);
+    }
+  };
+
+  const handleBreakEnd = async () => {
+    if (!staff) return;
+    setKioskState('LOADING');
+    try {
+      const todayStr = new Date().toISOString().split('T')[0];
+
+      // 1. Find open break_log
+      const { data: openBreak, error: openBreakErr } = await supabase
+        .from('break_logs')
+        .select('*')
+        .eq('staff_id', staff.id)
+        .eq('date', todayStr)
+        .is('break_end', null)
+        .maybeSingle();
+
+      if (openBreakErr) throw openBreakErr;
+      if (!openBreak) {
+        setResultData({
+          status: 'red',
+          icon: 'alert-triangle',
+          title: 'No Active Break',
+          message: 'No active break found'
+        });
+        setKioskState('RESULT');
+        setTimeout(() => resetKiosk(), 4000);
+        return;
+      }
+
+      // 2. Calculate duration and overstay
+      const now = new Date();
+      const start = new Date(openBreak.break_start);
+      const duration = Math.max(0, Math.round((now.getTime() - start.getTime()) / (60 * 1000)));
+      const over = Math.max(0, duration - openBreak.allowed_minutes);
+
+      // 3. Update break_log
+      const { error: endBreakErr } = await supabase
+        .from('break_logs')
+        .update({
+          break_end: now.toISOString(),
+          duration_minutes: duration,
+          over_minutes: over
+        })
+        .eq('id', openBreak.id);
+      if (endBreakErr) throw endBreakErr;
+
+      const breakTypeLabels: Record<string, string> = {
+        morning_tea: 'Morning Tea',
+        food_break: 'Food Break',
+        evening_tea: 'Evening Tea',
+        unscheduled: 'Unscheduled'
+      };
+      const typeLabel = breakTypeLabels[openBreak.break_type] || openBreak.break_type;
+
+      // 4. If over > 0
+      if (over > 0) {
+        await createNotification({
+          type: 'absent_alert',
+          title: 'Break Overstay',
+          message: `${staff.name} returned ${over} mins late from ${typeLabel}`,
+          branchId: staff.branch_id,
+          staffId: staff.id,
+          targetRole: 'staff_executive'
+        });
+
+        try {
+          await supabase.from('wall_events').insert({
+            event_type: 'break_overstay',
+            staff_id: staff.id,
+            staff_name: staff.name,
+            branch_id: staff.branch_id,
+            description: `${staff.name} overstayed ${typeLabel} by ${over} mins`
+          });
+        } catch (e) {
+          console.error('Silent insert wall event failed:', e);
+        }
+      } else {
+        try {
+          await supabase.from('wall_events').insert({
+            event_type: 'break_end',
+            staff_id: staff.id,
+            staff_name: staff.name,
+            branch_id: staff.branch_id,
+            description: `${staff.name} returned — ${duration} mins`
+          });
+        } catch (e) {
+          console.error('Silent insert wall event failed:', e);
+        }
+      }
+
+      // 5. Show result overlay
+      setResultData({
+        status: over === 0 ? 'green' : 'red',
+        icon: over === 0 ? 'circle-check' : 'alert-triangle',
+        title: `Welcome Back ${staff.name}`,
+        message: over === 0
+          ? (
+            <span style={{display:'flex',
+              alignItems:'center', gap:'4px'}}>
+              <CircleCheck size={14} strokeWidth={2} />
+              {duration} mins · On time
+            </span>
+          )
+          : `${duration} mins — ${over} mins over limit`,
+        details: over === 0 ? '' : 'Branch HR has been notified'
+      });
+      setKioskState('RESULT');
+      setTimeout(() => {
+        resetKiosk();
+        fetchStats();
+      }, 4000);
+    } catch (err: any) {
+      console.error(err);
+      setErrorMsg(err.message || 'Error ending break.');
       setKioskState('ERROR');
       setTimeout(() => resetKiosk(), 3000);
     }
@@ -608,10 +1000,10 @@ export default function KioskPage() {
               <button
                 type="button"
                 onClick={() => {}}
-                className="bg-[#252830] text-gray-500 py-4 text-xl font-bold rounded-xl border border-[#2A2D38] cursor-default"
+                className="bg-[#252830] text-gray-500 py-4 text-xl font-bold rounded-xl border border-[#2A2D38] cursor-default flex items-center justify-center"
                 disabled
               >
-                ✓
+                <Check size={16} strokeWidth={2.5} />
               </button>
             </div>
           </div>
@@ -636,11 +1028,11 @@ export default function KioskPage() {
               Shift: {staff.shift?.label} ({staff.shift?.start_time} - {staff.shift?.end_time})
             </div>
 
-            <div className="w-full space-y-3.5 px-4">
+            <div className="w-full grid grid-cols-2 gap-3.5 px-4">
               <button
                 type="button"
                 onClick={() => startCamera('CHECK_IN')}
-                className="w-full bg-[rgba(74,222,128,0.15)] border border-[rgba(74,222,128,0.3)] hover:bg-[rgba(74,222,128,0.25)] text-[#4ADE80] py-[18px] rounded-xl text-base font-bold flex items-center justify-center space-x-2 active:scale-[0.98] transition-all"
+                className="bg-[rgba(74,222,128,0.15)] border border-[rgba(74,222,128,0.3)] hover:bg-[rgba(74,222,128,0.25)] text-[#4ADE80] py-[18px] rounded-xl text-xs font-bold flex flex-col items-center justify-center space-y-2 active:scale-[0.98] transition-all"
               >
                 <UserCheck size={22} strokeWidth={1.5} />
                 <span>CHECK IN</span>
@@ -649,10 +1041,28 @@ export default function KioskPage() {
               <button
                 type="button"
                 onClick={() => startCamera('CHECK_OUT')}
-                className="w-full bg-[rgba(96,165,250,0.15)] border border-[rgba(96,165,250,0.3)] hover:bg-[rgba(96,165,250,0.25)] text-[#60A5FA] py-[18px] rounded-xl text-base font-bold flex items-center justify-center space-x-2 active:scale-[0.98] transition-all"
+                className="bg-[rgba(96,165,250,0.15)] border border-[rgba(96,165,250,0.3)] hover:bg-[rgba(96,165,250,0.25)] text-[#60A5FA] py-[18px] rounded-xl text-xs font-bold flex flex-col items-center justify-center space-y-2 active:scale-[0.98] transition-all"
               >
                 <LogOut size={22} strokeWidth={1.5} />
                 <span>CHECK OUT</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleBreakStart}
+                className="bg-[rgba(251,191,36,0.15)] border border-[rgba(251,191,36,0.3)] hover:bg-[rgba(251,191,36,0.25)] text-[#FBBF24] py-[18px] rounded-xl text-xs font-bold flex flex-col items-center justify-center space-y-2 active:scale-[0.98] transition-all"
+              >
+                <Coffee size={22} strokeWidth={1.5} />
+                <span>BREAK START</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleBreakEnd}
+                className="bg-transparent border border-white/30 hover:bg-white/10 text-white py-[18px] rounded-xl text-xs font-bold flex flex-col items-center justify-center space-y-2 active:scale-[0.98] transition-all"
+              >
+                <RotateCcw size={22} strokeWidth={1.5} />
+                <span>BREAK END</span>
               </button>
             </div>
 
@@ -751,7 +1161,13 @@ export default function KioskPage() {
               }`}
             >
               <div className="mb-4">
-                {resultData.status === 'green' ? (
+                {resultData.icon === 'coffee' ? (
+                  <Coffee size={64} strokeWidth={1.5} className="text-[#FBBF24]" />
+                ) : resultData.icon === 'rotate-ccw' ? (
+                  <RotateCcw size={48} strokeWidth={1.5} className="text-white" />
+                ) : resultData.icon === 'circle-check' ? (
+                  <CircleCheck size={64} strokeWidth={1.5} className="text-[#4ADE80]" />
+                ) : resultData.status === 'green' ? (
                   <UserCheck size={48} strokeWidth={1.5} className="text-[#4ADE80]" />
                 ) : resultData.status === 'blue' ? (
                   <LogOut size={48} strokeWidth={1.5} className="text-[#60A5FA]" />
@@ -789,6 +1205,11 @@ export default function KioskPage() {
             <Timer size={16} strokeWidth={1.5} className="text-[#FBBF24]" />
             <span className="text-white font-bold">{stats.late}</span>
             <span>Late</span>
+          </div>
+          <div className="flex items-center space-x-1.5">
+            <Coffee size={16} strokeWidth={1.5} className="text-[#FBBF24]" />
+            <span className="text-white font-bold">{stats.onBreak || 0}</span>
+            <span>On break</span>
           </div>
           <div className="flex items-center space-x-1.5">
             <LogOut size={16} strokeWidth={1.5} className="text-[#60A5FA]" />

@@ -75,6 +75,8 @@ export default function PayslipTab() {
       `*Base Salary:* ${formatCurrency(confirmation.base_salary)}\n` +
       `*OT Pay:* +${formatCurrency(confirmation.ot_pay)}\n` +
       `*Leave Deduction:* -${formatCurrency(confirmation.leave_deduction)}\n` +
+      `*Late Fines:* -${formatCurrency(confirmation.confirmed_fines || 0)}\n` +
+      `*Special Fines:* -${formatCurrency(confirmation.confirmed_special_fines || 0)}\n` +
       `----------------------------------------\n` +
       `*NET PAYABLE:* ${formatCurrency(confirmation.net_salary)}\n\n` +
       `Generated via Nearbi Staff Portal.`;
@@ -232,6 +234,14 @@ export default function PayslipTab() {
               <div className="flex justify-between px-1">
                 <span>Leave Deduction ({confirmation.extra_leave_days}d):</span>
                 <span className="text-[#F87171] print:text-red-700 font-bold">-{formatCurrency(confirmation.leave_deduction)}</span>
+              </div>
+              <div className="flex justify-between px-1">
+                <span>Late Fines:</span>
+                <span className="text-[#F87171] print:text-red-700 font-bold">-{formatCurrency(confirmation.confirmed_fines || 0)}</span>
+              </div>
+              <div className="flex justify-between px-1">
+                <span>Special Fines:</span>
+                <span className="text-[#F87171] print:text-red-700 font-bold">-{formatCurrency(confirmation.confirmed_special_fines || 0)}</span>
               </div>
             </div>
 

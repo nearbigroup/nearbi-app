@@ -30,17 +30,28 @@ export function calculateSalary(config: SalaryConfig, attendance: SalaryAttendan
 
   const dailyRate = monthlySalary / 30;
   const hourlyRate = monthlySalary / ((30 - offDaysPerMonth) * shiftHours);
-  const calendarDays = getDaysInMonth(year, month);
-  const requiredWorkingDays = calendarDays - offDaysPerMonth;
-  const maxPaidDays = 30 + offDaysPerMonth;
+  const calendarDays = getDaysInMonth(year, month)
+  const requiredWorkingDays = 
+    calendarDays - offDaysPerMonth
+  const maxPaidDays = 30 + offDaysPerMonth
 
-  let paidDays: number;
+  let paidDays: number
+
   if (daysActuallyWorked >= requiredWorkingDays) {
-    const extra = daysActuallyWorked - requiredWorkingDays;
-    paidDays = Math.min(30 + extra, maxPaidDays);
+    // Worked all required days or more
+    // 30 base + bonus for extra days worked
+    const extraDaysWorked = 
+      daysActuallyWorked - requiredWorkingDays
+    paidDays = Math.min(
+      30 + extraDaysWorked,
+      maxPaidDays
+    )
   } else {
-    const missing = requiredWorkingDays - daysActuallyWorked;
-    paidDays = 30 - missing;
+    // Missed some required days
+    // Deduct from 30 base
+    const missingDays = 
+      requiredWorkingDays - daysActuallyWorked
+    paidDays = 30 - missingDays
   }
 
   const grossPay = paidDays * dailyRate;

@@ -180,6 +180,20 @@ export default function ApprovalsPage() {
           .eq('date', adj.date);
       }
 
+      if (adj.type === 'ot') {
+        try {
+          await supabase.from('wall_events').insert({
+            event_type: action === 'approved' ? 'ot_approved' : 'ot_rejected',
+            staff_id: adj.staff_id,
+            staff_name: adj.staff?.name,
+            branch_id: adj.staff?.branch_id,
+            description: `${adj.staff?.name}'s overtime (${adj.minutes} mins) on ${new Date(adj.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} was ${action} by ${user?.email || 'HR'}`
+          });
+        } catch (e) {
+          console.error('Silent insert wall event failed:', e);
+        }
+      }
+
       showToast(`${adj.type === 'ot' ? 'Overtime' : 'Early check-in'} ${action}!`);
       fetchApprovals();
     } catch (err) {
@@ -199,6 +213,18 @@ export default function ApprovalsPage() {
         .eq('id', fine.id);
 
       if (error) throw error;
+
+      try {
+        await supabase.from('wall_events').insert({
+          event_type: action === 'waived' ? 'fine_waived' : 'fine_confirmed',
+          staff_id: fine.staff_id,
+          staff_name: fine.staff?.name,
+          branch_id: fine.staff?.branch_id,
+          description: `Late fine ₹${fine.fine_amount} for ${fine.staff?.name} on ${new Date(fine.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} was ${action} by ${user?.email || 'HR'}`
+        });
+      } catch (e) {
+        console.error('Silent insert wall event failed:', e);
+      }
 
       showToast(`Fine ${action === 'waived' ? 'waived' : 'confirmed'} successfully!`);
       fetchApprovals();

@@ -38,6 +38,7 @@ create table staff (
   monthly_salary numeric not null,
   join_date date not null default current_date,
   active boolean default true,
+  date_of_birth date,
   created_at timestamptz default now()
 );
 
@@ -141,6 +142,9 @@ create table salary_confirmations (
   early_in_pay numeric default 0,
   early_leave_deduction numeric default 0,
   confirmed_fines numeric default 0,
+  confirmed_special_fines numeric default 0,
+  extra_leave_days integer default 0,
+  ot_minutes integer default 0,
   confirmed_at timestamptz default now(),
   confirmed_by text not null,
   unique(staff_id, month)
@@ -178,6 +182,81 @@ create table notifications (
   created_at timestamptz default now()
 );
 
+create table break_settings (
+  id uuid primary key default gen_random_uuid(),
+  morning_tea_duration integer default 10,
+  morning_tea_start text default '09:30',
+  morning_tea_end text default '11:30',
+  food_break_duration integer default 25,
+  food_break_start text default '12:00',
+  food_break_end text default '15:00',
+  evening_tea_duration integer default 10,
+  evening_tea_start text default '16:00',
+  evening_tea_end text default '18:30',
+  updated_by text,
+  updated_at timestamptz default now()
+);
+insert into break_settings (id) 
+  values (gen_random_uuid()) 
+  on conflict do nothing;
+
+create table break_logs (
+  id uuid primary key default gen_random_uuid(),
+  staff_id uuid references staff(id),
+  date date not null default current_date,
+  break_type text check (break_type in (
+    'morning_tea','food_break',
+    'evening_tea','unscheduled'
+  )),
+  break_start timestamptz default now(),
+  break_end timestamptz,
+  duration_minutes integer,
+  over_minutes integer default 0,
+  allowed_minutes integer default 15,
+  auto_closed boolean default false
+);
+
+create table special_fines (
+  id uuid primary key default gen_random_uuid(),
+  staff_id uuid references staff(id),
+  amount numeric not null,
+  edited_amount numeric,
+  reason text not null,
+  month text not null,
+  date date not null default current_date,
+  confirmed boolean default false,
+  confirmed_by text,
+  waived boolean default false,
+  waived_by text,
+  created_at timestamptz default now(),
+  created_by text,
+  updated_at timestamptz default now()
+);
+
+create table performance_scores (
+  id uuid primary key default gen_random_uuid(),
+  staff_id uuid references staff(id),
+  month text not null,
+  attendance_score integer not null default 0,
+  punctuality_score integer not null default 0,
+  fine_score integer not null default 0,
+  ot_score integer not null default 0,
+  total_score integer not null default 0,
+  visible_to_staff boolean default false,
+  created_at timestamptz default now(),
+  unique(staff_id, month)
+);
+
+create table wall_events (
+  id uuid primary key default gen_random_uuid(),
+  event_type text not null,
+  staff_id uuid references staff(id),
+  staff_name text not null,
+  branch_id text references branches(id),
+  description text not null,
+  created_at timestamptz default now()
+);
+
 -- Disable RLS on all tables
 alter table branches disable row level security;
 alter table shifts disable row level security;
@@ -191,3 +270,8 @@ alter table attendance_adjustments disable row level security;
 alter table salary_confirmations disable row level security;
 alter table salary_payments disable row level security;
 alter table notifications disable row level security;
+alter table break_settings disable row level security;
+alter table break_logs disable row level security;
+alter table special_fines disable row level security;
+alter table performance_scores disable row level security;
+alter table wall_events disable row level security;

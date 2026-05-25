@@ -50,7 +50,7 @@ export default function HomePage() {
         const storedUser = localStorage.getItem('nearbi_user');
         if (storedUser) {
           const parsed = JSON.parse(storedUser);
-          if (parsed.role === 'admin' || parsed.role === 'ops_manager' || (parsed.role === 'staff_executive' && parsed.branch === null)) {
+          if (parsed.role === 'admin' || parsed.role === 'ops_manager' || (parsed.role === 'staff_executive' && parsed.branch === null) || parsed.role === 'kiosk') {
             setBranch(selectedBranch);
           }
         }

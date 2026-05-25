@@ -165,8 +165,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const role = user?.role;
     const isHeadHr = role === 'staff_executive' && user?.branch === null;
     const isOwnerOrOps = role === 'admin' || role === 'ops_manager';
+    const isKiosk = role === 'kiosk';
     
-    if (isOwnerOrOps || isHeadHr) {
+    if (isOwnerOrOps || isHeadHr || isKiosk) {
       setUserBranchState(branchId);
       if (branchId) {
         localStorage.setItem('nearbi_branch', branchId);

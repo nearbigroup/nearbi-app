@@ -7,6 +7,7 @@ import { calculateSalary } from '@/lib/salary';
 import { Staff, SalaryConfirmation } from './types';
 import { formatCurrency, getCurrentMonthStr, formatMonthDisplay } from './utils';
 import { Check } from 'lucide-react';
+import SpecialFinesSection from './SpecialFinesSection';
 
 export default function BulkConfirmTab() {
   const { user } = useAuth();
@@ -16,6 +17,8 @@ export default function BulkConfirmTab() {
   
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [confirmations, setConfirmations] = useState<SalaryConfirmation[]>([]);
+  const [lateFines, setLateFines] = useState<any[]>([]);
+  const [specialFines, setSpecialFines] = useState<any[]>([]);
   
   const [salaryData, setSalaryData] = useState<Record<string, any>>({});
   const [extraLeaves, setExtraLeaves] = useState<Record<string, number>>({});
@@ -73,6 +76,22 @@ export default function BulkConfirmTab() {
       if (confError) throw confError;
       if (confData) setConfirmations(confData);
 
+      // 4. Fetch late fines
+      const { data: lfData, error: lfError } = await supabase
+        .from('late_fines')
+        .select('*')
+        .eq('month', month);
+      if (lfError) throw lfError;
+      setLateFines(lfData || []);
+
+      // 5. Fetch special fines
+      const { data: sfData, error: sfError } = await supabase
+        .from('special_fines')
+        .select('*')
+        .eq('month', month);
+      if (sfError) throw sfError;
+      setSpecialFines(sfData || []);
+
     } catch (err) {
       console.error(err);
       setErrorMsg('Failed to load salary data.');
@@ -86,7 +105,7 @@ export default function BulkConfirmTab() {
   }, []);
 
   useEffect(() => {
-    // Recalculate salaries when staff list or extra leaves changes
+    // Recalculate salaries when staff list, extra leaves, late fines, or special fines change
     const newSalaryData: Record<string, any> = {};
     
     staffList.forEach((s) => {
@@ -108,24 +127,43 @@ export default function BulkConfirmTab() {
       const extraLeaveDays = extraLeaves[s.id] || 0;
       const daysActuallyWorked = Math.max(0, requiredWorkingDays - extraLeaveDays);
 
+      // Calculate confirmed late fines (not waived)
+      const staffLateFines = lateFines.filter(
+        (lf) => lf.staff_id === s.id && lf.confirmed && !lf.waived
+      );
+      const totalLateFinesAmt = staffLateFines.reduce((sum, lf) => sum + Number(lf.fine_amount), 0);
+
+      // Calculate confirmed special fines (not waived)
+      const staffSpecialFines = specialFines.filter(
+        (sf) => sf.staff_id === s.id && sf.confirmed && !sf.waived
+      );
+      const totalSpecialFinesAmt = staffSpecialFines.reduce(
+        (sum, sf) => sum + Number(sf.edited_amount ?? sf.amount), 0
+      );
+
       const attendance = {
         daysActuallyWorked,
-        confirmedFines: 0,
+        confirmedFines: totalLateFinesAmt,
         approvedOTMinutes: s.total_ot_minutes || 0,
         approvedEarlyInMinutes: 0,
         earlyLeaveDeductionAmount: 0,
       };
       
       const breakdown = calculateSalary(config, attendance);
+      const netSalary = Math.max(0, breakdown.netSalary - totalSpecialFinesAmt);
+
       newSalaryData[s.id] = {
-        net_salary: breakdown.netSalary,
+        net_salary: netSalary,
         ot_pay: breakdown.otPay,
         leave_deduction: breakdown.dailyRate * extraLeaveDays,
+        confirmed_fines: totalLateFinesAmt,
+        confirmed_special_fines: totalSpecialFinesAmt,
+        paid_days: breakdown.paidDays,
       };
     });
     
     setSalaryData(newSalaryData);
-  }, [staffList, extraLeaves]);
+  }, [staffList, extraLeaves, lateFines, specialFines]);
 
   const handleUpdateLeave = (staffId: string, delta: number) => {
     setExtraLeaves((prev) => {
@@ -143,15 +181,17 @@ export default function BulkConfirmTab() {
       const payload = unconfirmed.map((s) => {
         const bd = salaryData[s.id];
         return {
-          id: 'conf_' + Math.random().toString(36).substr(2, 9),
           staff_id: s.id,
           month: month,
           net_salary: bd.net_salary,
           base_salary: s.monthly_salary,
+          paid_days: bd.paid_days || 30,
           leave_deduction: bd.leave_deduction,
           ot_pay: bd.ot_pay,
           extra_leave_days: extraLeaves[s.id] || 0,
           ot_minutes: s.total_ot_minutes || 0,
+          confirmed_fines: bd.confirmed_fines || 0,
+          confirmed_special_fines: bd.confirmed_special_fines || 0,
           confirmed_by: user.email || 'Admin',
         };
       });
@@ -160,6 +200,23 @@ export default function BulkConfirmTab() {
         const { error } = await supabase.from('salary_confirmations').insert(payload);
         if (error) throw error;
         
+        // Silent wall event logging
+        try {
+          const events = unconfirmed.map(s => {
+            const bd = salaryData[s.id];
+            return {
+              event_type: 'salary_confirmed',
+              staff_id: s.id,
+              staff_name: s.name,
+              branch_id: s.branch_id,
+              description: `Salary confirmed for ${s.name} for ${formatMonthDisplay(month)}: Net ₹${bd.net_salary.toLocaleString()}`
+            };
+          });
+          await supabase.from('wall_events').insert(events);
+        } catch (e) {
+          console.error('Silent insert wall event failed:', e);
+        }
+
         await fetchData();
         alert('All salaries confirmed successfully!');
       }
@@ -278,6 +335,18 @@ export default function BulkConfirmTab() {
                   </span>
                 </div>
                 <div className="flex flex-col items-end">
+                  <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Late Fines</span>
+                  <span className={`font-bold mt-0.5 ${bd.confirmed_fines > 0 ? 'text-[#F87171]' : 'text-[var(--text-secondary)]'}`}>
+                    -{formatCurrency(bd.confirmed_fines)}
+                  </span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Special Fines</span>
+                  <span className={`font-bold mt-0.5 ${bd.confirmed_special_fines > 0 ? 'text-[#F87171]' : 'text-[var(--text-secondary)]'}`}>
+                    -{formatCurrency(bd.confirmed_special_fines)}
+                  </span>
+                </div>
+                <div className="flex flex-col items-end">
                   <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Net Salary</span>
                   <span className="text-white font-bold text-sm mt-0.5">
                     {formatCurrency(bd.net_salary)}
@@ -323,6 +392,13 @@ export default function BulkConfirmTab() {
                   </div>
                 )}
               </div>
+
+              {/* Special Fines Section */}
+              <SpecialFinesSection
+                staffId={s.id}
+                month={month}
+                onFinesChanged={fetchData}
+              />
             </div>
           );
         })}

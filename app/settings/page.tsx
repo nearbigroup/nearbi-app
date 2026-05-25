@@ -13,6 +13,19 @@ interface FineSettings {
   yellow_free_passes: number;
 }
 
+interface BreakSettings {
+  id?: string;
+  morning_tea_duration: number;
+  morning_tea_start: string;
+  morning_tea_end: string;
+  food_break_duration: number;
+  food_break_start: string;
+  food_break_end: string;
+  evening_tea_duration: number;
+  evening_tea_start: string;
+  evening_tea_end: string;
+}
+
 interface Staff {
   id: string;
   name: string;
@@ -46,6 +59,19 @@ export default function SettingsPage() {
 
   const [savingSettings, setSavingSettings] = useState(false);
   const [addingExemption, setAddingExemption] = useState(false);
+
+  const [breakSettings, setBreakSettings] = useState<BreakSettings>({
+    morning_tea_duration: 10,
+    morning_tea_start: '09:30',
+    morning_tea_end: '11:30',
+    food_break_duration: 25,
+    food_break_start: '12:00',
+    food_break_end: '15:00',
+    evening_tea_duration: 10,
+    evening_tea_start: '16:00',
+    evening_tea_end: '18:30',
+  });
+  const [savingBreakSettings, setSavingBreakSettings] = useState(false);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -83,6 +109,18 @@ export default function SettingsPage() {
       
       if (stE) throw stE;
       setStaffList(stD || []);
+
+      // 4. Fetch break settings
+      const { data: breakD, error: breakE } = await supabase
+        .from('break_settings')
+        .select('*')
+        .limit(1)
+        .maybeSingle();
+
+      if (breakE) throw breakE;
+      if (breakD) {
+        setBreakSettings(breakD);
+      }
 
     } catch (err) {
       console.error(err);
@@ -167,6 +205,42 @@ export default function SettingsPage() {
     } catch (err) {
       console.error(err);
       showToast('Error removing exemption.');
+    }
+  };
+
+  const handleSaveBreakSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingBreakSettings(true);
+    try {
+      const payload: any = {
+        morning_tea_duration: Number(breakSettings.morning_tea_duration),
+        morning_tea_start: breakSettings.morning_tea_start,
+        morning_tea_end: breakSettings.morning_tea_end,
+        food_break_duration: Number(breakSettings.food_break_duration),
+        food_break_start: breakSettings.food_break_start,
+        food_break_end: breakSettings.food_break_end,
+        evening_tea_duration: Number(breakSettings.evening_tea_duration),
+        evening_tea_start: breakSettings.evening_tea_start,
+        evening_tea_end: breakSettings.evening_tea_end,
+        updated_by: user?.email || 'Admin',
+        updated_at: new Date().toISOString(),
+      };
+
+      if (breakSettings.id) {
+        payload.id = breakSettings.id;
+      }
+
+      const { error } = await supabase
+        .from('break_settings')
+        .upsert(payload);
+
+      if (error) throw error;
+      showToast('Break settings saved successfully!');
+    } catch (err) {
+      console.error(err);
+      showToast('Error saving break settings.');
+    } finally {
+      setSavingBreakSettings(false);
     }
   };
 
@@ -375,6 +449,158 @@ export default function SettingsPage() {
                 </div>
               )}
             </div>
+          </div>
+
+          {/* Break Settings Card */}
+          <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-5 shadow-sm space-y-4">
+            <h2 className="text-white font-bold text-sm">
+              3. Break Schedule Settings
+            </h2>
+
+            <form onSubmit={handleSaveBreakSettings} className="space-y-4">
+              {/* Morning Tea */}
+              <div className="space-y-2 border-b border-[var(--border-strong)]/40 pb-3">
+                <h3 className="text-xs font-bold text-white uppercase tracking-wider">Morning Tea</h3>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                      Duration (mins)
+                    </label>
+                    <input
+                      type="number"
+                      value={breakSettings.morning_tea_duration}
+                      onChange={(e) => setBreakSettings({ ...breakSettings, morning_tea_duration: Number(e.target.value) })}
+                      className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-2.5 text-xs focus:outline-none focus:border-white/40 text-white font-bold"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                      Start Time
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="09:30"
+                      value={breakSettings.morning_tea_start}
+                      onChange={(e) => setBreakSettings({ ...breakSettings, morning_tea_start: e.target.value })}
+                      className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-2.5 text-xs focus:outline-none focus:border-white/40 text-white font-bold"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                      End Time
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="11:30"
+                      value={breakSettings.morning_tea_end}
+                      onChange={(e) => setBreakSettings({ ...breakSettings, morning_tea_end: e.target.value })}
+                      className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-2.5 text-xs focus:outline-none focus:border-white/40 text-white font-bold"
+                      required
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Food Break */}
+              <div className="space-y-2 border-b border-[var(--border-strong)]/40 pb-3">
+                <h3 className="text-xs font-bold text-white uppercase tracking-wider">Food Break</h3>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                      Duration (mins)
+                    </label>
+                    <input
+                      type="number"
+                      value={breakSettings.food_break_duration}
+                      onChange={(e) => setBreakSettings({ ...breakSettings, food_break_duration: Number(e.target.value) })}
+                      className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-2.5 text-xs focus:outline-none focus:border-white/40 text-white font-bold"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                      Start Time
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="12:00"
+                      value={breakSettings.food_break_start}
+                      onChange={(e) => setBreakSettings({ ...breakSettings, food_break_start: e.target.value })}
+                      className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-2.5 text-xs focus:outline-none focus:border-white/40 text-white font-bold"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                      End Time
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="15:00"
+                      value={breakSettings.food_break_end}
+                      onChange={(e) => setBreakSettings({ ...breakSettings, food_break_end: e.target.value })}
+                      className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-2.5 text-xs focus:outline-none focus:border-white/40 text-white font-bold"
+                      required
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Evening Tea */}
+              <div className="space-y-2 pb-2">
+                <h3 className="text-xs font-bold text-white uppercase tracking-wider">Evening Tea</h3>
+                <div className="grid grid-cols-3 gap-2">
+                  <div>
+                    <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                      Duration (mins)
+                    </label>
+                    <input
+                      type="number"
+                      value={breakSettings.evening_tea_duration}
+                      onChange={(e) => setBreakSettings({ ...breakSettings, evening_tea_duration: Number(e.target.value) })}
+                      className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-2.5 text-xs focus:outline-none focus:border-white/40 text-white font-bold"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                      Start Time
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="16:00"
+                      value={breakSettings.evening_tea_start}
+                      onChange={(e) => setBreakSettings({ ...breakSettings, evening_tea_start: e.target.value })}
+                      className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-2.5 text-xs focus:outline-none focus:border-white/40 text-white font-bold"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                      End Time
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="18:30"
+                      value={breakSettings.evening_tea_end}
+                      onChange={(e) => setBreakSettings({ ...breakSettings, evening_tea_end: e.target.value })}
+                      className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-2.5 text-xs focus:outline-none focus:border-white/40 text-white font-bold"
+                      required
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={savingBreakSettings}
+                className="w-full min-h-[42px] bg-white text-[#1E2028] font-bold text-xs rounded-xl hover:bg-gray-200 active:scale-95 transition-all shadow mt-2"
+              >
+                {savingBreakSettings ? 'Saving...' : 'Save Break Settings'}
+              </button>
+            </form>
           </div>
         </>
       )}

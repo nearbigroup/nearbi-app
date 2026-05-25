@@ -40,7 +40,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${outfit.variable}`}>
-      <body className="antialiased min-h-screen flex flex-col bg-white text-[#111111] font-sans">
+      <body className="antialiased min-h-screen flex flex-col bg-[var(--bg-primary)] text-[var(--text-primary)] font-sans">
         <AuthProvider>
           <AppShell>
             {children}

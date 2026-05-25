@@ -92,6 +92,21 @@ export default function LeavePage() {
 
       if (error) throw error;
 
+      const req = requests.find((r) => r.id === id);
+      if (req) {
+        try {
+          await supabase.from('wall_events').insert({
+            event_type: status === 'approved' ? 'leave_approved' : 'leave_rejected',
+            staff_id: req.staff_id,
+            staff_name: req.staff?.name,
+            branch_id: req.staff?.branch_id,
+            description: `${req.staff?.name}'s leave request for ${new Date(req.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} was ${status} by ${approverName}`
+          });
+        } catch (e) {
+          console.error('Silent insert wall event failed:', e);
+        }
+      }
+
       showToast(`Leave request ${status}!`);
       fetchRequests();
     } catch (err) {

@@ -20,7 +20,10 @@ import {
   AlertCircle,
   CircleCheck,
   CircleX,
-  ChevronRight
+  ChevronRight,
+  Activity,
+  Cake,
+  PartyPopper
 } from 'lucide-react';
 
 interface StaffMember {
@@ -30,6 +33,7 @@ interface StaffMember {
   department: string;
   shift_id: string;
   active: boolean;
+  date_of_birth?: string | null;
   shift: {
     start_time: string;
     end_time: string;
@@ -127,11 +131,70 @@ export default function DashboardPage() {
 
       // 5. Run automatic absent alerts check
       checkAndCreateAbsentAlerts(verifiedStaff, attData || []);
+      // 6. Run automatic birthday check
+      checkAndCreateBirthdayNotifications(verifiedStaff);
     } catch (err: any) {
       console.error(err);
       setErrorMsg('Could not load data. Check connection.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const getDaysUntilBirthday = (dobString: string): number => {
+    const dob = new Date(dobString);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // Set birthday to this year
+    const birthdayThisYear = new Date(today.getFullYear(), dob.getMonth(), dob.getDate());
+    
+    if (birthdayThisYear.getTime() < today.getTime()) {
+      // Birthday has passed this year, check next year
+      const birthdayNextYear = new Date(today.getFullYear() + 1, dob.getMonth(), dob.getDate());
+      return Math.round((birthdayNextYear.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+    }
+    
+    return Math.round((birthdayThisYear.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+  };
+
+  const checkAndCreateBirthdayNotifications = async (staff: StaffMember[]) => {
+    try {
+      const now = new Date();
+      const todayMonth = now.getMonth();
+      const todayDate = now.getDate();
+      const todayYear = now.getFullYear();
+
+      for (const s of staff) {
+        if (!s.date_of_birth) continue;
+
+        const dob = new Date(s.date_of_birth);
+        if (dob.getMonth() === todayMonth && dob.getDate() === todayDate) {
+          // It's their birthday today!
+          const todayStart = new Date(todayYear, todayMonth, todayDate).toISOString();
+          const { data: existingNotify } = await supabase
+            .from('notifications')
+            .select('id')
+            .eq('staff_id', s.id)
+            .eq('type', 'absent_alert')
+            .eq('title', 'Birthday Today')
+            .gte('created_at', todayStart)
+            .maybeSingle();
+
+          if (!existingNotify) {
+            await createNotification({
+              type: 'absent_alert',
+              title: 'Birthday Today',
+              message: `Today is ${s.name}'s birthday! Wish them a very happy birthday!`,
+              branchId: s.branch_id,
+              staffId: s.id,
+              targetRole: 'ops_manager',
+            });
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Error checking birthday notifications:', e);
     }
   };
 
@@ -188,6 +251,18 @@ export default function DashboardPage() {
                   relatedId: todayStr,
                   targetRole: 'staff_executive',
                 });
+
+                try {
+                  await supabase.from('wall_events').insert({
+                    event_type: 'absent_alert',
+                    staff_id: s.id,
+                    staff_name: s.name,
+                    branch_id: s.branch_id,
+                    description: `${s.name} was marked absent today (no check-in after 60 mins of shift start).`
+                  });
+                } catch (e) {
+                  console.error('Silent insert wall event failed:', e);
+                }
               }
             }
           }
@@ -492,6 +567,65 @@ export default function DashboardPage() {
             </div>
           )}
 
+          {/* Birthday Tracker Card (Hidden from Admin/Owner) */}
+          {user?.role !== 'admin' && (() => {
+            const activeBranchStaff = staffList.filter((s) => s.branch_id === activeTab);
+            const activeBranchBirthdays = activeBranchStaff
+              .filter((s) => s.date_of_birth)
+              .map((s) => ({
+                ...s,
+                daysUntil: getDaysUntilBirthday(s.date_of_birth!),
+              }))
+              .filter((s) => s.daysUntil <= 7)
+              .sort((a, b) => a.daysUntil - b.daysUntil);
+
+            if (activeBranchBirthdays.length === 0) return null;
+
+            return (
+              <div className="space-y-3">
+                <h4 className="text-[var(--text-muted)] text-[10px] font-black uppercase tracking-widest">
+                  <span style={{display:'flex',
+                    alignItems:'center', gap:'6px'}}>
+                    <Cake size={16} strokeWidth={1.5} />
+                    Upcoming Birthdays
+                  </span>
+                </h4>
+                <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 space-y-3.5 shadow-sm">
+                  {activeBranchBirthdays.map((s) => {
+                    const dob = new Date(s.date_of_birth!);
+                    const formattedDob = dob.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
+                    return (
+                      <div key={s.id} className="flex items-center justify-between text-xs font-semibold">
+                        <div className="flex items-center space-x-2.5">
+                          <PartyPopper size={14} strokeWidth={1.5} />
+                          <div>
+                            <p className="font-bold text-white leading-none">{s.name}</p>
+                            <p className="text-[10px] text-[var(--text-muted)] mt-0.5 leading-none">{s.department}</p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <span className={`font-bold px-2 py-0.5 rounded text-[10px] uppercase tracking-wider ${
+                            s.daysUntil === 0 
+                              ? 'bg-[rgba(74,222,128,0.12)] text-[#4ADE80] border border-[rgba(74,222,128,0.2)]'
+                              : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] border border-[var(--border-strong)]'
+                          }`}>
+                            {s.daysUntil === 0 ? (
+                              <span className="flex items-center gap-1">
+                                Today <PartyPopper size={14} strokeWidth={1.5} />
+                              </span>
+                            ) : (
+                              `In ${s.daysUntil} days (${formattedDob})`
+                            )}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Quick Actions */}
           <div>
             <h4 className="text-[var(--text-muted)] text-[10px] font-black uppercase tracking-widest mb-3">
@@ -550,6 +684,17 @@ export default function DashboardPage() {
                     <span className="text-xs font-bold text-[var(--text-primary)]">Settings</span>
                   </Link>
                 </>
+              )}
+
+              {/* The Wall Quick Action (Hidden from Admin) */}
+              {user?.role !== 'admin' && (
+                <Link
+                  href="/wall"
+                  className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 min-height-[72px] flex flex-col items-center justify-center text-center hover:border-white/30 active:border-white/30 transition-all col-span-2"
+                >
+                  <Activity size={24} strokeWidth={1.5} style={{ color: '#F87171' }} className="mb-1.5" />
+                  <span className="text-xs font-bold text-[var(--text-primary)]">The Wall</span>
+                </Link>
               )}
 
               {/* Open kiosk */}

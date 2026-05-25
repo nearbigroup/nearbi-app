@@ -35,6 +35,8 @@ export interface SalaryConfirmation {
   ot_pay: number;
   extra_leave_days: number;
   ot_minutes: number;
+  confirmed_fines?: number;
+  confirmed_special_fines?: number;
   confirmed_at: string;
   confirmed_by: string;
 }
