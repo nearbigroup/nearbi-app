@@ -351,7 +351,7 @@ export default function AttendancePage() {
                 inTime: '—',
                 outTime: '—',
                 status: 'error',
-                errors: [`PIN ${pinRaw} not found in this branch`],
+                errors: [`PIN ${pinRaw} not found`],
                 overwrite: false
               });
               errorCount++;
@@ -418,7 +418,7 @@ export default function AttendancePage() {
             if (!pinRaw) {
               errors.push('Missing PIN');
             } else if (!staffMem) {
-              errors.push(`PIN ${pinRaw} not found in this branch`);
+              errors.push(`PIN ${pinRaw} not found`);
             }
             
             let parsedDateStr = '';
@@ -427,7 +427,7 @@ export default function AttendancePage() {
             } else {
               parsedDateStr = parseDate(dateVal);
               if (!parsedDateStr || isNaN(Date.parse(parsedDateStr))) {
-                errors.push(`Invalid Date format: ${dateVal}`);
+                errors.push(`Date format invalid: ${dateVal}`);
               }
             }
             
@@ -586,24 +586,55 @@ export default function AttendancePage() {
           }
         }
 
-        const attendancePayload = {
+        // FIX 4: Build the record object dynamically.
+        // If schema cache errors occur, go to
+        // Supabase Dashboard → Settings → API
+        // and click "Reload schema cache"
+        const record: any = {
           staff_id: row.staffId,
           date: row.date,
           check_in_time: row.inTime,
           check_out_time: row.outTime || null,
           status,
-          color_code: colorCode,
-          minutes_late: minutesLate,
-          actual_hours_worked: actualHoursWorked,
-          ot_minutes: otMinutes,
           marked_by: 'import'
         };
 
-        const { error: attErr } = await supabase
-          .from('attendance')
-          .upsert(attendancePayload, { onConflict: 'staff_id,date' });
+        if (minutesLate > 0) record.minutes_late = minutesLate;
+        if (colorCode) record.color_code = colorCode;
+        if (actualHoursWorked && actualHoursWorked > 0) record.actual_hours_worked = actualHoursWorked;
+        if (otMinutes > 0) record.ot_minutes = otMinutes;
 
-        if (attErr) throw attErr;
+        // FIX 1: Try the full upsert first with all columns.
+        let { error: attErr } = await supabase
+          .from('attendance')
+          .upsert(record, { onConflict: 'staff_id,date' });
+
+        if (attErr) {
+          const errMsg = String(attErr.message || '').toLowerCase();
+          const errHint = String(attErr.hint || '').toLowerCase();
+          const isSchemaError = errMsg.includes('schema cache') || errMsg.includes('column') || 
+                                errHint.includes('schema cache') || errHint.includes('column');
+          
+          if (isSchemaError) {
+            console.warn('Upsert failed with schema cache error, retrying with minimal columns:', attErr);
+            // Fall back to minimal upsert with only safe columns
+            const minimalRecord = {
+              staff_id: row.staffId,
+              date: row.date,
+              check_in_time: row.inTime,
+              check_out_time: row.outTime || null,
+              status,
+              marked_by: 'import'
+            };
+            const { error: retryErr } = await supabase
+              .from('attendance')
+              .upsert(minimalRecord, { onConflict: 'staff_id,date' });
+            
+            if (retryErr) throw retryErr;
+          } else {
+            throw attErr;
+          }
+        }
         checkIns++;
         if (row.outTime) checkOuts++;
 
@@ -677,8 +708,21 @@ export default function AttendancePage() {
       setImportPreviewOpen(false);
       fetchData();
     } catch (err: any) {
-      console.error(err);
-      alert(`Import failed: ${err.message}`);
+      console.error('Import failed with error:', err);
+      const errMsg = String(err.message || '').toLowerCase();
+      const errDetails = String(err.details || '').toLowerCase();
+      const errHint = String(err.hint || '').toLowerCase();
+      
+      // If schema cache errors occur, go to
+      // Supabase Dashboard → Settings → API
+      // and click "Reload schema cache"
+      if (errMsg.includes('schema cache') || errMsg.includes('column') || 
+          errDetails.includes('schema cache') || errDetails.includes('column') ||
+          errHint.includes('schema cache') || errHint.includes('column')) {
+        alert("Import failed: Database needs a schema refresh. Go to Supabase Settings → API → Reload schema cache, then try again.");
+      } else {
+        alert(`Import failed: Schema cache error — see console`);
+      }
     } finally {
       setIsImporting(false);
       setImportProgress(null);
@@ -731,16 +775,18 @@ export default function AttendancePage() {
 
       // 2. Fetch today's attendance
       try {
-        let attendanceQuery = supabase.from('attendance').select('*').eq('date', todayStr);
-        const { data: aData, error: aErr } = await attendanceQuery;
+        const { data: attRecords, error: aErr } = await supabase
+          .from('attendance')
+          .select('*')
+          .eq('date', todayStr);
         if (aErr) {
-          console.error('Error fetching attendance:', aErr);
+          console.error('Attendance fetch error:', aErr);
           setAttendance([]);
         } else {
-          setAttendance(aData || []);
+          setAttendance(attRecords || []);
         }
       } catch (err: any) {
-        console.error('Exception fetching attendance:', err);
+        console.error('Attendance fetch error:', err);
         setAttendance([]);
       }
 
@@ -775,7 +821,8 @@ export default function AttendancePage() {
       }
 
     } catch (err: any) {
-      console.error('Unexpected error in fetchData:', err);
+      console.error('Attendance fetch error:', err);
+      setErrorMsg('Could not load data. Check connection.');
     } finally {
       setLoading(false);
     }
