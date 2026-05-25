@@ -709,35 +709,73 @@ export default function AttendancePage() {
       const todayStr = new Date().toISOString().split('T')[0];
 
       // 1. Fetch staff
-      let staffQuery = supabase.from('staff').select('*, shift:shifts(*)').eq('active', true);
-      if (userBranch) {
-        staffQuery = staffQuery.eq('branch_id', userBranch);
+      try {
+        let staffQuery = supabase.from('staff').select('*, shift:shifts(*)').eq('active', true);
+        if (userBranch) {
+          staffQuery = staffQuery.eq('branch_id', userBranch);
+        }
+        const { data: sData, error: sErr } = await staffQuery;
+        if (sErr) {
+          console.error('Error fetching staff:', sErr);
+          setErrorMsg('Could not load staff list.');
+          setStaff([]);
+        } else {
+          setStaff((sData || []) as unknown as StaffMember[]);
+          setErrorMsg('');
+        }
+      } catch (err: any) {
+        console.error('Exception fetching staff:', err);
+        setErrorMsg('Could not load staff list.');
+        setStaff([]);
       }
-      const { data: sData, error: sErr } = await staffQuery;
-      if (sErr) throw sErr;
-      setStaff((sData || []) as unknown as StaffMember[]);
 
       // 2. Fetch today's attendance
-      let attendanceQuery = supabase.from('attendance').select('*').eq('date', todayStr);
-      const { data: aData, error: aErr } = await attendanceQuery;
-      if (aErr) throw aErr;
-      setAttendance(aData || []);
+      try {
+        let attendanceQuery = supabase.from('attendance').select('*').eq('date', todayStr);
+        const { data: aData, error: aErr } = await attendanceQuery;
+        if (aErr) {
+          console.error('Error fetching attendance:', aErr);
+          setAttendance([]);
+        } else {
+          setAttendance(aData || []);
+        }
+      } catch (err: any) {
+        console.error('Exception fetching attendance:', err);
+        setAttendance([]);
+      }
 
       // 3. Fetch today's late fines
-      let finesQuery = supabase.from('late_fines').select('*').eq('date', todayStr);
-      const { data: fData, error: fErr } = await finesQuery;
-      if (fErr) throw fErr;
-      setFines(fData || []);
+      try {
+        let finesQuery = supabase.from('late_fines').select('*').eq('date', todayStr);
+        const { data: fData, error: fErr } = await finesQuery;
+        if (fErr) {
+          console.error('Error fetching late fines:', fErr);
+          setFines([]);
+        } else {
+          setFines(fData || []);
+        }
+      } catch (err: any) {
+        console.error('Exception fetching late fines:', err);
+        setFines([]);
+      }
 
       // 4. Fetch today's adjustments
-      let adjustmentsQuery = supabase.from('attendance_adjustments').select('*').eq('date', todayStr);
-      const { data: adjData, error: adjErr } = await adjustmentsQuery;
-      if (adjErr) throw adjErr;
-      setAdjustments(adjData || []);
+      try {
+        let adjustmentsQuery = supabase.from('attendance_adjustments').select('*').eq('date', todayStr);
+        const { data: adjData, error: adjErr } = await adjustmentsQuery;
+        if (adjErr) {
+          console.error('Error fetching adjustments:', adjErr);
+          setAdjustments([]);
+        } else {
+          setAdjustments(adjData || []);
+        }
+      } catch (err: any) {
+        console.error('Exception fetching adjustments:', err);
+        setAdjustments([]);
+      }
 
     } catch (err: any) {
-      console.error(err);
-      setErrorMsg('Could not load data. Check connection.');
+      console.error('Unexpected error in fetchData:', err);
     } finally {
       setLoading(false);
     }
