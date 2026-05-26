@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
+import { useRouter } from 'next/navigation';
 import { Lock, Plus, Trash2 } from 'lucide-react';
 
 interface FineSettings {
@@ -41,9 +42,15 @@ interface Exemption {
 
 export default function SettingsPage() {
   const { user, canSeeSalaryBreakdown, isLoading } = useAuth();
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   const [toastMsg, setToastMsg] = useState('');
+
+  // Danger zone states
+  const [dangerAction, setDangerAction] = useState<'CLEAR_ATTENDANCE' | 'DELETE_INACTIVE' | null>(null);
+  const [confirmText, setConfirmText] = useState('');
+  const [executingDanger, setExecutingDanger] = useState(false);
 
   const [settings, setSettings] = useState<FineSettings>({
     id: 'default',
@@ -247,6 +254,108 @@ export default function SettingsPage() {
     } catch (err: any) {
       console.error('Remove exemption error:', err);
       showToast('Error removing exemption.');
+    }
+  };
+
+  const handleExecuteDangerAction = async () => {
+    if (confirmText !== 'DELETE' || !dangerAction) return;
+    setExecutingDanger(true);
+    try {
+      if (dangerAction === 'CLEAR_ATTENDANCE') {
+        const tables = [
+          'attendance',
+          'late_fines',
+          'break_logs',
+          'wall_events',
+          'notifications'
+        ];
+
+        for (const table of tables) {
+          try {
+            const { error: delErr } = await supabase
+              .from(table)
+              .delete()
+              .neq('id', '00000000-0000-0000-0000-000000000000');
+            if (delErr) {
+              console.error(`Error clearing ${table}:`, delErr);
+              const errMsg = String(delErr.message || '').toLowerCase();
+              if (!errMsg.includes('does not exist') && !errMsg.includes('not find')) {
+                throw delErr;
+              }
+            }
+          } catch (err: any) {
+            console.error(`Exception clearing ${table}:`, err);
+          }
+        }
+        showToast('All attendance and activity data cleared!');
+
+      } else if (dangerAction === 'DELETE_INACTIVE') {
+        // Fetch inactive staff
+        const { data: inactiveStaff, error: fetchErr } = await supabase
+          .from('staff')
+          .select('id')
+          .eq('active', false);
+
+        if (fetchErr) throw fetchErr;
+
+        const inactiveIds = inactiveStaff?.map(s => s.id) || [];
+
+        if (inactiveIds.length > 0) {
+          const tables = [
+            'attendance',
+            'late_fines',
+            'break_logs',
+            'wall_events',
+            'notifications',
+            'leave_requests',
+            'salary_confirmations',
+            'salary_payments',
+            'performance_scores',
+            'staff_fine_exemptions'
+          ];
+
+          for (const table of tables) {
+            try {
+              const { error: delErr } = await supabase
+                .from(table)
+                .delete()
+                .in('staff_id', inactiveIds);
+              if (delErr) {
+                console.error(`Error deleting from ${table} for inactive staff:`, delErr);
+                const errMsg = String(delErr.message || '').toLowerCase();
+                if (!errMsg.includes('does not exist') && !errMsg.includes('not find')) {
+                  throw delErr;
+                }
+              }
+            } catch (err: any) {
+              console.error(`Exception deleting from ${table}:`, err);
+            }
+          }
+
+          // Finally delete the staff records
+          const { error: staffDelErr } = await supabase
+            .from('staff')
+            .delete()
+            .in('id', inactiveIds);
+
+          if (staffDelErr) throw staffDelErr;
+          showToast(`Deleted ${inactiveIds.length} inactive staff profiles.`);
+        } else {
+          showToast('No inactive staff profiles found.');
+        }
+      }
+
+      setDangerAction(null);
+      setConfirmText('');
+      
+      // Redirect to dashboard
+      router.push('/dashboard');
+
+    } catch (err: any) {
+      console.error('Danger zone action execution error:', err);
+      showToast('Action failed — see console.');
+    } finally {
+      setExecutingDanger(false);
     }
   };
 
@@ -644,7 +753,115 @@ export default function SettingsPage() {
               </button>
             </form>
           </div>
+
+          {/* Danger Zone Section (Admin Only) */}
+          {user?.role === 'admin' && (
+            <div className="bg-[var(--bg-surface)] border border-red-500/30 rounded-[14px] p-5 shadow-sm space-y-4">
+              <h2 className="text-red-500 font-bold text-sm">
+                Danger Zone
+              </h2>
+              <div className="border-t border-red-500/10 pt-4 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <p className="text-white text-xs font-bold">Clear all attendance data</p>
+                    <p className="text-[var(--text-muted)] text-[10px] font-semibold leading-normal max-w-md">
+                      Deletes all records from attendance, late_fines, break_logs, wall_events, and notifications tables. Staff profiles are kept. Only activity data removed.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDangerAction('CLEAR_ATTENDANCE');
+                      setConfirmText('');
+                    }}
+                    className="min-h-[38px] px-4 bg-transparent border border-red-500/40 text-red-400 hover:text-white hover:bg-red-500/20 font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+                  >
+                    Clear Attendance Data
+                  </button>
+                </div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-t border-[var(--border-strong)]/40">
+                  <div className="space-y-1">
+                    <p className="text-white text-xs font-bold">Delete inactive staff</p>
+                    <p className="text-[var(--text-muted)] text-[10px] font-semibold leading-normal max-w-md">
+                      Deletes staff where active = false along with all their related attendance, late fine, and break records.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDangerAction('DELETE_INACTIVE');
+                      setConfirmText('');
+                    }}
+                    className="min-h-[38px] px-4 bg-transparent border border-red-500/40 text-red-400 hover:text-white hover:bg-red-500/20 font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+                  >
+                    Delete Inactive Staff
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </>
+      )}
+
+      {/* Danger Zone Confirmation Modal */}
+      {dangerAction && (
+        <div className="fixed inset-0 z-[12000] flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+          <div className="bg-[var(--bg-surface)] rounded-[20px] max-w-sm w-full border border-red-500/30 p-6 flex flex-col space-y-4 shadow-2xl">
+            <div>
+              <h3 className="text-red-500 text-base font-black uppercase tracking-wider">Danger Zone</h3>
+              <p className="text-white text-sm font-bold mt-2">
+                {dangerAction === 'CLEAR_ATTENDANCE' 
+                  ? 'Clear All Attendance Data' 
+                  : 'Delete Inactive Staff'}
+              </p>
+              <p className="text-[var(--text-muted)] text-xs font-semibold mt-1 leading-normal">
+                {dangerAction === 'CLEAR_ATTENDANCE'
+                  ? 'This will permanently delete all records from attendance, late_fines, break_logs, wall_events, and notifications. Active staff profiles are kept.'
+                  : 'This will permanently delete all staff members marked as inactive (active = false) along with all their related attendance, late fine, and break records.'}
+              </p>
+            </div>
+
+            <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-[10px] text-red-400 font-bold">
+              WARNING: This action is permanent and cannot be undone.
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">
+                Type "DELETE" to confirm
+              </label>
+              <input
+                type="text"
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+                placeholder="Type DELETE"
+                className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-sm focus:outline-none focus:border-red-500/40 text-white font-bold placeholder-white/20"
+              />
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setDangerAction(null);
+                  setConfirmText('');
+                }}
+                disabled={executingDanger}
+                className="flex-1 min-h-[40px] bg-transparent border border-[var(--border-strong)] text-[var(--text-secondary)] font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleExecuteDangerAction}
+                disabled={confirmText !== 'DELETE' || executingDanger}
+                className="flex-1 min-h-[40px] bg-red-600 hover:bg-red-700 disabled:opacity-30 disabled:pointer-events-none text-white font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer flex items-center justify-center"
+              >
+                {executingDanger ? 'Deleting...' : 'Confirm'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Global Toast */}
