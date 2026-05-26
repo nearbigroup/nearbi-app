@@ -4,13 +4,16 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { createNotification } from '@/lib/notifications';
+import { useRouter } from 'next/navigation';
 import { Check, LogOut, Camera, AlertCircle, UserCheck, Timer, AlertTriangle, Coffee, RotateCcw, CircleCheck } from 'lucide-react';
 
 type KioskState = 'IDLE' | 'LOADING' | 'STAFF_FOUND' | 'CAMERA' | 'RESULT' | 'ERROR';
 type FlowType = 'CHECK_IN' | 'CHECK_OUT' | null;
 
 export default function KioskPage() {
-  const { user, userBranch } = useAuth();
+  const { user, userBranch, logout } = useAuth();
+  const router = useRouter();
+  const [showSignOutConfirm, setShowSignOutConfirm] = useState(false);
   const [currentTime, setCurrentTime] = useState<Date | null>(null);
   const [kioskState, setKioskState] = useState<KioskState>('IDLE');
   const [pin, setPin] = useState('');
@@ -195,6 +198,16 @@ export default function KioskPage() {
     setResultData(null);
     setCameraError(false);
     setKioskState('IDLE');
+  };
+
+  const handleConfirmSignOut = async () => {
+    try {
+      logout();
+      localStorage.clear();
+      router.push('/');
+    } catch (err) {
+      console.error('Sign out error:', err);
+    }
   };
 
   const startCamera = async (type: FlowType) => {
@@ -1298,6 +1311,58 @@ export default function KioskPage() {
             <LogOut size={16} strokeWidth={1.5} className="text-[#60A5FA]" />
             <span className="text-white font-bold">{stats.checkedOut}</span>
             <span>Checked out</span>
+          </div>
+        </div>
+      )}
+
+      {/* Discreet Sign Out Button */}
+      <button
+        type="button"
+        onClick={() => setShowSignOutConfirm(true)}
+        style={{
+          position: 'fixed',
+          bottom: 'env(safe-area-inset-bottom, 8px)',
+          right: '12px',
+          background: 'transparent',
+          border: '1px solid rgba(255,255,255,0.1)',
+          color: 'rgba(255,255,255,0.3)',
+          fontSize: '11px',
+          padding: '4px 10px',
+          borderRadius: '6px',
+          cursor: 'pointer',
+          zIndex: 100,
+        }}
+      >
+        Sign out
+      </button>
+
+      {/* Sign Out Confirmation Modal */}
+      {showSignOutConfirm && (
+        <div className="fixed inset-0 z-[12000] flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+          <div className="bg-[#252830] border border-[#2A2D38] rounded-[20px] max-w-xs w-full p-6 flex flex-col space-y-4 shadow-2xl text-center">
+            <div className="flex flex-col items-center">
+              <AlertTriangle size={36} strokeWidth={1.5} className="text-[#FBBF24] mb-2" />
+              <h3 className="text-white text-base font-bold">Sign out of kiosk?</h3>
+              <p className="text-[var(--text-secondary)] text-xs font-semibold mt-1">
+                You will need to sign in again to access this branch kiosk.
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setShowSignOutConfirm(false)}
+                className="flex-1 min-h-[38px] bg-transparent border border-[#363A48] text-white font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmSignOut}
+                className="flex-1 min-h-[38px] bg-red-600 hover:bg-red-700 text-white font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
+              >
+                Sign out
+              </button>
+            </div>
           </div>
         </div>
       )}
