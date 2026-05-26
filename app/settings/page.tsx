@@ -80,50 +80,92 @@ export default function SettingsPage() {
 
   const fetchData = async () => {
     try {
-      // 1. Fetch fine settings
-      const { data: setD, error: setE } = await supabase
-        .from('fine_settings')
-        .select('*')
-        .eq('id', 'default')
-        .maybeSingle();
+      // 1. Fetch fine settings section: independent try/catch
+      try {
+        const { data: setD, error: setE } = await supabase
+          .from('fine_settings')
+          .select('*')
+          .eq('id', 'default')
+          .maybeSingle();
 
-      if (setE) throw setE;
-      if (setD) {
-        setSettings(setD);
+        if (setE) throw setE;
+        if (setD) {
+          setSettings(setD);
+        }
+      } catch (err: any) {
+        console.error('Fine settings fetch error:', err);
       }
 
-      // 2. Fetch exemptions
-      const { data: exD, error: exE } = await supabase
-        .from('staff_fine_exemptions')
-        .select('*, staff!inner(*)');
-      
-      if (exE) throw exE;
-      setExemptions((exD || []) as unknown as Exemption[]);
-
-      // 3. Fetch active staff list for select dropdown
-      const { data: stD, error: stE } = await supabase
-        .from('staff')
-        .select('id, name, department, branch_id')
-        .eq('active', true)
-        .order('name');
-      
-      if (stE) throw stE;
-      setStaffList(stD || []);
-
-      // 4. Fetch break settings
-      const { data: breakD, error: breakE } = await supabase
-        .from('break_settings')
-        .select('*')
-        .limit(1)
-        .maybeSingle();
-
-      if (breakE) throw breakE;
-      if (breakD) {
-        setBreakSettings(breakD);
+      // 2. Fetch exemptions section: independent try/catch
+      try {
+        const { data: exD, error: exE } = await supabase
+          .from('staff_fine_exemptions')
+          .select('*, staff!inner(*)');
+        
+        if (exE) throw exE;
+        setExemptions((exD || []) as unknown as Exemption[]);
+      } catch (err: any) {
+        console.error('Exemptions fetch error:', err);
+        setExemptions([]);
       }
 
-    } catch (err) {
-      console.error(err);
+      // 3. Fetch active staff list: independent try/catch
+      try {
+        const { data: stD, error: stE } = await supabase
+          .from('staff')
+          .select('id, name, department, branch_id')
+          .eq('active', true)
+          .order('name');
+        
+        if (stE) throw stE;
+        setStaffList(stD || []);
+      } catch (err: any) {
+        console.error('Staff list fetch error:', err);
+        setStaffList([]);
+      }
+
+      // 4. Fetch break settings section: independent try/catch with auto default initialization
+      try {
+        const { data: breakData, error: breakE } = await supabase
+          .from('break_settings')
+          .select('*')
+          .limit(1);
+
+        if (breakE) throw breakE;
+
+        if (!breakData || breakData.length === 0) {
+          const defaultBreak = {
+            morning_tea_duration: 10,
+            morning_tea_start: '09:30',
+            morning_tea_end: '11:30',
+            food_break_duration: 25,
+            food_break_start: '12:00',
+            food_break_end: '15:00',
+            evening_tea_duration: 10,
+            evening_tea_start: '16:00',
+            evening_tea_end: '18:30',
+          };
+          
+          const { data: insertedData, error: insertE } = await supabase
+            .from('break_settings')
+            .insert(defaultBreak)
+            .select()
+            .maybeSingle();
+
+          if (insertE) {
+            console.error('Failed to initialize default break settings:', insertE);
+          } else if (insertedData) {
+            setBreakSettings(insertedData);
+          }
+        } else if (breakData[0]) {
+          setBreakSettings(breakData[0]);
+        }
+      } catch (err: any) {
+        console.error('Break settings fetch error:', err);
+      }
+
+    } catch (err: any) {
+      console.error('Settings fetch error:', err);
       setErrorMsg('Failed to load settings data.');
     } finally {
       setLoading(false);
@@ -152,8 +194,8 @@ export default function SettingsPage() {
 
       if (error) throw error;
       showToast('Settings saved successfully!');
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      console.error('Save settings error:', err);
       showToast('Error saving settings.');
     } finally {
       setSavingSettings(false);
@@ -184,8 +226,8 @@ export default function SettingsPage() {
       setSelectedStaffId('');
       showToast('Exemption added!');
       fetchData();
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      console.error('Add exemption error:', err);
       showToast('Error adding exemption.');
     } finally {
       setAddingExemption(false);
@@ -202,8 +244,8 @@ export default function SettingsPage() {
       if (error) throw error;
       showToast('Exemption removed!');
       fetchData();
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      console.error('Remove exemption error:', err);
       showToast('Error removing exemption.');
     }
   };
@@ -236,8 +278,8 @@ export default function SettingsPage() {
 
       if (error) throw error;
       showToast('Break settings saved successfully!');
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      console.error('Save break settings error:', err);
       showToast('Error saving break settings.');
     } finally {
       setSavingBreakSettings(false);
