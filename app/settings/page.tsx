@@ -311,7 +311,9 @@ export default function SettingsPage() {
             'salary_confirmations',
             'salary_payments',
             'performance_scores',
-            'staff_fine_exemptions'
+            'staff_fine_exemptions',
+            'attendance_adjustments',
+            'special_fines'
           ];
 
           for (const table of tables) {
@@ -756,16 +758,23 @@ export default function SettingsPage() {
 
           {/* Danger Zone Section (Admin Only) */}
           {user?.role === 'admin' && (
-            <div className="bg-[var(--bg-surface)] border border-red-500/30 rounded-[14px] p-5 shadow-sm space-y-4">
-              <h2 className="text-red-500 font-bold text-sm">
-                Danger Zone
-              </h2>
-              <div className="border-t border-red-500/10 pt-4 space-y-4">
+            <div className="space-y-4 pt-6">
+              <div>
+                <h2 className="text-red-500 font-extrabold text-sm tracking-wider">
+                  DANGER ZONE
+                </h2>
+                <div className="text-red-500/40 text-xs font-semibold select-none leading-none my-1">
+                  ─────────────────────────────
+                </div>
+              </div>
+
+              {/* Red bordered card */}
+              <div className="bg-[var(--bg-surface)] border border-red-500 rounded-[14px] p-5 shadow-sm space-y-5">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="space-y-1">
                     <p className="text-white text-xs font-bold">Clear all attendance data</p>
                     <p className="text-[var(--text-muted)] text-[10px] font-semibold leading-normal max-w-md">
-                      Deletes all records from attendance, late_fines, break_logs, wall_events, and notifications tables. Staff profiles are kept. Only activity data removed.
+                      Deletes all records from attendance, late_fines, break_logs, wall_events, notifications tables. Staff profiles are kept. Only activity data removed.
                     </p>
                   </div>
                   <button
@@ -774,17 +783,17 @@ export default function SettingsPage() {
                       setDangerAction('CLEAR_ATTENDANCE');
                       setConfirmText('');
                     }}
-                    className="min-h-[38px] px-4 bg-transparent border border-red-500/40 text-red-400 hover:text-white hover:bg-red-500/20 font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+                    className="min-h-[38px] px-4 bg-transparent border border-red-500 text-red-500 hover:text-white hover:bg-red-500 font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer whitespace-nowrap"
                   >
                     Clear Attendance Data
                   </button>
                 </div>
 
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-t border-[var(--border-strong)]/40">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-t border-red-500/20">
                   <div className="space-y-1">
                     <p className="text-white text-xs font-bold">Delete inactive staff</p>
                     <p className="text-[var(--text-muted)] text-[10px] font-semibold leading-normal max-w-md">
-                      Deletes staff where active = false along with all their related attendance, late fine, and break records.
+                      Deletes staff where active = false along with all their related records.
                     </p>
                   </div>
                   <button
@@ -793,7 +802,7 @@ export default function SettingsPage() {
                       setDangerAction('DELETE_INACTIVE');
                       setConfirmText('');
                     }}
-                    className="min-h-[38px] px-4 bg-transparent border border-red-500/40 text-red-400 hover:text-white hover:bg-red-500/20 font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+                    className="min-h-[38px] px-4 bg-transparent border border-red-500 text-red-500 hover:text-white hover:bg-red-500 font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer whitespace-nowrap"
                   >
                     Delete Inactive Staff
                   </button>
@@ -807,7 +816,7 @@ export default function SettingsPage() {
       {/* Danger Zone Confirmation Modal */}
       {dangerAction && (
         <div className="fixed inset-0 z-[12000] flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
-          <div className="bg-[var(--bg-surface)] rounded-[20px] max-w-sm w-full border border-red-500/30 p-6 flex flex-col space-y-4 shadow-2xl">
+          <div className="bg-[var(--bg-surface)] rounded-[20px] max-w-sm w-full border-2 border-red-500 p-6 flex flex-col space-y-4 shadow-2xl">
             <div>
               <h3 className="text-red-500 text-base font-black uppercase tracking-wider">Danger Zone</h3>
               <p className="text-white text-sm font-bold mt-2">
