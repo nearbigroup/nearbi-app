@@ -20,6 +20,7 @@ export default function PaymentTrackerTab() {
 
   // Payment Bottom Sheet State
   const [selectedConf, setSelectedConf] = useState<SalaryConfirmation | null>(null);
+  const [selectedStaff, setSelectedStaff] = useState<Staff | null>(null);
   const [payAmount, setPayAmount] = useState('');
   const [payMode, setPayMode] = useState<'cash' | 'upi'>('upi');
   const [payDate, setPayDate] = useState(new Date().toISOString().split('T')[0]);
@@ -73,41 +74,77 @@ export default function PaymentTrackerTab() {
     fetchData();
   }, []);
 
-  const handleOpenPayment = (conf: SalaryConfirmation) => {
+  const handleOpenPayment = (s: Staff, conf: SalaryConfirmation | null) => {
+    setSelectedStaff(s);
     setSelectedConf(conf);
-    setPayAmount(conf.net_salary.toString());
+    setPayAmount(conf ? conf.net_salary.toString() : s.monthly_salary.toString());
     setPayMode('upi');
     setPayDate(new Date().toISOString().split('T')[0]);
     setPayNotes('');
   };
 
   const handleConfirmPayment = async () => {
-    if (!user || !selectedConf) return;
+    if (!user || !selectedStaff) return;
     setSubmitting(true);
     try {
-      const staffInfo = staffList.find((s) => s.id === selectedConf.staff_id);
       const pKey = 'pay_' + Math.random().toString(36).substr(2, 9);
       
-      const { error } = await supabase.from('salary_payments').insert({
+      const paymentRecord: any = {
         id: pKey,
-        staff_id: selectedConf.staff_id,
+        staff_id: selectedStaff.id,
         month: month,
         amount_paid: Number(payAmount),
         payment_mode: payMode,
         paid_at: new Date(payDate).toISOString(),
         paid_by: user.email || 'Admin',
-        branch_id: staffInfo?.branch_id || 'daily',
-        notes: payNotes,
-      });
+      };
 
-      if (error) throw error;
+      // Only add branch_id if it exists
+      if (selectedStaff.branch_id) {
+        paymentRecord.branch_id = selectedStaff.branch_id;
+      }
+
+      // Add notes if provided
+      if (payNotes?.trim()) {
+        paymentRecord.notes = payNotes.trim();
+      }
+
+      const { error } = await supabase.from('salary_payments').insert(paymentRecord);
+
+      if (error) {
+        console.error('Payment insert error:', error);
+        throw error;
+      }
+
+      // Insert wall event
+      try {
+        await supabase.from('wall_events').insert({
+          event_type: 'salary_paid',
+          staff_id: selectedStaff.id,
+          staff_name: selectedStaff.name,
+          branch_id: selectedStaff.branch_id,
+          description: `Salary ₹${Number(payAmount).toLocaleString('en-IN')} paid to ${selectedStaff.name} via ${payMode.toUpperCase()}`,
+        });
+      } catch (wallErr) {
+        console.error('Wall event error:', wallErr);
+        // Don't block payment for wall error
+      }
       
-      showToast('Payment recorded');
+      showToast('Payment recorded successfully ✓');
+      setSelectedStaff(null);
       setSelectedConf(null);
+      setPayAmount('');
+      setPayNotes('');
       await fetchData();
-    } catch (err) {
-      console.error(err);
-      showToast('Failed to record payment.');
+    } catch (err: any) {
+      console.error('Record payment error:', err);
+      if (err?.message?.includes('violates')) {
+        showToast('Database error. Check Supabase logs.');
+      } else if (err?.message?.includes('null')) {
+        showToast('Missing required field. Check amount and mode.');
+      } else {
+        showToast('Failed to record payment. Try again.');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -126,8 +163,8 @@ export default function PaymentTrackerTab() {
   const totalPaid = payments.reduce((sum, p) => sum + p.amount_paid, 0);
   const pendingAmount = Math.max(0, totalConfirmed - totalPaid);
 
-  const pendingList = confirmations.filter((c) => !payments.find((p) => p.staff_id === c.staff_id));
-  const paidList = payments.filter((p) => confirmations.find((c) => c.staff_id === p.staff_id));
+  const pendingList = staffList.filter((s) => !payments.find((p) => p.staff_id === s.id));
+  const paidList = payments;
 
   return (
     <div className="space-y-5 select-none pb-6">
@@ -188,26 +225,31 @@ export default function PaymentTrackerTab() {
             No pending payouts found.
           </p>
         ) : (
-          pendingList.map((conf) => {
-            const s = staffList.find((x) => x.id === conf.staff_id);
-            if (!s) return null;
+          pendingList.map((s) => {
+            const conf = confirmations.find((c) => c.staff_id === s.id);
+            const displayAmount = conf ? conf.net_salary : s.monthly_salary;
             return (
               <div
-                key={conf.id}
+                key={s.id}
                 className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 flex justify-between items-center shadow-sm"
               >
                 <div>
                   <h4 className="font-bold text-sm text-white">{s.name}</h4>
                   <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-1">
                     {s.branch?.name || s.branch_id} • {s.department}
+                    {!conf && (
+                      <span className="ml-2 text-[8px] bg-red-500/20 text-red-400 border border-red-500/20 px-1.5 py-0.5 rounded font-bold uppercase">
+                        Unconfirmed
+                      </span>
+                    )}
                   </p>
                 </div>
                 <div className="text-right flex flex-col items-end">
                   <div className="text-sm font-bold text-[#FBBF24] mb-2">
-                    {formatCurrency(conf.net_salary)}
+                    {formatCurrency(displayAmount)}
                   </div>
                   <button
-                    onClick={() => handleOpenPayment(conf)}
+                    onClick={() => handleOpenPayment(s, conf || null)}
                     className="bg-[var(--warning-bg)] text-[#FBBF24] border border-[var(--warning)]/20 px-3.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider active:scale-95 transition-transform"
                   >
                     Mark Paid
@@ -265,11 +307,14 @@ export default function PaymentTrackerTab() {
       </div>
 
       {/* Payment Slide-up Drawer Form */}
-      {selectedConf && (
+      {selectedStaff && (
         <div className="fixed inset-0 z-[11000] flex flex-col justify-end">
           <div
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            onClick={() => setSelectedConf(null)}
+            onClick={() => {
+              setSelectedStaff(null);
+              setSelectedConf(null);
+            }}
           />
           <div
             className="bg-[var(--bg-surface)] rounded-t-3xl shadow-2xl relative z-10 p-5 flex flex-col max-h-[85vh] overflow-y-auto w-full max-w-md mx-auto border-t border-[var(--border-strong)]"
@@ -281,7 +326,10 @@ export default function PaymentTrackerTab() {
             <div className="flex justify-between items-center mb-5 flex-shrink-0">
               <h3 className="text-sm font-bold text-white">Record Payment</h3>
               <button
-                onClick={() => setSelectedConf(null)}
+                onClick={() => {
+                  setSelectedStaff(null);
+                  setSelectedConf(null);
+                }}
                 className="text-[var(--text-muted)] hover:text-white flex items-center justify-center p-1"
               >
                 <X size={16} strokeWidth={1.5} style={{ color: 'currentColor' }} />
@@ -294,7 +342,7 @@ export default function PaymentTrackerTab() {
                   Staff Name
                 </label>
                 <div className="w-full bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-[10px] p-3 text-xs font-bold text-white">
-                  {staffList.find((s) => s.id === selectedConf.staff_id)?.name}
+                  {selectedStaff.name}
                 </div>
               </div>
 
