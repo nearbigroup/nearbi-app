@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { Search, Plus, Trash2, Eye, EyeOff, Lock, X, AlertTriangle, Users, AlertCircle, RefreshCw, Cake, Download, Upload, Check } from 'lucide-react';
@@ -31,6 +32,7 @@ interface StaffMember {
 }
 
 export default function StaffPage() {
+  const router = useRouter();
   const { user, userBranch, canSeeSalaryBreakdown } = useAuth();
   
   const [staff, setStaff] = useState<StaffMember[]>([]);
@@ -1145,7 +1147,8 @@ export default function StaffPage() {
             return (
               <div
                 key={s.id}
-                className={`bg-[var(--bg-surface)] border rounded-[14px] p-4 flex flex-col transition-all relative ${
+                onClick={() => router.push('/staff/' + s.id)}
+                className={`bg-[var(--bg-surface)] border rounded-[14px] p-4 flex flex-col transition-all relative cursor-pointer hover:border-white/20 ${
                   isDeleteMode ? 'border-[#F87171] ring-1 ring-[#F87171]' : 'border-[var(--border)] shadow-sm'
                 }`}
               >
@@ -1153,7 +1156,10 @@ export default function StaffPage() {
                   {/* Avatar or Delete Mode Trigger */}
                   {user?.role === 'admin' || user?.role === 'ops_manager' ? (
                     <button
-                      onClick={() => setDeleteModeId(isDeleteMode ? null : s.id)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDeleteModeId(isDeleteMode ? null : s.id);
+                      }}
                       className={`w-12 h-12 rounded-full font-bold text-lg flex items-center justify-center flex-shrink-0 transition-colors ${
                         isDeleteMode
                           ? 'bg-[rgba(248,113,113,0.15)] text-[#F87171] border border-[rgba(248,113,113,0.3)]'
@@ -1177,7 +1183,10 @@ export default function StaffPage() {
                       {s.department} • <span className="capitalize">{getBranchLabel(s.branch_id)}</span>
                     </p>
                     {editingDobStaffId === s.id ? (
-                      <div className="mt-2 flex items-center space-x-2 bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-lg p-2">
+                      <div
+                        onClick={(e) => e.stopPropagation()}
+                        className="mt-2 flex items-center space-x-2 bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-lg p-2"
+                      >
                         <div className="flex-1">
                           <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase mb-0.5">Date of Birth</label>
                           <input
@@ -1217,7 +1226,8 @@ export default function StaffPage() {
                         {(user?.role === 'admin' || user?.role === 'ops_manager') && (
                           <button
                             type="button"
-                            onClick={() => {
+                            onClick={(e) => {
+                              e.stopPropagation();
                               setEditingDobStaffId(s.id);
                               setEditingDobValue(s.date_of_birth ? s.date_of_birth.substring(0, 10) : '');
                             }}
@@ -1248,7 +1258,10 @@ export default function StaffPage() {
                         </span>
                         <button
                           type="button"
-                          onClick={() => togglePinVisibility(s.id)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            togglePinVisibility(s.id);
+                          }}
                           className="text-[var(--text-secondary)] hover:text-white px-1 active:scale-90 flex items-center justify-center"
                         >
                           {isPinVisible ? <EyeOff size={16} strokeWidth={1.5} /> : <Eye size={16} strokeWidth={1.5} />}
@@ -1264,7 +1277,10 @@ export default function StaffPage() {
                     {user?.role !== 'admin' && (user?.role === 'ops_manager' || user?.role === 'staff_executive') && (
                       <div className="mt-2.5 flex justify-end">
                         <button
-                          onClick={() => handleOpenFineModal(s)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenFineModal(s);
+                          }}
                           className="bg-[rgba(248,113,113,0.12)] border border-[rgba(248,113,113,0.2)] text-[#F87171] hover:bg-[rgba(248,113,113,0.2)] font-bold text-[10px] px-2.5 py-1 rounded-[6px] flex items-center space-x-1 active:scale-95 transition-transform"
                         >
                           <AlertCircle size={13} />
@@ -1279,7 +1295,10 @@ export default function StaffPage() {
                         <span className="text-[10px] font-bold text-[var(--text-secondary)]">Score visible to staff</span>
                         <button
                           type="button"
-                          onClick={() => handleToggleVisibility(s.id)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleToggleVisibility(s.id);
+                          }}
                           className={`w-8 h-4 rounded-full relative transition-colors ${
                             scoresMap[s.id]?.visible_to_staff ? 'bg-[#4ADE80]' : 'bg-[#363A48]'
                           }`}
@@ -1299,7 +1318,10 @@ export default function StaffPage() {
                 {isDeleteMode && (
                   <div className="mt-4 pt-3.5 border-t border-[var(--border)] flex justify-end">
                     <button
-                      onClick={() => setStaffToDelete(s)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setStaffToDelete(s);
+                      }}
                       className="bg-[rgba(248,113,113,0.15)] border border-[rgba(248,113,113,0.3)] text-[#F87171] hover:bg-[rgba(248,113,113,0.25)] font-bold text-xs px-4 py-2 rounded-[10px] active:scale-95 transition-all"
                     >
                       Delete Staff Member

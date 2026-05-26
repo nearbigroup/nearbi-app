@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { Clock, RefreshCw, CircleCheck, CircleX, AlertTriangle, X, AlertCircle, Download, Upload, Check } from 'lucide-react';
@@ -60,6 +61,7 @@ interface Adjustment {
 }
 
 export default function AttendancePage() {
+  const router = useRouter();
   const { user, userBranch, canSeeAllBranches } = useAuth();
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
@@ -1042,7 +1044,8 @@ export default function AttendancePage() {
             return (
               <div
                 key={item.id}
-                className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 flex items-start space-x-3.5 relative shadow-sm"
+                onClick={() => router.push('/staff/' + item.id)}
+                className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 flex items-start space-x-3.5 relative shadow-sm cursor-pointer hover:border-white/20 transition-all"
               >
                 {/* Left Dot Indicator */}
                 <div className={`w-3 h-3 rounded-full flex-shrink-0 mt-2 ${getDotColor(item.record)}`} />
@@ -1088,13 +1091,14 @@ export default function AttendancePage() {
                         <span>IN: {item.record.check_in_time}</span>
                         {item.record.check_in_photo && (
                           <button
-                            onClick={() =>
+                            onClick={(e) => {
+                              e.stopPropagation();
                               setSelectedPhoto({
                                 url: item.record!.check_in_photo!,
                                 label: `${item.name} - Check In`,
                                 time: item.record!.check_in_time || '',
-                              })
-                            }
+                              });
+                            }}
                             className="w-4 h-4 rounded-full overflow-hidden border border-[rgba(74,222,128,0.3)] active:scale-90"
                           >
                             <img
@@ -1119,13 +1123,14 @@ export default function AttendancePage() {
                           <span>OUT: {item.record.check_out_time}</span>
                           {item.record.check_out_photo && (
                             <button
-                              onClick={() =>
+                              onClick={(e) => {
+                                e.stopPropagation();
                                 setSelectedPhoto({
                                   url: item.record!.check_out_photo!,
                                   label: `${item.name} - Check Out`,
                                   time: item.record!.check_out_time || '',
-                                })
-                              }
+                                });
+                              }}
                               className="w-4 h-4 rounded-full overflow-hidden border border-[rgba(96,165,250,0.3)] active:scale-90"
                             >
                               <img
@@ -1211,7 +1216,10 @@ export default function AttendancePage() {
                   {user?.role !== 'admin' && (user?.role === 'ops_manager' || user?.role === 'staff_executive') && (
                     <div className="mt-2.5 flex justify-end">
                       <button
-                        onClick={() => handleOpenFineModal(item)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpenFineModal(item);
+                        }}
                         className="bg-[rgba(248,113,113,0.12)] border border-[rgba(248,113,113,0.2)] text-[#F87171] hover:bg-[rgba(248,113,113,0.2)] font-bold text-[10px] px-2.5 py-1 rounded-[6px] flex items-center space-x-1 active:scale-95 transition-transform"
                       >
                         <AlertCircle size={13} />

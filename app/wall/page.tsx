@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth-context';
 import { Activity, RefreshCw, Circle } from 'lucide-react';
@@ -19,6 +20,7 @@ type TypeFilter = 'All' | 'Attendance' | 'Breaks' | 'Leave' | 'Fines' | 'Salary'
 type BranchFilter = 'all' | 'daily' | 'hypermarket';
 
 export default function WallPage() {
+  const router = useRouter();
   const { user, userBranch } = useAuth();
   const [events, setEvents] = useState<WallEvent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -359,7 +361,19 @@ export default function WallPage() {
                   />
                   <div className="min-w-0">
                     <p className="text-xs font-bold text-white leading-snug">
-                      {item.description}
+                      {item.staff_name && item.description.startsWith(item.staff_name) && item.staff_id ? (
+                        <>
+                          <span
+                            onClick={() => router.push('/staff/' + item.staff_id)}
+                            className="underline cursor-pointer hover:text-[var(--text-secondary)] transition-colors"
+                          >
+                            {item.staff_name}
+                          </span>
+                          {item.description.slice(item.staff_name.length)}
+                        </>
+                      ) : (
+                        item.description
+                      )}
                     </p>
                     <div className="flex items-center space-x-2 mt-1">
                       <span className="text-[9px] font-bold uppercase tracking-wider text-[var(--text-muted)]">
