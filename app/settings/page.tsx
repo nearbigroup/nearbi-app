@@ -430,7 +430,7 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="space-y-6 pb-6 select-none">
+    <div className="space-y-6 pb-6">
       {/* Header */}
       <div>
         <h1 className="text-white text-2xl font-bold">Settings</h1>

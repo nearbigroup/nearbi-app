@@ -245,7 +245,7 @@ export default function WallPage() {
   }
 
   return (
-    <div className="space-y-5 select-none">
+    <div className="space-y-5">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>

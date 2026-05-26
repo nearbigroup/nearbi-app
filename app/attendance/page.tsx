@@ -994,7 +994,7 @@ export default function AttendancePage() {
       )}
 
       {/* Status pills selector */}
-      <div className="flex overflow-x-auto gap-2 pb-1 scrollbar-none select-none">
+      <div className="flex overflow-x-auto gap-2 pb-1 scrollbar-none">
         {(['All', 'Present', 'Late', 'Absent', 'Checked Out'] as StatusFilter[]).map((pill) => {
           const isSelected = statusFilter === pill;
           return (

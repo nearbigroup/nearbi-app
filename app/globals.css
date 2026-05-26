@@ -46,11 +46,14 @@
 * {
   box-sizing: border-box;
   -webkit-tap-highlight-color: transparent;
+  -webkit-overflow-scrolling: touch;
 }
 
 html, body {
   overflow-x: hidden;
-  overscroll-behavior: none;
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: auto;
   background: var(--bg-primary);
 }
 
@@ -142,5 +145,11 @@ button:active, a:active {
 }
 .animate-spin {
   animation: spin 1s linear infinite;
+}
+
+/* Smooth scrolling and touch momentum scrolling utilities */
+.overflow-y-auto, .overflow-x-auto, .overflow-auto {
+  -webkit-overflow-scrolling: touch !important;
+  scroll-behavior: smooth;
 }
 
