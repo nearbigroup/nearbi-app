@@ -902,17 +902,122 @@ export default function StaffPage() {
 
   const handleDeleteStaff = async () => {
     if (!staffToDelete) return;
+    const staffId = staffToDelete.id;
     try {
-      // Hard delete from database. Schema will cascade delete all attendance, leave, late_fines, salary_summaries, etc.
-      const { error } = await supabase.from('staff').delete().eq('id', staffToDelete.id);
+      // Step 1 — delete all related records first
+      // in correct order to avoid FK constraint errors
+
+      try {
+        const { error } = await supabase.from('attendance').delete().eq('staff_id', staffId);
+        if (error) console.error('Error deleting attendance:', error);
+      } catch (e) {
+        console.error('Failed to delete attendance:', e);
+      }
+
+      try {
+        const { error } = await supabase.from('late_fines').delete().eq('staff_id', staffId);
+        if (error) console.error('Error deleting late_fines:', error);
+      } catch (e) {
+        console.error('Failed to delete late_fines:', e);
+      }
+
+      try {
+        const { error } = await supabase.from('leave_requests').delete().eq('staff_id', staffId);
+        if (error) console.error('Error deleting leave_requests:', error);
+      } catch (e) {
+        console.error('Failed to delete leave_requests:', e);
+      }
+
+      try {
+        const { error } = await supabase.from('break_logs').delete().eq('staff_id', staffId);
+        if (error) console.error('Error deleting break_logs:', error);
+      } catch (e) {
+        console.error('Failed to delete break_logs:', e);
+      }
+
+      try {
+        const { error } = await supabase.from('special_fines').delete().eq('staff_id', staffId);
+        if (error) console.error('Error deleting special_fines:', error);
+      } catch (e) {
+        console.error('Failed to delete special_fines:', e);
+      }
+
+      try {
+        const { error } = await supabase.from('performance_scores').delete().eq('staff_id', staffId);
+        if (error) console.error('Error deleting performance_scores:', error);
+      } catch (e) {
+        console.error('Failed to delete performance_scores:', e);
+      }
+
+      try {
+        const { error } = await supabase.from('salary_confirmations').delete().eq('staff_id', staffId);
+        if (error) console.error('Error deleting salary_confirmations:', error);
+      } catch (e) {
+        console.error('Failed to delete salary_confirmations:', e);
+      }
+
+      try {
+        const { error } = await supabase.from('salary_payments').delete().eq('staff_id', staffId);
+        if (error) console.error('Error deleting salary_payments:', error);
+      } catch (e) {
+        console.error('Failed to delete salary_payments:', e);
+      }
+
+      try {
+        const { error } = await supabase.from('attendance_adjustments').delete().eq('staff_id', staffId);
+        if (error) console.error('Error deleting attendance_adjustments:', error);
+      } catch (e) {
+        console.error('Failed to delete attendance_adjustments:', e);
+      }
+
+      try {
+        const { error } = await supabase.from('wall_events').delete().eq('staff_id', staffId);
+        if (error) console.error('Error deleting wall_events:', error);
+      } catch (e) {
+        console.error('Failed to delete wall_events:', e);
+      }
+
+      try {
+        const { error } = await supabase.from('notifications').delete().eq('staff_id', staffId);
+        if (error) console.error('Error deleting notifications:', error);
+      } catch (e) {
+        console.error('Failed to delete notifications:', e);
+      }
+
+      try {
+        const { error } = await supabase.from('staff_fine_exemptions').delete().eq('staff_id', staffId);
+        if (error) console.error('Error deleting staff_fine_exemptions:', error);
+      } catch (e) {
+        console.error('Failed to delete staff_fine_exemptions:', e);
+      }
+
+      try {
+        const { error } = await supabase.from('staff_birthday').delete().eq('staff_id', staffId);
+        if (error) console.error('Error deleting staff_birthday:', error);
+      } catch (e) {
+        console.error('Failed to delete staff_birthday:', e);
+      }
+
+      // Step 2 — now delete the staff record itself
+      const { error } = await supabase
+        .from('staff')
+        .delete()
+        .eq('id', staffId);
+
       if (error) throw error;
 
-      showToast(`${staffToDelete.name} has been removed.`);
+      // Step 3 — remove from local state
+      setStaff(prev => 
+        prev.filter(s => s.id !== staffId)
+      );
       setStaffToDelete(null);
       setDeleteModeId(null);
-      fetchStaff();
+      
+      // Show success toast
+      showToast('Staff member removed successfully');
+
     } catch (err: any) {
-      console.error(err);
+      console.error('Delete staff error:', err);
       showToast('Error removing staff member.');
     }
   };
