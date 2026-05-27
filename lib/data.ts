@@ -12,5 +12,18 @@ export const SHIFTS = [
 ];
 
 export const DEPARTMENTS = [
-  'Grocery', 'Fresh & Produce', 'Bakery', 'Cashier', 'Housekeeping', 'Receiving'
+  'Accounts',
+  'Purchase Entry',
+  'Sales',
+  'Billing',
+  'Helper',
+  'Cleaning',
+  'Counter Staff',
+  'Packing Staff',
+  'Customer Care',
+  'Nearbi Homes',
+  'Security',
+  'Part Time',
+  'Vegetables',
 ];
+

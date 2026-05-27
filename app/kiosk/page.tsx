@@ -6,6 +6,8 @@ import { supabase } from '@/lib/supabase';
 import { createNotification } from '@/lib/notifications';
 import { useRouter } from 'next/navigation';
 import { Check, LogOut, Camera, AlertCircle, UserCheck, Timer, AlertTriangle, Coffee, RotateCcw, CircleCheck } from 'lucide-react';
+import { calculateOTMinutes, calculateActualHours } from '@/lib/salary';
+
 
 type KioskState = 'IDLE' | 'LOADING' | 'STAFF_FOUND' | 'CAMERA' | 'RESULT' | 'ERROR';
 type FlowType = 'CHECK_IN' | 'CHECK_OUT' | null;
@@ -553,47 +555,41 @@ export default function KioskPage() {
           photoUploadFailed = true;
         }
 
+        // Run in Supabase SQL editor to fix wrong OT:
+        // UPDATE attendance SET ot_minutes = 0,
+        // ot_approved = false
+        // WHERE ot_minutes > 600;
+
         const now = new Date();
-        const checkOutTimeStr = now.toTimeString().split(' ')[0].substring(0, 5); // "HH:MM"
+        const actualOut =
+          String(now.getHours()).padStart(2, '0') + ':' +
+          String(now.getMinutes()).padStart(2, '0');
 
-        // Calculate hours worked
-        const [ciH, ciM] = record.check_in_time.split(':').map(Number);
-        const checkInMins = ciH * 60 + ciM;
-        const checkOutMins = now.getHours() * 60 + now.getMinutes();
+        const shiftEnd = staff.shift?.end_time || staff.shifts?.end_time || '18:00';
+        const otMins = calculateOTMinutes(shiftEnd, actualOut);
+        const actualHrs = calculateActualHours(record.check_in_time, actualOut);
 
-        const actualHoursWorked = Math.max(0, (checkOutMins - checkInMins) / 60);
-        const shiftHours = Number(staff.shift.hours);
-
-        let otMinutes = 0;
+        const shiftHours = Number(staff.shift?.hours || staff.shifts?.hours || 9);
         let isEarlyLeave = false;
         let earlyLeaveMinutes = 0;
-
-        if (actualHoursWorked > shiftHours + 0.5) {
-          otMinutes = Math.round((actualHoursWorked - shiftHours - 0.5) * 60);
-        } else if (actualHoursWorked < shiftHours) {
+        if (actualHrs < shiftHours) {
           isEarlyLeave = true;
-          earlyLeaveMinutes = Math.round((shiftHours - actualHoursWorked) * 60);
+          earlyLeaveMinutes = Math.round((shiftHours - actualHrs) * 60);
         }
 
         // Update attendance dynamically
         const checkoutRecord: any = {
-          check_out_time: checkOutTimeStr,
+          check_out_time: actualOut,
+          ot_minutes: otMins,
+          actual_hours_worked: actualHrs,
         };
+
+        if (otMins > 0) {
+          checkoutRecord.ot_approved = false; // pending approval
+        }
 
         if (photoUrl) {
           checkoutRecord.check_out_photo = photoUrl;
-        }
-
-        try {
-          if (actualHoursWorked !== undefined && actualHoursWorked !== null) {
-            checkoutRecord.actual_hours_worked = Math.round(actualHoursWorked * 100) / 100;
-          }
-          if (otMinutes > 0) {
-            checkoutRecord.ot_minutes = otMinutes;
-            checkoutRecord.ot_approved = false; // pending approval
-          }
-        } catch (e) {
-          console.error('Failed to set checkout columns:', e);
         }
 
         const { error: checkoutErr } = await supabase
@@ -612,26 +608,26 @@ export default function KioskPage() {
             staff_id: staff.id,
             staff_name: staff.name,
             branch_id: staff.branch_id,
-            description: `${staff.name} checked out at ${checkOutTimeStr} (${Math.round(actualHoursWorked * 10) / 10}h worked)`
+            description: `${staff.name} checked out at ${actualOut} (${actualHrs}h worked)`
           });
         } catch (e) {
           console.error('Silent insert wall event failed:', e);
         }
 
         // Create OT adjustments and notifications if OT is > 0
-        if (otMinutes > 0) {
+        if (otMins > 0) {
           await supabase.from('attendance_adjustments').insert({
             staff_id: staff.id,
             date: todayStr,
             type: 'ot',
-            minutes: otMinutes,
+            minutes: otMins,
             status: 'pending',
           });
 
           await createNotification({
             type: 'ot_pending',
             title: 'OT Approval Required',
-            message: `${staff.name} completed ${otMinutes}m Overtime.`,
+            message: `${staff.name} completed ${otMins}m Overtime.`,
             branchId: userBranch,
             staffId: staff.id,
             relatedId: todayStr,
@@ -642,9 +638,9 @@ export default function KioskPage() {
         let resMsg = 'Checked out successfully!';
         let resDetails = '';
 
-        if (otMinutes > 0) {
-          const h = Math.floor(otMinutes / 60);
-          const m = otMinutes % 60;
+        if (otMins > 0) {
+          const h = Math.floor(otMins / 60);
+          const m = otMins % 60;
           resDetails = `OT pending approval: ${h > 0 ? h + 'h ' : ''}${m}m`;
         } else if (isEarlyLeave) {
           const h = Math.floor(earlyLeaveMinutes / 60);

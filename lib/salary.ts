@@ -74,3 +74,29 @@ export function calculateSalary(config: SalaryConfig, attendance: SalaryAttendan
     netSalary: Math.round(netSalary * 100) / 100,
   };
 }
+
+export function calculateOTMinutes(
+  shiftEnd: string,
+  actualOut: string
+): number {
+  const [eh, em] = shiftEnd.split(':').map(Number);
+  const [ah, am] = actualOut.split(':').map(Number);
+  const shiftEndMins = eh * 60 + em;
+  const actualOutMins = ah * 60 + am;
+  const diff = actualOutMins - shiftEndMins;
+  if (diff <= 30) return 0;
+  return diff - 30;
+}
+
+export function calculateActualHours(
+  checkIn: string,
+  checkOut: string
+): number {
+  const [ih, im] = checkIn.split(':').map(Number);
+  const [oh, om] = checkOut.split(':').map(Number);
+  const inMins = ih * 60 + im;
+  const outMins = oh * 60 + om;
+  if (outMins <= inMins) return 0;
+  return Math.round(((outMins - inMins) / 60) * 100) / 100;
+}
+

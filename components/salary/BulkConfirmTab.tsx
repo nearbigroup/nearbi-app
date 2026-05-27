@@ -46,7 +46,7 @@ export default function BulkConfirmTab() {
       const endDate = `${month}-31`;
       const { data: attData, error: attError } = await supabase
         .from('attendance')
-        .select('staff_id, ot_minutes')
+        .select('staff_id, ot_minutes, ot_approved')
         .gte('date', startDate)
         .lte('date', endDate);
 
@@ -56,7 +56,9 @@ export default function BulkConfirmTab() {
       const otMap: Record<string, number> = {};
       if (attData) {
         attData.forEach((r) => {
-          otMap[r.staff_id] = (otMap[r.staff_id] || 0) + (r.ot_minutes || 0);
+          if (r.ot_approved === true) {
+            otMap[r.staff_id] = (otMap[r.staff_id] || 0) + (r.ot_minutes || 0);
+          }
         });
       }
 

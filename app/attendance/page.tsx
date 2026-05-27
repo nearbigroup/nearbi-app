@@ -7,6 +7,10 @@ import { supabase } from '@/lib/supabase';
 import { Clock, RefreshCw, CircleCheck, CircleX, AlertTriangle, X, AlertCircle, Download, Upload, Check } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import * as XLSX from 'xlsx';
+import { DEPARTMENTS } from '@/lib/data';
+import { calculateOTMinutes, calculateActualHours } from '@/lib/salary';
+
+
 
 type StatusFilter = 'All' | 'Present' | 'Late' | 'Absent' | 'Checked Out';
 type BranchFilter = 'All' | 'daily' | 'hypermarket';
@@ -327,6 +331,7 @@ export default function AttendancePage() {
           rows.forEach((row: any, rowIdx: number) => {
             const pinRaw = row.PIN ? String(row.PIN).trim() : '';
             const staffMem = staffMap.get(pinRaw);
+            const deptVal = row.Department || row.department ? String(row.Department || row.department).trim() : '';
             
             if (!pinRaw) {
               validatedRows.push({
@@ -378,6 +383,10 @@ export default function AttendancePage() {
                 if (outTime && !/^\d{2}:\d{2}$/.test(outTime)) {
                   errors.push(`Invalid OUT time format for Day ${day}: ${outTime}`);
                 }
+                const validDepts = DEPARTMENTS.map(d => d.toLowerCase());
+                if (deptVal && !validDepts.includes(deptVal.toLowerCase())) {
+                  errors.push('Invalid department: ' + deptVal);
+                }
                 
                 const hasOverlap = attMap.has(`${staffMem.id}_${dateStr}`);
                 
@@ -422,6 +431,13 @@ export default function AttendancePage() {
             } else if (!staffMem) {
               errors.push(`PIN ${pinRaw} not found`);
             }
+            
+            const validDepts = DEPARTMENTS.map(d => d.toLowerCase());
+            const rowDept = row.Department || row.department;
+            if (rowDept && !validDepts.includes(String(rowDept).trim().toLowerCase())) {
+              errors.push('Invalid department: ' + rowDept);
+            }
+
             
             let parsedDateStr = '';
             if (!dateVal) {
@@ -575,17 +591,9 @@ export default function AttendancePage() {
         let otMinutes = 0;
 
         if (row.outTime) {
-          const [oh, om] = row.outTime.split(':').map(Number);
-          let outMins = oh * 60 + om;
-          if (outMins < inMins) {
-            outMins += 24 * 60;
-          }
-          actualHoursWorked = Math.round(((outMins - inMins) / 60) * 100) / 100;
-          const shiftHours = Number(row.shift.hours);
-
-          if (actualHoursWorked > shiftHours + 0.5) {
-            otMinutes = Math.round((actualHoursWorked - shiftHours - 0.5) * 60);
-          }
+          const shiftEnd = row.shift?.end_time || '18:00';
+          otMinutes = calculateOTMinutes(shiftEnd, row.outTime);
+          actualHoursWorked = calculateActualHours(row.inTime, row.outTime);
         }
 
         // FIX 4: Build the record object dynamically.

@@ -7,6 +7,8 @@ import { supabase } from '@/lib/supabase';
 import { Search, Plus, Trash2, Eye, EyeOff, Lock, X, AlertTriangle, Users, AlertCircle, RefreshCw, Cake, Download, Upload, Check } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import * as XLSX from 'xlsx';
+import { DEPARTMENTS } from '@/lib/data';
+
 
 interface Shift {
   id: string;
@@ -221,14 +223,15 @@ export default function StaffPage() {
           }
 
           // 4. department validation
-          const validDepts = ['Grocery', 'Fresh & Produce', 'Bakery', 'Cashier', 'Housekeeping', 'Receiving'];
-          const deptMatch = validDepts.find(d => d.toLowerCase() === deptRaw.toLowerCase());
+          const validDepts = DEPARTMENTS.map(d => d.toLowerCase());
+          const deptMatch = DEPARTMENTS.find(d => d.toLowerCase() === deptRaw.toLowerCase());
           let department = deptMatch || '';
           if (!deptRaw) {
             errors.push('Department is required');
-          } else if (!deptMatch) {
-            errors.push(`Invalid department — must be one of: ${validDepts.join(', ')}`);
+          } else if (!validDepts.includes(deptRaw.toLowerCase())) {
+            errors.push('Invalid department: ' + deptRaw);
           }
+
 
           // 5. shift_start/end validation
           if (!shift_start || !/^\d{2}:\d{2}$/.test(shift_start)) {
@@ -456,7 +459,7 @@ export default function StaffPage() {
         ['name - Full staff name (required)'],
         ['pin - Exactly 4 digits, must be unique (required)'],
         ['branch - Must be: Nearbi Daily OR Nearbi Hypermarket'],
-        ['department - Must be: Grocery / Fresh & Produce / Bakery / Cashier / Housekeeping / Receiving'],
+        [`department - Must be: ${DEPARTMENTS.join(' / ')}`],
         ['shift_start - Time in HH:MM format e.g. 09:00'],
         ['shift_end - Time in HH:MM format e.g. 18:00'],
         ['off_days_per_month - Must be: 0 or 2 or 4'],
@@ -1450,12 +1453,11 @@ export default function StaffPage() {
                     required
                   >
                     <option value="">Select...</option>
-                    <option value="Grocery">Grocery</option>
-                    <option value="Fresh & Produce">Fresh & Produce</option>
-                    <option value="Bakery">Bakery</option>
-                    <option value="Cashier">Cashier</option>
-                    <option value="Housekeeping">Housekeeping</option>
-                    <option value="Receiving">Receiving</option>
+                    {DEPARTMENTS.map((dept) => (
+                      <option key={dept} value={dept}>
+                        {dept}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
