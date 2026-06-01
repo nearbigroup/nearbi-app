@@ -10,7 +10,8 @@ interface CreateNotificationParams {
     | 'ot_approved'
     | 'ot_rejected'
     | 'salary_confirmed'
-    | 'absent_alert';
+    | 'absent_alert'
+    | 'birthday';
   title: string;
   message: string;
   branchId: string | null;

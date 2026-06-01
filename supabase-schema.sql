@@ -44,7 +44,7 @@ create table staff (
 
 create table attendance (
   id uuid primary key default gen_random_uuid(),
-  staff_id uuid references staff(id),
+  staff_id uuid references staff(id) on delete cascade,
   date date not null default current_date,
   check_in_time text,
   check_out_time text,
@@ -57,6 +57,7 @@ create table attendance (
   ot_approved boolean default false,
   early_in_minutes integer default 0,
   early_in_approved boolean default false,
+  early_leave_minutes integer default 0,
   actual_hours_worked numeric default 0,
   check_in_photo text,
   check_out_photo text,
@@ -67,7 +68,7 @@ create table attendance (
 
 create table leave_requests (
   id uuid primary key default gen_random_uuid(),
-  staff_id uuid references staff(id),
+  staff_id uuid references staff(id) on delete cascade,
   date date not null,
   reason text,
   status text default 'pending'
@@ -79,7 +80,7 @@ create table leave_requests (
 
 create table late_fines (
   id uuid primary key default gen_random_uuid(),
-  staff_id uuid references staff(id),
+  staff_id uuid references staff(id) on delete cascade,
   date date not null,
   late_minutes integer not null,
   color_code text not null
@@ -109,7 +110,7 @@ values (50, 100, 200, 4);
 
 create table staff_fine_exemptions (
   id uuid primary key default gen_random_uuid(),
-  staff_id uuid references staff(id) unique,
+  staff_id uuid references staff(id) on delete cascade unique,
   exempted_by text,
   exempted_at timestamptz default now(),
   reason text
@@ -117,7 +118,7 @@ create table staff_fine_exemptions (
 
 create table attendance_adjustments (
   id uuid primary key default gen_random_uuid(),
-  staff_id uuid references staff(id),
+  staff_id uuid references staff(id) on delete cascade,
   date date not null,
   type text not null
     check (type in ('ot','early_in')),
@@ -132,7 +133,7 @@ create table attendance_adjustments (
 
 create table salary_confirmations (
   id uuid primary key default gen_random_uuid(),
-  staff_id uuid references staff(id),
+  staff_id uuid references staff(id) on delete cascade,
   month text not null,
   net_salary numeric not null,
   base_salary numeric not null,
@@ -152,7 +153,7 @@ create table salary_confirmations (
 
 create table salary_payments (
   id uuid primary key default gen_random_uuid(),
-  staff_id uuid references staff(id),
+  staff_id uuid references staff(id) on delete cascade,
   month text not null,
   amount_paid numeric not null,
   payment_mode text not null
@@ -168,12 +169,13 @@ create table notifications (
   type text not null check (type in (
     'late_fine','ot_pending','early_in_pending',
     'leave_request','fine_confirmed','ot_approved',
-    'ot_rejected','salary_confirmed','absent_alert'
+    'ot_rejected','salary_confirmed','absent_alert',
+    'birthday'
   )),
   title text not null,
   message text not null,
   branch_id text references branches(id),
-  staff_id uuid references staff(id),
+  staff_id uuid references staff(id) on delete cascade,
   related_id text,
   is_read boolean default false,
   target_role text not null check (target_role in (
@@ -202,7 +204,7 @@ insert into break_settings (id)
 
 create table break_logs (
   id uuid primary key default gen_random_uuid(),
-  staff_id uuid references staff(id),
+  staff_id uuid references staff(id) on delete cascade,
   date date not null default current_date,
   break_type text check (break_type in (
     'morning_tea','food_break',
@@ -218,7 +220,7 @@ create table break_logs (
 
 create table special_fines (
   id uuid primary key default gen_random_uuid(),
-  staff_id uuid references staff(id),
+  staff_id uuid references staff(id) on delete cascade,
   amount numeric not null,
   edited_amount numeric,
   reason text not null,
@@ -235,7 +237,7 @@ create table special_fines (
 
 create table performance_scores (
   id uuid primary key default gen_random_uuid(),
-  staff_id uuid references staff(id),
+  staff_id uuid references staff(id) on delete cascade,
   month text not null,
   attendance_score integer not null default 0,
   punctuality_score integer not null default 0,
@@ -250,7 +252,7 @@ create table performance_scores (
 create table wall_events (
   id uuid primary key default gen_random_uuid(),
   event_type text not null,
-  staff_id uuid references staff(id),
+  staff_id uuid references staff(id) on delete cascade,
   staff_name text not null,
   branch_id text references branches(id),
   description text not null,

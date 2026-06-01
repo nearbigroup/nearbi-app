@@ -12,6 +12,8 @@ interface Staff {
   name: string;
   department: string;
   branch_id: string;
+  monthly_salary: number;
+  off_days_per_month: number;
 }
 
 interface LeaveRequest {
@@ -22,6 +24,7 @@ interface LeaveRequest {
   status: 'pending' | 'approved' | 'rejected';
   requested_at: string;
   approved_by: string | null;
+  is_quota_leave?: boolean;
   staff: Staff;
 }
 
@@ -32,6 +35,13 @@ export default function LeavePage() {
   const [activeTab, setActiveTab] = useState<TabType>('pending');
   const [toastMsg, setToastMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [quotaWarning, setQuotaWarning] = useState<{
+    id: string;
+    staffId: string;
+    staffName: string;
+    earnedQuota: number;
+    deductionAmount: number;
+  } | null>(null);
 
   const fetchRequests = async () => {
     try {
@@ -112,6 +122,113 @@ export default function LeavePage() {
     } catch (err) {
       console.error(err);
       showToast('Error processing leave request.');
+    }
+  };
+
+  const checkLeaveQuota = async (staffId: string) => {
+    // Get staff off_days_per_month
+    const { data: staffData } = await supabase
+      .from('staff')
+      .select('off_days_per_month')
+      .eq('id', staffId)
+      .single();
+
+    // Count days worked this month
+    const firstDay = new Date();
+    firstDay.setDate(1);
+    const { data: attData } = await supabase
+      .from('attendance')
+      .select('date')
+      .eq('staff_id', staffId)
+      .not('check_in_time', 'is', null)
+      .gte('date', firstDay.toISOString().split('T')[0]);
+
+    const daysWorked = attData?.length || 0;
+    const offDays = staffData?.off_days_per_month || 0;
+
+    // Calculate earned quota
+    let earnedQuota = 0;
+    if (offDays === 4) earnedQuota = Math.floor(daysWorked / 6);
+    if (offDays === 2) earnedQuota = Math.floor(daysWorked / 12);
+    earnedQuota = Math.min(earnedQuota, offDays);
+
+    // Count already approved leaves this month
+    const { data: approvedLeaves } = await supabase
+      .from('leave_requests')
+      .select('id')
+      .eq('staff_id', staffId)
+      .eq('status', 'approved')
+      .gte('date', firstDay.toISOString().split('T')[0]);
+
+    const usedLeaves = approvedLeaves?.length || 0;
+    const remaining = earnedQuota - usedLeaves;
+
+    return { earnedQuota, usedLeaves, remaining };
+  };
+
+  const handleApproveClick = async (req: LeaveRequest) => {
+    try {
+      setLoading(true);
+      const { earnedQuota, remaining } = await checkLeaveQuota(req.staff_id);
+      setLoading(false);
+
+      if (remaining > 0) {
+        // Approve within quota
+        await executeApproval(req.id, true);
+      } else {
+        // Show warning modal
+        const monthlySalary = req.staff.monthly_salary || 0;
+        const dailyRate = Math.round(monthlySalary / 30);
+        setQuotaWarning({
+          id: req.id,
+          staffId: req.staff_id,
+          staffName: req.staff.name,
+          earnedQuota,
+          deductionAmount: dailyRate,
+        });
+      }
+    } catch (err) {
+      console.error(err);
+      setLoading(false);
+      showToast('Error checking leave quota.');
+    }
+  };
+
+  const executeApproval = async (id: string, isWithinQuota: boolean) => {
+    const approverName = isWithinQuota ? 'system_auto' : (user?.email || 'Admin');
+    try {
+      const { error } = await supabase
+        .from('leave_requests')
+        .update({
+          status: 'approved',
+          approved_by: approverName,
+          is_quota_leave: isWithinQuota,
+        })
+        .eq('id', id);
+
+      if (error) throw error;
+
+      const req = requests.find((r) => r.id === id);
+      if (req) {
+        try {
+          await supabase.from('wall_events').insert({
+            event_type: 'leave_approved',
+            staff_id: req.staff_id,
+            staff_name: req.staff?.name,
+            branch_id: req.staff?.branch_id,
+            description: `${req.staff?.name}'s leave request for ${new Date(req.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} was approved by ${approverName}`
+          });
+        } catch (e) {
+          console.error('Silent insert wall event failed:', e);
+        }
+      }
+
+      showToast('Leave request approved!');
+      setQuotaWarning(null);
+      fetchRequests();
+    } catch (err) {
+      console.error(err);
+      showToast('Error approving leave request.');
     }
   };
 
@@ -277,7 +394,7 @@ export default function LeavePage() {
                     <span>Reject</span>
                   </button>
                   <button
-                    onClick={() => handleAction(r.id, 'approved')}
+                    onClick={() => handleApproveClick(r)}
                     className="flex-1 min-h-[38px] bg-white text-[#1E2028] font-bold text-xs rounded-[10px] active:scale-95 transition-transform flex items-center justify-center space-x-1"
                   >
                     <Check size={14} strokeWidth={1.5} />
@@ -286,22 +403,70 @@ export default function LeavePage() {
                 </div>
               ) : (
                 <div
-                  className={`text-xs font-bold p-2.5 rounded-[10px] border flex items-center justify-center space-x-1.5 ${
+                  className={`text-xs font-bold p-2.5 rounded-[10px] border flex flex-col items-center justify-center space-y-1.5 ${
                     r.status === 'approved'
                       ? 'bg-[rgba(74,222,128,0.12)] text-[#4ADE80] border border-[rgba(74,222,128,0.2)]'
                       : 'bg-[rgba(248,113,113,0.12)] text-[#F87171] border border-[rgba(248,113,113,0.2)]'
                   }`}
                 >
-                  {r.status === 'approved' ? <Check size={14} strokeWidth={1.5} /> : <X size={14} strokeWidth={1.5} />}
-                  <span>
-                    {r.status === 'approved'
-                      ? `Approved by ${r.approved_by || 'HR'}`
-                      : 'Rejected'}
-                  </span>
+                  <div className="flex items-center space-x-1.5">
+                    {r.status === 'approved' ? <Check size={14} strokeWidth={1.5} /> : <X size={14} strokeWidth={1.5} />}
+                    <span>
+                      {r.status === 'approved'
+                        ? `Approved by ${r.approved_by || 'HR'}`
+                        : 'Rejected'}
+                    </span>
+                  </div>
+                  
+                  {r.status === 'approved' && (
+                    <div className="mt-1">
+                      {r.is_quota_leave ? (
+                        <span className="text-[10px] font-bold text-[#4ADE80] bg-[rgba(74,222,128,0.12)] border border-[rgba(74,222,128,0.2)] px-2 py-0.5 rounded">
+                          Within quota — no deduction
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-bold text-[#FBBF24] bg-[rgba(251,191,36,0.12)] border border-[rgba(251,191,36,0.2)] px-2 py-0.5 rounded">
+                          Exceeds quota — salary deducted
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           ))}
+        </div>
+      )}
+
+      {quotaWarning && (
+        <div className="fixed inset-0 z-[12000] flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
+          <div className="bg-[#252830] border border-[#2A2D38] rounded-[20px] max-w-sm w-full p-6 flex flex-col space-y-4 shadow-2xl text-center">
+            <div className="flex flex-col items-center">
+              <span className="text-[#FBBF24] mb-2 text-3xl">⚠️</span>
+              <h3 className="text-white text-base font-bold">Quota Warning</h3>
+              <p className="text-[var(--text-secondary)] text-xs font-semibold mt-2 leading-relaxed">
+                This staff has used all <strong>{quotaWarning.earnedQuota}</strong> earned leave days this month.
+                Approving will deduct 1 day salary (<strong>₹{quotaWarning.deductionAmount.toLocaleString()}</strong>).
+                Approve anyway?
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setQuotaWarning(null)}
+                className="flex-1 min-h-[38px] bg-transparent border border-[#363A48] text-white font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => executeApproval(quotaWarning.id, false)}
+                className="flex-1 min-h-[38px] bg-[#FBBF24] hover:bg-[#F59E0B] text-[#1E2028] font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
+              >
+                Approve with Deduction
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

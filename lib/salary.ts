@@ -1,3 +1,5 @@
+import { supabase } from './supabase';
+
 export function getDaysInMonth(y: number, m: number) {
   return new Date(y, m, 0).getDate();
 }
@@ -98,5 +100,32 @@ export function calculateActualHours(
   const outMins = oh * 60 + om;
   if (outMins <= inMins) return 0;
   return Math.round(((outMins - inMins) / 60) * 100) / 100;
+}
+
+export async function calculateActualHoursWithBreaks(
+  checkIn: string,
+  checkOut: string,
+  staffId: string,
+  date: string
+): Promise<number> {
+  const [ih, im] = checkIn.split(':').map(Number);
+  const [oh, om] = checkOut.split(':').map(Number);
+  const rawMins = (oh * 60 + om) - (ih * 60 + im);
+  if (rawMins <= 0) return 0;
+
+  // Subtract break durations
+  const { data: breaks } = await supabase
+    .from('break_logs')
+    .select('duration_minutes')
+    .eq('staff_id', staffId)
+    .eq('date', date)
+    .not('break_end', 'is', null);
+
+  const totalBreakMins = breaks?.reduce(
+    (sum, b) => sum + (b.duration_minutes || 0), 0
+  ) || 0;
+
+  const netMins = rawMins - totalBreakMins;
+  return Math.max(0, Math.round(netMins / 60 * 100) / 100);
 }
 

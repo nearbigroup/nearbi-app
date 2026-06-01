@@ -19,6 +19,7 @@ export default function BulkConfirmTab() {
   const [confirmations, setConfirmations] = useState<SalaryConfirmation[]>([]);
   const [lateFines, setLateFines] = useState<any[]>([]);
   const [specialFines, setSpecialFines] = useState<any[]>([]);
+  const [attendanceRecords, setAttendanceRecords] = useState<any[]>([]);
   
   const [salaryData, setSalaryData] = useState<Record<string, any>>({});
   const [extraLeaves, setExtraLeaves] = useState<Record<string, number>>({});
@@ -46,11 +47,12 @@ export default function BulkConfirmTab() {
       const endDate = `${month}-31`;
       const { data: attData, error: attError } = await supabase
         .from('attendance')
-        .select('staff_id, ot_minutes, ot_approved')
+        .select('staff_id, date, check_in_time, status, ot_minutes, ot_approved, early_leave_minutes')
         .gte('date', startDate)
         .lte('date', endDate);
 
       if (attError) throw attError;
+      setAttendanceRecords(attData || []);
 
       // Aggregate OT minutes
       const otMap: Record<string, number> = {};
@@ -107,7 +109,7 @@ export default function BulkConfirmTab() {
   }, []);
 
   useEffect(() => {
-    // Recalculate salaries when staff list, extra leaves, late fines, or special fines change
+    // Recalculate salaries when staff list, attendance records, extra leaves, late fines, or special fines change
     const newSalaryData: Record<string, any> = {};
     
     staffList.forEach((s) => {
@@ -125,9 +127,27 @@ export default function BulkConfirmTab() {
       };
       
       const calendarDays = new Date(year, monthNum, 0).getDate();
-      const requiredWorkingDays = calendarDays - s.off_days_per_month;
+      
+      // Filter attendance records for current staff
+      const staffAtt = attendanceRecords.filter((r) => r.staff_id === s.id);
+      
       const extraLeaveDays = extraLeaves[s.id] || 0;
-      const daysActuallyWorked = Math.max(0, requiredWorkingDays - extraLeaveDays);
+      
+      const daysActuallyWorked = Math.max(0, (staffAtt.filter(
+        (r) => r.check_in_time !== null
+      ).length || 0) - extraLeaveDays);
+
+      const approvedOTMins = staffAtt.filter(
+        (r) => r.ot_approved === true
+      ).reduce((sum, r) => sum + (r.ot_minutes || 0), 0) || 0;
+
+      const earlyLeaveMins = staffAtt.reduce(
+        (sum, r) => sum + (r.early_leave_minutes || 0), 0
+      ) || 0;
+
+      // Hourly rate for early leave deduction
+      const hourlyRate = s.monthly_salary / ((30 - s.off_days_per_month) * s.shift.hours);
+      const earlyLeaveDeduction = (earlyLeaveMins / 60) * hourlyRate;
 
       // Calculate confirmed late fines (not waived)
       const staffLateFines = lateFines.filter(
@@ -146,9 +166,9 @@ export default function BulkConfirmTab() {
       const attendance = {
         daysActuallyWorked,
         confirmedFines: totalLateFinesAmt,
-        approvedOTMinutes: s.total_ot_minutes || 0,
+        approvedOTMinutes: approvedOTMins,
         approvedEarlyInMinutes: 0,
-        earlyLeaveDeductionAmount: 0,
+        earlyLeaveDeductionAmount: earlyLeaveDeduction,
       };
       
       const breakdown = calculateSalary(config, attendance);
@@ -161,11 +181,13 @@ export default function BulkConfirmTab() {
         confirmed_fines: totalLateFinesAmt,
         confirmed_special_fines: totalSpecialFinesAmt,
         paid_days: breakdown.paidDays,
+        early_leave_deduction: earlyLeaveDeduction,
+        ot_minutes: approvedOTMins,
       };
     });
     
     setSalaryData(newSalaryData);
-  }, [staffList, extraLeaves, lateFines, specialFines]);
+  }, [staffList, attendanceRecords, extraLeaves, lateFines, specialFines]);
 
   const handleUpdateLeave = (staffId: string, delta: number) => {
     setExtraLeaves((prev) => {
@@ -190,8 +212,9 @@ export default function BulkConfirmTab() {
           paid_days: bd.paid_days || 30,
           leave_deduction: bd.leave_deduction,
           ot_pay: bd.ot_pay,
+          early_leave_deduction: bd.early_leave_deduction || 0,
           extra_leave_days: extraLeaves[s.id] || 0,
-          ot_minutes: s.total_ot_minutes || 0,
+          ot_minutes: bd.ot_minutes || 0,
           confirmed_fines: bd.confirmed_fines || 0,
           confirmed_special_fines: bd.confirmed_special_fines || 0,
           confirmed_by: user.email || 'Admin',

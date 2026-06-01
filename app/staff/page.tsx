@@ -996,12 +996,8 @@ export default function StaffPage() {
         console.error('Failed to delete staff_fine_exemptions:', e);
       }
 
-      try {
-        const { error } = await supabase.from('staff_birthday').delete().eq('staff_id', staffId);
-        if (error) console.error('Error deleting staff_birthday:', error);
-      } catch (e) {
-        console.error('Failed to delete staff_birthday:', e);
-      }
+      // staff_birthday table not implemented
+      // DOB stored in staff.date_of_birth column directly
 
       // Step 2 — now delete the staff record itself
       const { error } = await supabase

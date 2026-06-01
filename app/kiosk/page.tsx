@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { createNotification } from '@/lib/notifications';
 import { useRouter } from 'next/navigation';
 import { Check, LogOut, Camera, AlertCircle, UserCheck, Timer, AlertTriangle, Coffee, RotateCcw, CircleCheck } from 'lucide-react';
-import { calculateOTMinutes, calculateActualHours } from '@/lib/salary';
+import { calculateOTMinutes, calculateActualHours, calculateActualHoursWithBreaks } from '@/lib/salary';
 
 
 type KioskState = 'IDLE' | 'LOADING' | 'STAFF_FOUND' | 'CAMERA' | 'RESULT' | 'ERROR';
@@ -36,13 +36,18 @@ export default function KioskPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
-  // Initialize clock client-side to prevent SSR mismatch
   useEffect(() => {
     setCurrentTime(new Date());
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    const timer = setInterval(() => {
+      const now = new Date();
+      setCurrentTime(now);
+      if (now.getSeconds() === 0) {
+        autoCloseBreaks();
+      }
+    }, 1000);
     autoCloseBreaks();
     return () => clearInterval(timer);
-  }, []);
+  }, [userBranch]);
 
   // Try to ensure bucket exists on app startup
   // IMPORTANT: Create storage bucket manually
@@ -567,21 +572,26 @@ export default function KioskPage() {
 
         const shiftEnd = staff.shift?.end_time || staff.shifts?.end_time || '18:00';
         const otMins = calculateOTMinutes(shiftEnd, actualOut);
-        const actualHrs = calculateActualHours(record.check_in_time, actualOut);
+        const actualHrs = await calculateActualHoursWithBreaks(record.check_in_time, actualOut, staff.id, todayStr);
 
         const shiftHours = Number(staff.shift?.hours || staff.shifts?.hours || 9);
-        let isEarlyLeave = false;
-        let earlyLeaveMinutes = 0;
-        if (actualHrs < shiftHours) {
-          isEarlyLeave = true;
-          earlyLeaveMinutes = Math.round((shiftHours - actualHrs) * 60);
-        }
+        
+        // Calculate early leave minutes
+        const [shiftEndH, shiftEndM] = shiftEnd.split(':').map(Number);
+        const [actualOutH, actualOutM] = actualOut.split(':').map(Number);
+        const shiftEndMins = shiftEndH * 60 + shiftEndM;
+        const actualOutMins = actualOutH * 60 + actualOutM;
+        const earlyLeaveMins = Math.max(0, shiftEndMins - actualOutMins);
+
+        const isEarlyLeave = earlyLeaveMins > 0;
+        const earlyLeaveMinutes = earlyLeaveMins;
 
         // Update attendance dynamically
         const checkoutRecord: any = {
           check_out_time: actualOut,
           ot_minutes: otMins,
           actual_hours_worked: actualHrs,
+          early_leave_minutes: earlyLeaveMins,
         };
 
         if (otMins > 0) {

@@ -176,14 +176,14 @@ export default function DashboardPage() {
             .from('notifications')
             .select('id')
             .eq('staff_id', s.id)
-            .eq('type', 'absent_alert')
+            .eq('type', 'birthday')
             .eq('title', 'Birthday Today')
             .gte('created_at', todayStart)
             .maybeSingle();
 
           if (!existingNotify) {
             await createNotification({
-              type: 'absent_alert',
+              type: 'birthday',
               title: 'Birthday Today',
               message: `Today is ${s.name}'s birthday! Wish them a very happy birthday!`,
               branchId: s.branch_id,
