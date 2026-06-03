@@ -286,6 +286,82 @@ export default function AttendancePage() {
     }
   };
 
+  const parseTimeValue = (val: any): string | null => {
+    if (val === null || val === undefined || val === '') {
+      return null;
+    }
+    
+    // Already a string like "17:20" or "09:05"
+    if (typeof val === 'string') {
+      const trimmed = val.trim();
+      if (trimmed === '') return null;
+      // Validate HH:MM format
+      if (/^\d{1,2}:\d{2}$/.test(trimmed)) {
+        const [h, m] = trimmed.split(':').map(Number);
+        if (h >= 0 && h <= 23 && m >= 0 && m <= 59) {
+          return String(h).padStart(2,'0') + ':' +
+                 String(m).padStart(2,'0');
+        }
+      }
+      return null;
+    }
+    
+    // Excel serial time (decimal between 0 and 1)
+    if (typeof val === 'number') {
+      if (val >= 0 && val < 1) {
+        const totalMins = Math.round(val * 24 * 60);
+        const h = Math.floor(totalMins / 60);
+        const m = totalMins % 60;
+        return String(h).padStart(2,'0') + ':' +
+               String(m).padStart(2,'0');
+      }
+      // Sometimes stored as full datetime serial
+      if (val > 1) {
+        const fractional = val - Math.floor(val);
+        const totalMins = Math.round(fractional * 24 * 60);
+        const h = Math.floor(totalMins / 60);
+        const m = totalMins % 60;
+        return String(h).padStart(2,'0') + ':' +
+               String(m).padStart(2,'0');
+      }
+    }
+    
+    return null;
+  };
+
+  const parseRow = (row: any) => {
+    const name = row['Name'] || row['name'];
+    const pin = String(row['PIN'] || row['pin'] || '').trim();
+    
+    if (!name || !pin) return null;
+    
+    const records = [];
+    
+    for (let day = 1; day <= 31; day++) {
+      const inKey = `${day}-IN`;
+      const outKey = `${day}-OUT`;
+      
+      const inVal = row[inKey];
+      const outVal = row[outKey];
+      
+      const checkIn = parseTimeValue(inVal);
+      const checkOut = parseTimeValue(outVal);
+      
+      // Only create record if at least check-in exists
+      if (checkIn) {
+        records.push({
+          pin,
+          name,
+          day,
+          checkIn,
+          checkOut,
+        });
+      }
+    }
+    
+    return records;
+  };
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -293,33 +369,61 @@ export default function AttendancePage() {
     const reader = new FileReader();
     reader.onload = async (evt) => {
       try {
-        const arrayBuf = evt.target?.result as ArrayBuffer;
-        if (!arrayBuf) return;
-        const data = new Uint8Array(arrayBuf);
-        const wb = XLSX.read(data, { type: 'array' });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json(ws) as any[];
+        const arrayBuffer = evt.target?.result as ArrayBuffer;
+        if (!arrayBuffer) return;
+        const data = new Uint8Array(arrayBuffer);
+        const workbook = XLSX.read(data, {
+          type: 'array',
+          cellDates: false,  // Keep as raw values
+          cellNF: false,
+          cellText: false,
+        });
         
-        if (rows.length === 0) {
-          alert('No rows found in sheet');
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        
+        // Convert to JSON with raw values
+        const rows = XLSX.utils.sheet_to_json(sheet, {
+          raw: true,        // Keep raw values
+          defval: null,     // Empty cells = null;
+        });
+        
+        // Filter out empty rows
+        const validRows = rows.filter((row: any) =>
+          row['Name'] || row['name']
+        );
+        
+        // Parse rows to day-by-day records
+        const parsedRecords: any[] = [];
+        validRows.forEach((row: any) => {
+          const records = parseRow(row);
+          if (records) {
+            parsedRecords.push(...records);
+          }
+        });
+        
+        if (parsedRecords.length === 0) {
+          alert('No valid check-in records found in sheet');
           return;
         }
         
-        const headers = Object.keys(rows[0]);
-        const isMonthlyGrid = headers.some(h => h.includes('-IN') || h.includes('-OUT'));
-        
-        let staffQuery = supabase.from('staff').select('*, shift:shifts(*)').eq('active', true);
-        if (userBranch) {
-          staffQuery = staffQuery.eq('branch_id', userBranch);
-        }
-        const { data: staffList, error: staffErr } = await staffQuery;
+        // Fetch staff and match by PIN
+        const allPins = [...new Set(
+          parsedRecords.map(r => r.pin)
+        )];
+
+        const { data: staffList, error: staffErr } = await supabase
+          .from('staff')
+          .select('id, name, pin, branch_id, shift_id, shift:shifts(start_time, end_time, hours)')
+          .in('pin', allPins);
+
         if (staffErr) throw staffErr;
-        
-        const staffMap = new Map<string, any>();
-        staffList?.forEach(s => {
-          staffMap.set(String(s.pin).trim(), s);
-        });
-        
+
+        const pinToStaff = new Map(
+          staffList?.map(s => [s.pin, s]) || []
+        );
+
+        // Fetch existing attendance records
         const [yearStr, monthStr] = selectedMonth.split('-');
         const startDate = `${selectedMonth}-01`;
         const endDate = `${selectedMonth}-31`;
@@ -334,185 +438,76 @@ export default function AttendancePage() {
         existingAttendance?.forEach(a => {
           attMap.set(`${a.staff_id}_${a.date}`, a);
         });
-        
+
+        // Validate each record
         const validatedRows: any[] = [];
         let readyCount = 0;
         let errorCount = 0;
         let overwriteCount = 0;
         
-        if (isMonthlyGrid) {
-          const year = parseInt(yearStr);
-          const monthNum = parseInt(monthStr);
-          const calendarDays = new Date(year, monthNum, 0).getDate();
-          
-          rows.forEach((row: any, rowIdx: number) => {
-            const pinRaw = row.PIN ? String(row.PIN).trim() : '';
-            const staffMem = staffMap.get(pinRaw);
-            const deptVal = row.Department || row.department ? String(row.Department || row.department).trim() : '';
-            
-            if (!pinRaw) {
-              validatedRows.push({
-                rowIdx: rowIdx + 1,
-                name: row.Name || '—',
-                pin: '—',
-                date: '—',
-                inTime: '—',
-                outTime: '—',
-                status: 'error',
-                errors: ['Missing PIN'],
-                overwrite: false
-              });
-              errorCount++;
-              return;
-            }
-            
-            if (!staffMem) {
-              validatedRows.push({
-                rowIdx: rowIdx + 1,
-                name: row.Name || '—',
-                pin: pinRaw,
-                date: '—',
-                inTime: '—',
-                outTime: '—',
-                status: 'error',
-                errors: [`PIN ${pinRaw} not found`],
-                overwrite: false
-              });
-              errorCount++;
-              return;
-            }
-            
-            for (let day = 1; day <= calendarDays; day++) {
-              const inCol = `${day}-IN`;
-              const outCol = `${day}-OUT`;
-              const inVal = row[inCol];
-              const outVal = row[outCol];
-              
-              if (inVal !== undefined && String(inVal).trim() !== '') {
-                const dateStr = `${year}-${String(monthNum).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                const inTime = parseTime(inVal);
-                const outTime = outVal ? parseTime(outVal) : '';
-                
-                const errors: string[] = [];
-                if (!/^\d{2}:\d{2}$/.test(inTime)) {
-                  errors.push(`Invalid IN time format for Day ${day}: ${inTime}`);
-                }
-                if (outTime && !/^\d{2}:\d{2}$/.test(outTime)) {
-                  errors.push(`Invalid OUT time format for Day ${day}: ${outTime}`);
-                }
-                const validDepts = DEPARTMENTS.map(d => d.toLowerCase());
-                if (deptVal && !validDepts.includes(deptVal.toLowerCase())) {
-                  errors.push('Invalid department: ' + deptVal);
-                }
-                
-                const hasOverlap = attMap.has(`${staffMem.id}_${dateStr}`);
-                
-                const rowObj = {
-                  rowIdx: rowIdx + 1,
-                  staffId: staffMem.id,
-                  name: staffMem.name,
-                  pin: pinRaw,
-                  date: dateStr,
-                  inTime,
-                  outTime,
-                  shift: staffMem.shift,
-                  branchId: staffMem.branch_id,
-                  status: errors.length > 0 ? 'error' : (hasOverlap ? 'overwrite' : 'ready'),
-                  errors,
-                  overwrite: hasOverlap
-                };
-                
-                validatedRows.push(rowObj);
-                
-                if (errors.length > 0) {
-                  errorCount++;
-                } else if (hasOverlap) {
-                  overwriteCount++;
-                } else {
-                  readyCount++;
-                }
-              }
-            }
-          });
-        } else {
-          rows.forEach((row: any, rowIdx: number) => {
-            const pinRaw = row.PIN || row.pin ? String(row.PIN || row.pin).trim() : '';
-            const staffMem = staffMap.get(pinRaw);
-            const dateVal = row.Date || row.date ? String(row.Date || row.date).trim() : '';
-            const inVal = row['Check In Time'] || row.check_in_time ? String(row['Check In Time'] || row.check_in_time).trim() : '';
-            const outVal = row['Check Out Time'] || row.check_out_time ? String(row['Check Out Time'] || row.check_out_time).trim() : '';
-            
-            const errors: string[] = [];
-            if (!pinRaw) {
-              errors.push('Missing PIN');
-            } else if (!staffMem) {
-              errors.push(`PIN ${pinRaw} not found`);
-            }
-            
-            const validDepts = DEPARTMENTS.map(d => d.toLowerCase());
-            const rowDept = row.Department || row.department;
-            if (rowDept && !validDepts.includes(String(rowDept).trim().toLowerCase())) {
-              errors.push('Invalid department: ' + rowDept);
-            }
+        const [year, month] = selectedMonth.split('-').map(Number);
 
-            
-            let parsedDateStr = '';
-            if (!dateVal) {
-              errors.push('Missing Date');
-            } else {
-              parsedDateStr = parseDate(dateVal);
-              if (!parsedDateStr || isNaN(Date.parse(parsedDateStr))) {
-                errors.push(`Date format invalid: ${dateVal}`);
-              }
-            }
-            
-            const inTime = parseTime(inVal);
-            const outTime = outVal ? parseTime(outVal) : '';
-            if (inVal && !/^\d{2}:\d{2}$/.test(inTime)) {
-              errors.push(`Invalid Check In Time: ${inTime}`);
-            }
-            if (outVal && !/^\d{2}:\d{2}$/.test(outTime)) {
-              errors.push(`Invalid Check Out Time: ${outTime}`);
-            }
-            
-            const staffId = staffMem?.id || '';
-            const hasOverlap = staffId && parsedDateStr ? attMap.has(`${staffId}_${parsedDateStr}`) : false;
-            
-            const rowObj = {
-              rowIdx: rowIdx + 1,
-              staffId,
-              name: staffMem?.name || row.Name || row.name || '—',
-              pin: pinRaw,
-              date: parsedDateStr || dateVal,
-              inTime,
-              outTime,
-              shift: staffMem?.shift || null,
-              branchId: staffMem?.branch_id || '',
-              status: errors.length > 0 ? 'error' : (hasOverlap ? 'overwrite' : 'ready'),
-              errors,
-              overwrite: hasOverlap
-            };
-            
-            validatedRows.push(rowObj);
-            
-            if (errors.length > 0) {
-              errorCount++;
-            } else if (hasOverlap) {
-              overwriteCount++;
-            } else {
-              readyCount++;
-            }
-          });
-        }
-        
+        parsedRecords.forEach((record, index) => {
+          const staff = pinToStaff.get(record.pin);
+          const errors: string[] = [];
+          
+          if (!staff) {
+            errors.push(`PIN ${record.pin} not found`);
+          }
+          
+          const dateStr = `${year}-${String(month).padStart(2,'0')}-${String(record.day).padStart(2,'0')}`;
+          
+          const inTime = record.checkIn;
+          const outTime = record.checkOut || '';
+          
+          // Basic validations
+          if (inTime && !/^\d{2}:\d{2}$/.test(inTime)) {
+            errors.push(`Invalid IN time format: ${inTime}`);
+          }
+          if (outTime && !/^\d{2}:\d{2}$/.test(outTime)) {
+            errors.push(`Invalid OUT time format: ${outTime}`);
+          }
+          
+          const hasOverlap = staff ? attMap.has(`${staff.id}_${dateStr}`) : false;
+          
+          const rowObj = {
+            rowIdx: index + 1,
+            staffId: staff?.id || '',
+            name: staff?.name || record.name,
+            pin: record.pin,
+            date: dateStr,
+            inTime,
+            outTime,
+            shift: staff?.shift || null,
+            branchId: staff?.branch_id || '',
+            status: errors.length > 0 ? 'error' : (hasOverlap ? 'overwrite' : 'ready'),
+            errors,
+            overwrite: hasOverlap
+          };
+          
+          validatedRows.push(rowObj);
+          
+          if (errors.length > 0) {
+            errorCount++;
+          } else if (hasOverlap) {
+            overwriteCount++;
+          } else {
+            readyCount++;
+          }
+        });
+
         setImportRows(validatedRows);
         setImportSummary({ ready: readyCount, errors: errorCount, overwrites: overwriteCount });
         setImportPreviewOpen(true);
         setBottomSheetOpen(false);
-      } catch (err: any) {
-        console.error(err);
-        alert('Failed to parse Excel file');
+
+      } catch (err) {
+        console.error('Excel parse error:', err);
+        alert('Failed to parse Excel file: ' + (err as Error).message);
       }
+    };
+    reader.onerror = () => {
+      alert('Failed to read file. Please try again.');
     };
     reader.readAsArrayBuffer(file);
   };
