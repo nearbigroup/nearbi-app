@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
-import { Clock, RefreshCw, CircleCheck, CircleX, AlertTriangle, X, AlertCircle, Download, Upload, Check, List, LayoutGrid } from 'lucide-react';
+import { Clock, RefreshCw, CircleCheck, CircleX, AlertTriangle, X, AlertCircle, Download, Upload, Check, List, LayoutGrid, MoreVertical, Plus } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import * as XLSX from 'xlsx';
 import { DEPARTMENTS } from '@/lib/data';
@@ -96,7 +96,285 @@ export default function AttendancePage() {
     };
   }, [viewMode]);
 
+  // Edit Attendance States
+  const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
+  const [editRecord, setEditRecord] = useState<any | null>(null);
+  const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editCheckInTime, setEditCheckInTime] = useState('');
+  const [editCheckOutTime, setEditCheckOutTime] = useState('');
+  const [editStatus, setEditStatus] = useState<'present' | 'late' | 'absent'>('present');
+  const [editReason, setEditReason] = useState('');
 
+  // Delete Attendance States
+  const [deleteRecord, setDeleteRecord] = useState<any | null>(null);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+
+  // Add Attendance States
+  const [addModalOpen, setAddModalOpen] = useState(false);
+  const [addStaffId, setAddStaffId] = useState('');
+  const [addDate, setAddDate] = useState('');
+  const [addCheckIn, setAddCheckIn] = useState('');
+  const [addCheckOut, setAddCheckOut] = useState('');
+  const [addStatus, setAddStatus] = useState<'present' | 'late' | 'absent'>('present');
+  const [addReason, setAddReason] = useState('');
+
+  // Click outside menu closer
+  useEffect(() => {
+    const handleOutsideClick = () => {
+      setActiveMenuId(null);
+    };
+    if (activeMenuId) {
+      document.addEventListener('click', handleOutsideClick);
+    }
+    return () => {
+      document.removeEventListener('click', handleOutsideClick);
+    };
+  }, [activeMenuId]);
+
+  const handleOpenEdit = (item: any) => {
+    setEditRecord(item);
+    setEditCheckInTime(item.record?.check_in_time || '');
+    setEditCheckOutTime(item.record?.check_out_time || '');
+    setEditStatus(item.record?.status || 'present');
+    setEditReason('');
+    setEditModalOpen(true);
+  };
+
+  const handleOpenDelete = (item: any) => {
+    setDeleteRecord(item);
+    setDeleteConfirmOpen(true);
+  };
+
+  const calculateDerivedFields = (
+    checkIn: string | null,
+    checkOut: string | null,
+    status: string,
+    shift: any
+  ) => {
+    let minutes_late = 0;
+    let actual_hours_worked = 0;
+    let ot_minutes = 0;
+    let early_leave_minutes = 0;
+
+    const parseMins = (timeStr: string) => {
+      const [h, m] = timeStr.split(':').map(Number);
+      return h * 60 + m;
+    };
+
+    const shift_start_mins = shift?.start_time ? parseMins(shift.start_time) : 540; // 09:00 default
+    const shift_end_mins = shift?.end_time ? parseMins(shift.end_time) : 1080; // 18:00 default
+
+    if (status === 'late' && checkIn) {
+      const checkin_mins = parseMins(checkIn);
+      const diff = checkin_mins - shift_start_mins;
+      minutes_late = diff > 0 ? diff : 0;
+    }
+
+    if (checkIn && checkOut) {
+      const checkin_mins = parseMins(checkIn);
+      const checkout_mins = parseMins(checkOut);
+      actual_hours_worked = (checkout_mins - checkin_mins) / 60;
+      if (actual_hours_worked < 0) actual_hours_worked = 0;
+    }
+
+    if (checkOut) {
+      const checkout_mins = parseMins(checkOut);
+      const diff = checkout_mins - shift_end_mins;
+      ot_minutes = diff > 30 ? diff - 30 : 0;
+    }
+
+    if (checkOut) {
+      const checkout_mins = parseMins(checkOut);
+      const early = shift_end_mins - checkout_mins;
+      early_leave_minutes = early > 0 ? early : 0;
+    }
+
+    return {
+      minutes_late,
+      actual_hours_worked,
+      ot_minutes,
+      early_leave_minutes,
+    };
+  };
+
+  const handleSaveEdit = async () => {
+    if (!editRecord) return;
+    try {
+      const { record, name, shift, branch_id } = editRecord;
+      const { minutes_late, actual_hours_worked, ot_minutes, early_leave_minutes } = calculateDerivedFields(
+        editCheckInTime || null,
+        editCheckOutTime || null,
+        editStatus,
+        shift
+      );
+
+      let color_code = 'green';
+      if (editStatus === 'late') {
+        if (minutes_late <= 15) {
+          color_code = 'yellow';
+        } else if (minutes_late <= 30) {
+          color_code = 'orange';
+        } else {
+          color_code = 'red';
+        }
+      }
+
+      const updateData = {
+        check_in_time: editCheckInTime || null,
+        check_out_time: editCheckOutTime || null,
+        status: editStatus,
+        minutes_late,
+        actual_hours_worked,
+        ot_minutes,
+        early_leave_minutes,
+        color_code,
+        marked_by: 'manual_edit'
+      };
+
+      const { error: updateErr } = await supabase
+        .from('attendance')
+        .update(updateData)
+        .eq('id', record.id);
+
+      if (updateErr) throw updateErr;
+
+      // Insert wall event
+      await supabase.from('wall_events').insert({
+        event_type: 'attendance_edited',
+        staff_id: editRecord.id,
+        staff_name: name,
+        branch_id,
+        description: `${name} attendance edited on ${record.date} by ${user?.email}`
+      });
+
+      showToast("Attendance updated ✓");
+      setEditModalOpen(false);
+      setEditRecord(null);
+      fetchData();
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to save changes: ' + err.message);
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteRecord) return;
+    try {
+      const { record, name, branch_id } = deleteRecord;
+      
+      // Optimistic update
+      setAttendance((prev) => prev.filter((a) => a.id !== record.id));
+      setDeleteConfirmOpen(false);
+
+      const { error: deleteErr } = await supabase
+        .from('attendance')
+        .delete()
+        .eq('id', record.id);
+
+      if (deleteErr) throw deleteErr;
+
+      // Delete related late fines
+      await supabase
+        .from('late_fines')
+        .delete()
+        .eq('staff_id', deleteRecord.id)
+        .eq('date', record.date);
+
+      // Insert wall event
+      await supabase.from('wall_events').insert({
+        event_type: 'attendance_deleted',
+        staff_id: deleteRecord.id,
+        staff_name: name,
+        branch_id,
+        description: `${name} attendance record deleted for ${record.date} by ${user?.email}`
+      });
+
+      showToast("Record deleted");
+      setDeleteRecord(null);
+      fetchData();
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to delete record: ' + err.message);
+    }
+  };
+
+  const handleSaveAdd = async () => {
+    if (!addStaffId) {
+      alert('Please select a staff member.');
+      return;
+    }
+    try {
+      // Check if already exists
+      const { data: existing } = await supabase
+        .from('attendance')
+        .select('id')
+        .eq('staff_id', addStaffId)
+        .eq('date', addDate)
+        .maybeSingle();
+
+      if (existing) {
+        alert("Record already exists for this staff on this date. Use edit instead.");
+        return;
+      }
+
+      const selectedStaff = staff.find((s) => s.id === addStaffId);
+      if (!selectedStaff) throw new Error("Staff member not found");
+
+      const { minutes_late, actual_hours_worked, ot_minutes, early_leave_minutes } = calculateDerivedFields(
+        addCheckIn || null,
+        addCheckOut || null,
+        addStatus,
+        selectedStaff.shift
+      );
+
+      let color_code = 'green';
+      if (addStatus === 'late') {
+        if (minutes_late <= 15) {
+          color_code = 'yellow';
+        } else if (minutes_late <= 30) {
+          color_code = 'orange';
+        } else {
+          color_code = 'red';
+        }
+      }
+
+      const insertData = {
+        staff_id: addStaffId,
+        date: addDate,
+        check_in_time: addCheckIn || null,
+        check_out_time: addCheckOut || null,
+        status: addStatus,
+        minutes_late,
+        actual_hours_worked,
+        ot_minutes,
+        early_leave_minutes,
+        color_code,
+        marked_by: 'manual'
+      };
+
+      const { error: insertErr } = await supabase
+        .from('attendance')
+        .insert(insertData);
+
+      if (insertErr) throw insertErr;
+
+      // Insert wall event
+      await supabase.from('wall_events').insert({
+        event_type: 'attendance_added',
+        staff_id: addStaffId,
+        staff_name: selectedStaff.name,
+        branch_id: selectedStaff.branch_id,
+        description: `${selectedStaff.name} attendance record added for ${addDate} by ${user?.email}`
+      });
+
+      showToast("Record added ✓");
+      setAddModalOpen(false);
+      fetchData();
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to add record: ' + err.message);
+    }
+  };
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
   const [branchFilter, setBranchFilter] = useState<BranchFilter>('All');
   const [selectedPhoto, setSelectedPhoto] = useState<{ url: string; label: string; time?: string } | null>(null);
@@ -1219,6 +1497,23 @@ export default function AttendancePage() {
               <span>Floor</span>
             </button>
           </div>
+          {(user?.role === 'admin' || user?.role === 'ops_manager') && (
+            <button
+              onClick={() => {
+                setAddStaffId('');
+                setAddDate(new Date().toISOString().split('T')[0]);
+                setAddCheckIn('');
+                setAddCheckOut('');
+                setAddStatus('present');
+                setAddReason('');
+                setAddModalOpen(true);
+              }}
+              className="min-h-[40px] bg-white border border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-[0.98] text-[#1A1A1A] px-3.5 rounded-[12px] text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-sm cursor-pointer"
+            >
+              <Plus size={16} />
+              <span>Add Record</span>
+            </button>
+          )}
           <button
             onClick={() => setBottomSheetOpen(true)}
             className="min-h-[40px] bg-white border border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-[0.98] text-[#1A1A1A] px-3.5 rounded-[12px] text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-sm cursor-pointer"
@@ -1456,8 +1751,52 @@ export default function AttendancePage() {
                     </div>
 
                     {/* Status Badge */}
-                    <div className="flex-shrink-0">{getStatusBadge(item.record)}</div>
+                    <div
+                      className="flex-shrink-0"
+                      style={{
+                        marginRight: (item.record && (user?.role === 'admin' || user?.role === 'ops_manager')) ? '20px' : '0px'
+                      }}
+                    >
+                      {getStatusBadge(item.record)}
+                    </div>
                   </div>
+
+                  {/* Three dots menu */}
+                  {item.record && (user?.role === 'admin' || user?.role === 'ops_manager') && (
+                    <div className="absolute top-3 right-3" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActiveMenuId(activeMenuId === item.id ? null : item.id);
+                        }}
+                        className="text-[#999999] hover:text-[#1A1A1A] p-1 rounded-full hover:bg-[#F2F2F2] transition-colors"
+                      >
+                        <MoreVertical size={16} />
+                      </button>
+                      {activeMenuId === item.id && (
+                        <div className="absolute right-0 top-[28px] bg-white border border-[#E8E8E8] rounded-[10px] shadow-[0_4px_12px_rgba(0,0,0,0.10)] p-1 z-[100] min-w-[140px] w-[140px]">
+                          <div
+                            onClick={() => {
+                              setActiveMenuId(null);
+                              handleOpenEdit(item);
+                            }}
+                            className="p-[10px_14px] text-[13px] font-medium rounded-[8px] cursor-pointer flex items-center gap-2 text-[#1A1A1A] hover:bg-[#F8F8F8] transition-colors"
+                          >
+                            ✏️ <span>Edit record</span>
+                          </div>
+                          <div
+                            onClick={() => {
+                              setActiveMenuId(null);
+                              handleOpenDelete(item);
+                            }}
+                            className="p-[10px_14px] text-[13px] font-medium rounded-[8px] cursor-pointer flex items-center gap-2 text-[#C0392B] hover:bg-[#FDECEA] transition-colors"
+                          >
+                            🗑️ <span>Delete record</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* Metrics details */}
                   {hasCheckIn && item.record && (
@@ -1935,6 +2274,277 @@ export default function AttendancePage() {
               >
                 {isImporting ? 'Importing...' : 'Import all valid'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Edit Attendance Bottom Sheet */}
+      {editModalOpen && editRecord && (
+        <div className="fixed inset-0 z-[12000] flex items-end justify-center">
+          <div
+            className="absolute inset-0 bg-black/40 z-[999]"
+            onClick={() => {
+              setEditModalOpen(false);
+              setEditRecord(null);
+            }}
+          />
+          <div
+            className="bg-white rounded-t-[24px] shadow-lg relative z-[1000] w-full max-w-md p-6 overflow-y-auto animate-slide-up"
+            style={{
+              paddingBottom: 'calc(24px + env(safe-area-inset-bottom, 0px))',
+              maxHeight: '85vh',
+            }}
+          >
+            {/* Drag Handle */}
+            <div className="w-9 h-1 bg-[#E0E0E0] rounded-[2px] mx-auto mb-5" />
+
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-[#1A1A1A] text-base font-bold">Edit Attendance</h3>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditModalOpen(false);
+                  setEditRecord(null);
+                }}
+                className="text-[#999999] hover:text-[#1A1A1A]"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <p className="text-xs text-[var(--text-muted)] font-semibold uppercase tracking-wider">Staff Name</p>
+                <p className="text-sm font-bold text-[#1A1A1A] mt-0.5">{editRecord.name}</p>
+              </div>
+
+              <div>
+                <p className="text-xs text-[var(--text-muted)] font-semibold uppercase tracking-wider">Date</p>
+                <p className="text-sm font-bold text-[#1A1A1A] mt-0.5">{editRecord.record.date}</p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Check-in Time</label>
+                <input
+                  type="time"
+                  value={editCheckInTime}
+                  onChange={(e) => setEditCheckInTime(e.target.value)}
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Check-out Time</label>
+                <input
+                  type="time"
+                  value={editCheckOutTime}
+                  onChange={(e) => setEditCheckOutTime(e.target.value)}
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Status</label>
+                <select
+                  value={editStatus}
+                  onChange={(e) => setEditStatus(e.target.value as any)}
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
+                >
+                  <option value="present">Present</option>
+                  <option value="late">Late</option>
+                  <option value="absent">Absent</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Reason (optional)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Correcting wrong entry"
+                  value={editReason}
+                  onChange={(e) => setEditReason(e.target.value)}
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditModalOpen(false);
+                    setEditRecord(null);
+                  }}
+                  className="flex-1 min-h-[44px] bg-white border border-[#E8E8E8] hover:bg-[#F8F8F8] text-[#555555] font-bold text-xs rounded-[12px] active:scale-95 transition-all cursor-pointer flex items-center justify-center"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveEdit}
+                  className="flex-1 min-h-[44px] bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold text-xs rounded-[12px] active:scale-95 transition-all cursor-pointer flex items-center justify-center shadow-md"
+                >
+                  Save Changes
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Record Confirmation Dialog */}
+      {deleteConfirmOpen && deleteRecord && (
+        <div className="fixed inset-0 z-[12000] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => {
+              setDeleteConfirmOpen(false);
+              setDeleteRecord(null);
+            }}
+          />
+          <div className="bg-white rounded-[14px] border border-[#E8E8E8] p-5 relative z-10 max-w-sm w-full shadow-lg">
+            <h3 className="text-[#1A1A1A] text-base font-bold mb-2">Delete Record?</h3>
+            <p className="text-xs text-[#555555] font-semibold leading-relaxed mb-5">
+              Delete attendance for <span className="font-bold text-[#1A1A1A]">{deleteRecord.name}</span> on <span className="font-bold text-[#1A1A1A]">{deleteRecord.record.date}</span>? This cannot be undone.
+            </p>
+            <div className="flex justify-end space-x-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setDeleteConfirmOpen(false);
+                  setDeleteRecord(null);
+                }}
+                className="bg-[#F2F2F2] hover:bg-[#EBEBEB] text-[#555555] font-bold text-xs px-4 py-2.5 rounded-[12px] active:scale-95 transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                className="bg-[#C0392B] hover:bg-[#B03020] text-white font-bold text-xs px-4 py-2.5 rounded-[12px] active:scale-95 transition-all cursor-pointer shadow-md"
+              >
+                Yes, delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Attendance Record Bottom Sheet */}
+      {addModalOpen && (
+        <div className="fixed inset-0 z-[12000] flex items-end justify-center">
+          <div
+            className="absolute inset-0 bg-black/40 z-[999]"
+            onClick={() => setAddModalOpen(false)}
+          />
+          <div
+            className="bg-white rounded-t-[24px] shadow-lg relative z-[1000] w-full max-w-md p-6 overflow-y-auto animate-slide-up"
+            style={{
+              paddingBottom: 'calc(24px + env(safe-area-inset-bottom, 0px))',
+              maxHeight: '85vh',
+            }}
+          >
+            {/* Drag Handle */}
+            <div className="w-9 h-1 bg-[#E0E0E0] rounded-[2px] mx-auto mb-5" />
+
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-[#1A1A1A] text-base font-bold">Add Attendance Record</h3>
+              <button
+                type="button"
+                onClick={() => setAddModalOpen(false)}
+                className="text-[#999999] hover:text-[#1A1A1A]"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Select Staff</label>
+                <select
+                  value={addStaffId}
+                  onChange={(e) => setAddStaffId(e.target.value)}
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
+                >
+                  <option value="">-- Choose Staff member --</option>
+                  {staff.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name} — {s.department}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Date</label>
+                <input
+                  type="date"
+                  max={new Date().toISOString().split('T')[0]}
+                  value={addDate}
+                  onChange={(e) => setAddDate(e.target.value)}
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Check-in Time</label>
+                <input
+                  type="time"
+                  value={addCheckIn}
+                  onChange={(e) => setAddCheckIn(e.target.value)}
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Check-out Time</label>
+                <input
+                  type="time"
+                  value={addCheckOut}
+                  onChange={(e) => setAddCheckOut(e.target.value)}
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Status</label>
+                <select
+                  value={addStatus}
+                  onChange={(e) => setAddStatus(e.target.value as any)}
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
+                >
+                  <option value="present">Present</option>
+                  <option value="late">Late</option>
+                  <option value="absent">Absent</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Reason (optional)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Manual entry"
+                  value={addReason}
+                  onChange={(e) => setAddReason(e.target.value)}
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setAddModalOpen(false)}
+                  className="flex-1 min-h-[44px] bg-white border border-[#E8E8E8] hover:bg-[#F8F8F8] text-[#555555] font-bold text-xs rounded-[12px] active:scale-95 transition-all cursor-pointer flex items-center justify-center"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveAdd}
+                  className="flex-1 min-h-[44px] bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold text-xs rounded-[12px] active:scale-95 transition-all cursor-pointer flex items-center justify-center shadow-md"
+                >
+                  Save Changes
+                </button>
+              </div>
             </div>
           </div>
         </div>
