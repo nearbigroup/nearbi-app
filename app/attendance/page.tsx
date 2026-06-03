@@ -615,7 +615,10 @@ export default function AttendancePage() {
     
     const records = [];
     
-    for (let day = 1; day <= 31; day++) {
+    const [importYear, importMonth] = selectedMonth.split('-').map(Number);
+    const daysInMonth = new Date(importYear, importMonth, 0).getDate();
+
+    for (let day = 1; day <= daysInMonth; day++) {
       const inKey = `${day}-IN`;
       const outKey = `${day}-OUT`;
       
@@ -627,6 +630,20 @@ export default function AttendancePage() {
       
       // Only create record if at least check-in exists
       if (checkIn) {
+        const dateStr = `${importYear}-${String(importMonth).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+        
+        const testDate = new Date(dateStr);
+        if (isNaN(testDate.getTime())) {
+          // Skip invalid dates silently
+          continue;
+        }
+
+        // Also verify the date matches expected month
+        if (testDate.getMonth() + 1 !== importMonth) {
+          // Skip overflow dates
+          continue;
+        }
+
         records.push({
           pin,
           name,
