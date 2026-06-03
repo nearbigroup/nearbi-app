@@ -274,7 +274,7 @@ export default function LeavePage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-white text-2xl font-bold">Leave Requests</h1>
+          <h1 className="text-[#1A1A1A] text-2xl font-bold">Leave Requests</h1>
           <p className="text-[var(--text-muted)] text-xs font-semibold">
             {pendingRequests.length} pending review
           </p>
@@ -284,15 +284,15 @@ export default function LeavePage() {
             setLoading(true);
             fetchRequests();
           }}
-          className="min-h-[40px] bg-transparent border border-[var(--border-strong)] active:border-white text-[var(--text-secondary)] px-3 rounded-[10px] text-xs font-bold flex items-center justify-center space-x-1.5 transition-all active:scale-[0.97]"
+          className="min-h-[40px] bg-white border border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-[0.98] text-[#1A1A1A] px-3.5 rounded-[12px] text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-sm cursor-pointer"
         >
-          <RefreshCw size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
+          <RefreshCw size={16} strokeWidth={1.5} style={{ color: 'currentColor' }} />
           <span>Refresh</span>
         </button>
       </div>
 
       {errorMsg && (
-        <div className="bg-[var(--danger-bg)] border border-[var(--danger)] text-[#F87171] text-xs font-bold px-4 py-3 rounded-[10px] flex items-center justify-between">
+        <div className="bg-[var(--danger-bg)] border border-[var(--danger)]/30 text-[var(--danger)] text-xs font-bold px-4 py-3 rounded-[12px] flex items-center justify-between shadow-sm">
           <span>{errorMsg}</span>
           <button onClick={fetchRequests} className="text-xs underline font-bold">
             Retry
@@ -301,7 +301,7 @@ export default function LeavePage() {
       )}
 
       {/* Tabs */}
-      <div className="flex border-b border-[var(--border)]">
+      <div className="flex border-b border-[#E8E8E8]">
         {[
           { id: 'pending', label: 'Pending', count: pendingRequests.length },
           { id: 'approved', label: 'Approved', count: approvedRequests.length },
@@ -312,16 +312,16 @@ export default function LeavePage() {
             onClick={() => setActiveTab(tab.id as TabType)}
             className={`flex-1 text-center py-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-all flex items-center justify-center space-x-1.5 ${
               activeTab === tab.id
-                ? 'border-white text-white'
-                : 'border-transparent text-[var(--text-secondary)]'
+                ? 'border-[#1A1A1A] text-[#1A1A1A]'
+                : 'border-transparent text-[#555555]'
             }`}
           >
             <span>{tab.label}</span>
             <span
-              className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
+              className={`text-[9.5px] font-bold px-2 py-0.5 rounded-full transition-colors ${
                 activeTab === tab.id
-                  ? 'bg-white text-[#1E2028]'
-                  : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] border border-[var(--border-strong)]'
+                  ? 'bg-[#1A1A1A] text-white'
+                  : 'bg-[#F2F2F2] text-[#555555] border border-[#E8E8E8]'
               }`}
             >
               {tab.count}
@@ -337,9 +337,9 @@ export default function LeavePage() {
           <div className="skeleton h-[110px] w-full" />
         </div>
       ) : visibleData.length === 0 ? (
-        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-8 text-center flex flex-col items-center justify-center my-6">
-          <Calendar size={48} strokeWidth={1} style={{ color: '#2A2D38' }} className="mb-2" />
-          <h3 className="text-sm font-bold text-white">No requests found</h3>
+        <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-8 text-center flex flex-col items-center justify-center my-6 shadow-sm">
+          <Calendar size={48} strokeWidth={1} style={{ color: '#999999' }} className="mb-2" />
+          <h3 className="text-sm font-bold text-[#1A1A1A]">No requests found</h3>
           <p className="text-xs text-[var(--text-muted)] mt-1">
             No leave requests match the selected "{activeTab}" filter.
           </p>
@@ -349,16 +349,16 @@ export default function LeavePage() {
           {visibleData.map((r) => (
             <div
               key={r.id}
-              className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 flex flex-col relative shadow-sm"
+              className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col relative shadow-sm"
             >
               {/* Header profile info */}
               <div className="flex items-start justify-between mb-3.5">
                 <div className="flex items-center space-x-3">
-                  <div className="w-10 h-10 rounded-full bg-white/10 text-white border border-white/20 font-bold text-base flex items-center justify-center flex-shrink-0">
+                  <div className="w-10 h-10 rounded-full bg-[#1A1A1A] text-white font-bold text-base flex items-center justify-center flex-shrink-0">
                     {r.staff?.name.charAt(0).toUpperCase()}
                   </div>
                   <div>
-                    <h3 className="font-bold text-sm text-white leading-none">
+                    <h3 className="font-bold text-sm text-[#1A1A1A] leading-none">
                       {r.staff?.name}
                     </h3>
                     <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-1">
@@ -367,18 +367,18 @@ export default function LeavePage() {
                   </div>
                 </div>
 
-                <span className="text-[9px] font-bold text-[var(--text-secondary)] tracking-wider uppercase bg-[var(--bg-elevated)] border border-[var(--border-strong)] px-1.5 py-0.5 rounded">
+                <span className="text-[9px] font-bold text-[#555555] tracking-wider uppercase bg-[#F2F2F2] border border-[#E8E8E8] px-2 py-0.5 rounded-[20px]">
                   {getTimeAgo(r.requested_at)}
                 </span>
               </div>
 
               {/* Leave details */}
-              <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-lg p-3 text-xs mb-4">
-                <div className="font-bold text-white mb-1.5 flex items-center">
+              <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3.5 text-xs mb-4">
+                <div className="font-bold text-[#1A1A1A] mb-1.5 flex items-center">
                   <Calendar size={14} strokeWidth={1.5} className="mr-1.5 text-[var(--text-muted)]" />
                   <span>Date of Leave: {formatDate(r.date)}</span>
                 </div>
-                <div className="text-[var(--text-secondary)] font-medium">
+                <div className="text-[#555555] font-medium">
                   <span className="text-[var(--text-muted)] font-bold">Reason:</span> "{r.reason || 'None provided'}"
                 </div>
               </div>
@@ -388,14 +388,14 @@ export default function LeavePage() {
                 <div className="flex gap-3">
                   <button
                     onClick={() => handleAction(r.id, 'rejected')}
-                    className="flex-1 min-h-[38px] bg-[rgba(248,113,113,0.15)] border border-[rgba(248,113,113,0.3)] text-[#F87171] hover:bg-[rgba(248,113,113,0.25)] text-xs font-bold rounded-[10px] active:scale-95 transition-all flex items-center justify-center space-x-1"
+                    className="flex-1 min-h-[40px] bg-[var(--danger-bg)] border border-[var(--danger)]/20 text-[var(--danger)] hover:bg-[var(--danger-bg)]/80 text-xs font-bold rounded-[12px] active:scale-95 transition-all flex items-center justify-center space-x-1.5 cursor-pointer"
                   >
                     <X size={14} strokeWidth={1.5} />
                     <span>Reject</span>
                   </button>
                   <button
                     onClick={() => handleApproveClick(r)}
-                    className="flex-1 min-h-[38px] bg-white text-[#1E2028] font-bold text-xs rounded-[10px] active:scale-95 transition-transform flex items-center justify-center space-x-1"
+                    className="flex-1 min-h-[40px] bg-[#1A1A1A] text-white font-bold text-xs rounded-[12px] hover:bg-[#333333] active:scale-95 transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
                   >
                     <Check size={14} strokeWidth={1.5} />
                     <span>Approve</span>
@@ -403,10 +403,10 @@ export default function LeavePage() {
                 </div>
               ) : (
                 <div
-                  className={`text-xs font-bold p-2.5 rounded-[10px] border flex flex-col items-center justify-center space-y-1.5 ${
+                  className={`text-xs font-bold p-3 rounded-[12px] border flex flex-col items-center justify-center space-y-1.5 ${
                     r.status === 'approved'
-                      ? 'bg-[rgba(74,222,128,0.12)] text-[#4ADE80] border border-[rgba(74,222,128,0.2)]'
-                      : 'bg-[rgba(248,113,113,0.12)] text-[#F87171] border border-[rgba(248,113,113,0.2)]'
+                      ? 'bg-[var(--success-bg)] text-[var(--success)] border border-[var(--success)]/20'
+                      : 'bg-[var(--danger-bg)] text-[var(--danger)] border border-[var(--danger)]/20'
                   }`}
                 >
                   <div className="flex items-center space-x-1.5">
@@ -421,11 +421,11 @@ export default function LeavePage() {
                   {r.status === 'approved' && (
                     <div className="mt-1">
                       {r.is_quota_leave ? (
-                        <span className="text-[10px] font-bold text-[#4ADE80] bg-[rgba(74,222,128,0.12)] border border-[rgba(74,222,128,0.2)] px-2 py-0.5 rounded">
+                        <span className="text-[10px] font-bold text-[var(--success)] bg-white/60 border border-[var(--success)]/20 px-2 py-0.5 rounded-[20px]">
                           Within quota — no deduction
                         </span>
                       ) : (
-                        <span className="text-[10px] font-bold text-[#FBBF24] bg-[rgba(251,191,36,0.12)] border border-[rgba(251,191,36,0.2)] px-2 py-0.5 rounded">
+                        <span className="text-[10px] font-bold text-[var(--warning)] bg-white/60 border border-[var(--warning)]/20 px-2 py-0.5 rounded-[20px]">
                           Exceeds quota — salary deducted
                         </span>
                       )}
@@ -439,12 +439,12 @@ export default function LeavePage() {
       )}
 
       {quotaWarning && (
-        <div className="fixed inset-0 z-[12000] flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
-          <div className="bg-[#252830] border border-[#2A2D38] rounded-[20px] max-w-sm w-full p-6 flex flex-col space-y-4 shadow-2xl text-center">
+        <div className="fixed inset-0 z-[12000] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="bg-white border border-[#E8E8E8] rounded-[20px] max-w-sm w-full p-6 flex flex-col space-y-4 shadow-2xl text-center">
             <div className="flex flex-col items-center">
-              <span className="text-[#FBBF24] mb-2 text-3xl">⚠️</span>
-              <h3 className="text-white text-base font-bold">Quota Warning</h3>
-              <p className="text-[var(--text-secondary)] text-xs font-semibold mt-2 leading-relaxed">
+              <span className="text-[var(--warning)] mb-2 text-3xl">⚠️</span>
+              <h3 className="text-[#1A1A1A] text-base font-bold">Quota Warning</h3>
+              <p className="text-[#555555] text-xs font-semibold mt-2 leading-relaxed">
                 This staff has used all <strong>{quotaWarning.earnedQuota}</strong> earned leave days this month.
                 Approving will deduct 1 day salary (<strong>₹{quotaWarning.deductionAmount.toLocaleString()}</strong>).
                 Approve anyway?
@@ -454,14 +454,14 @@ export default function LeavePage() {
               <button
                 type="button"
                 onClick={() => setQuotaWarning(null)}
-                className="flex-1 min-h-[38px] bg-transparent border border-[#363A48] text-white font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
+                className="flex-1 min-h-[40px] bg-white border border-[#E8E8E8] text-[#1A1A1A] hover:bg-[#F8F8F8] font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={() => executeApproval(quotaWarning.id, false)}
-                className="flex-1 min-h-[38px] bg-[#FBBF24] hover:bg-[#F59E0B] text-[#1E2028] font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
+                className="flex-1 min-h-[40px] bg-[#1A1A1A] text-white hover:bg-[#333333] font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
               >
                 Approve with Deduction
               </button>
@@ -472,7 +472,7 @@ export default function LeavePage() {
 
       {/* Global Toast */}
       {toastMsg && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[15000] bg-[var(--success-bg)] border border-[var(--success)] text-[#4ADE80] font-bold text-xs px-4 py-2.5 rounded-full shadow-lg">
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[15000] bg-[var(--success-bg)] border border-[var(--success)]/20 text-[var(--success)] font-bold text-xs px-4 py-2.5 rounded-full shadow-lg">
           {toastMsg}
         </div>
       )}

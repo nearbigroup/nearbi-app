@@ -24,6 +24,7 @@ export default function KioskPage() {
   const [errorMsg, setErrorMsg] = useState('');
   const [cameraError, setCameraError] = useState(false);
   const [stats, setStats] = useState({ checkedIn: 0, late: 0, checkedOut: 0, onBreak: 0 });
+  const [effectiveBranch, setEffectiveBranch] = useState<string | null>(null);
 
   const [resultData, setResultData] = useState<{
     status: 'green' | 'yellow' | 'orange' | 'red' | 'blue';
@@ -37,6 +38,11 @@ export default function KioskPage() {
   const streamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
+    const branch = userBranch || localStorage.getItem('nearbi_branch');
+    setEffectiveBranch(branch);
+  }, [userBranch]);
+
+  useEffect(() => {
     setCurrentTime(new Date());
     const timer = setInterval(() => {
       const now = new Date();
@@ -47,7 +53,7 @@ export default function KioskPage() {
     }, 1000);
     autoCloseBreaks();
     return () => clearInterval(timer);
-  }, [userBranch]);
+  }, [effectiveBranch]);
 
   // Try to ensure bucket exists on app startup
   // IMPORTANT: Create storage bucket manually
@@ -73,14 +79,14 @@ export default function KioskPage() {
 
   // Fetch branch-isolated stats every 30 seconds
   const fetchStats = async () => {
-    if (!userBranch) return;
+    if (!effectiveBranch) return;
     try {
       const todayStr = new Date().toISOString().split('T')[0];
       
       const { data: branchStaffIds, error: staffErr } = await supabase
         .from('staff')
         .select('id')
-        .eq('branch_id', userBranch)
+        .eq('branch_id', effectiveBranch)
         .eq('active', true);
 
       if (staffErr) throw staffErr;
@@ -144,7 +150,7 @@ export default function KioskPage() {
     fetchStats();
     const interval = setInterval(fetchStats, 30000);
     return () => clearInterval(interval);
-  }, [userBranch]);
+  }, [effectiveBranch]);
 
   // Submit PIN automatic lookups
   useEffect(() => {
@@ -156,7 +162,7 @@ export default function KioskPage() {
   const handleLookup = async (enteredPin: string) => {
     setKioskState('LOADING');
     try {
-      if (!userBranch) {
+      if (!effectiveBranch) {
         throw new Error('Branch not set for kiosk');
       }
 
@@ -165,7 +171,7 @@ export default function KioskPage() {
         .from('staff')
         .select('*, shift:shifts(*)')
         .eq('pin', enteredPin)
-        .eq('branch_id', userBranch)
+        .eq('branch_id', effectiveBranch)
         .eq('active', true)
         .maybeSingle();
 
@@ -453,7 +459,7 @@ export default function KioskPage() {
             type: 'late_fine',
             title: 'Late Fine Incurred',
             message: `${staff.name} is ${minutesLate}m late (${colorCode} warning).`,
-            branchId: userBranch,
+            branchId: effectiveBranch,
             staffId: staff.id,
             relatedId: todayStr,
             targetRole: 'staff_executive',
@@ -474,7 +480,7 @@ export default function KioskPage() {
             type: 'early_in_pending',
             title: 'Early Check-in Approval Required',
             message: `${staff.name} checked in ${earlyInMinutes}m early.`,
-            branchId: userBranch,
+            branchId: effectiveBranch,
             staffId: staff.id,
             relatedId: todayStr,
             targetRole: 'staff_executive',
@@ -638,7 +644,7 @@ export default function KioskPage() {
             type: 'ot_pending',
             title: 'OT Approval Required',
             message: `${staff.name} completed ${otMins}m Overtime.`,
-            branchId: userBranch,
+            branchId: effectiveBranch,
             staffId: staff.id,
             relatedId: todayStr,
             targetRole: 'staff_executive',
@@ -1030,14 +1036,14 @@ export default function KioskPage() {
   if (!currentTime) return null;
 
   return (
-    <div className="fixed inset-0 bg-[#1E2028] text-white flex flex-col font-sans overflow-hidden select-none">
+    <div className="fixed inset-0 bg-[#1A1A1A] text-white flex flex-col font-sans overflow-hidden select-none">
       {/* Top Header */}
       <div className="flex flex-col items-center pt-8 pb-4">
         <div className="font-[900] text-[40px] tracking-tight flex items-center leading-none mb-1">
-          <span className="text-white">near</span>
-          <span className="text-white">bi</span>
+          <span className="text-white font-bold">near</span>
+          <span className="text-white font-bold">bi</span>
         </div>
-        <div className="text-[#6B7280] text-xs font-bold uppercase tracking-widest">
+        <div className="text-[#999999] text-xs font-bold uppercase tracking-widest">
           Staff Attendance Kiosk
         </div>
       </div>
@@ -1051,11 +1057,11 @@ export default function KioskPage() {
             <div className="text-white text-4xl font-extrabold mb-1 tracking-wide">
               {formatTime(currentTime)}
             </div>
-            <div className="text-[#6B7280] text-xs font-medium mb-8">
+            <div className="text-[#999999] text-xs font-medium mb-8">
               {formatDate(currentTime)}
             </div>
 
-            <div className="text-[#9CA3AF] text-xs font-bold uppercase tracking-wider mb-4">
+            <div className="text-[#999999] text-xs font-bold uppercase tracking-wider mb-4">
               Enter your 4-digit PIN
             </div>
 
@@ -1064,10 +1070,10 @@ export default function KioskPage() {
               {[0, 1, 2, 3].map((i) => (
                 <div
                   key={i}
-                  className={`w-4.5 h-4.5 rounded-full transition-all duration-200 ${
+                  className={`w-4 h-4 rounded-full transition-all duration-200 ${
                     pin.length > i
-                      ? 'bg-white scale-110 shadow-[0_0_12px_rgba(255,255,255,0.6)]'
-                      : 'border-2 border-[#2A2D38] bg-transparent'
+                      ? 'bg-white scale-110 shadow-[0_0_12px_rgba(255,255,255,0.4)]'
+                      : 'border-2 border-[#333333] bg-transparent'
                   }`}
                 />
               ))}
@@ -1080,7 +1086,7 @@ export default function KioskPage() {
                   key={num}
                   type="button"
                   onClick={() => handleKeyPress(num)}
-                  className="bg-[#252830] hover:bg-[#2E3140] active:bg-[#2E3140] active:scale-95 text-white py-4 text-xl font-bold rounded-xl transition-all border border-[#2A2D38]"
+                  className="bg-[#222222] hover:bg-[#2A2A2A] active:bg-[#2A2A2A] active:scale-95 text-white py-4 text-xl font-bold rounded-[12px] transition-all border border-[#333333] min-h-[48px]"
                 >
                   {num}
                 </button>
@@ -1088,21 +1094,21 @@ export default function KioskPage() {
               <button
                 type="button"
                 onClick={handleBackspace}
-                className="bg-[#252830] hover:bg-[#2E3140] active:bg-[#2E3140] active:scale-95 text-[#F87171] py-4 text-sm font-bold rounded-xl transition-all border border-[#2A2D38] flex items-center justify-center"
+                className="bg-[#222222] hover:bg-[#2A2A2A] active:bg-[#2A2A2A] active:scale-95 text-[#C0392B] py-4 text-sm font-bold rounded-[12px] transition-all border border-[#333333] flex items-center justify-center min-h-[48px]"
               >
                 DEL
               </button>
               <button
                 type="button"
                 onClick={() => handleKeyPress('0')}
-                className="bg-[#252830] hover:bg-[#2E3140] active:bg-[#2E3140] active:scale-95 text-white py-4 text-xl font-bold rounded-xl transition-all border border-[#2A2D38]"
+                className="bg-[#222222] hover:bg-[#2A2A2A] active:bg-[#2A2A2A] active:scale-95 text-white py-4 text-xl font-bold rounded-[12px] transition-all border border-[#333333] min-h-[48px]"
               >
                 0
               </button>
               <button
                 type="button"
                 onClick={() => {}}
-                className="bg-[#252830] text-gray-500 py-4 text-xl font-bold rounded-xl border border-[#2A2D38] cursor-default flex items-center justify-center"
+                className="bg-[#222222] text-[#555555] py-4 text-xl font-bold rounded-[12px] border border-[#333333] cursor-default flex items-center justify-center min-h-[48px]"
                 disabled
               >
                 <Check size={16} strokeWidth={2.5} />
@@ -1113,20 +1119,20 @@ export default function KioskPage() {
 
         {kioskState === 'LOADING' && (
           <div className="flex flex-col items-center space-y-3">
-            <div className="w-10 h-10 border-4 border-[#2E3140] border-t-white rounded-full animate-spin"></div>
-            <div className="text-gray-400 text-sm font-semibold">Processing...</div>
+            <div className="w-10 h-10 border-4 border-[#333333] border-t-white rounded-full animate-spin"></div>
+            <div className="text-[#999999] text-sm font-semibold">Processing...</div>
           </div>
         )}
 
         {kioskState === 'STAFF_FOUND' && staff && (
           <div className="w-full flex flex-col items-center">
-            <div className="text-[#6B7280] text-xs font-bold uppercase tracking-wider mb-1">
+            <div className="text-[#999999] text-xs font-bold uppercase tracking-wider mb-1">
               Welcome back
             </div>
             <div className="text-3xl font-extrabold text-white text-center mb-1">
               {staff.name}
             </div>
-            <div className="text-white text-xs font-bold mb-8 bg-white/10 px-3 py-1 rounded-full border border-white/20">
+            <div className="text-white text-xs font-bold mb-8 bg-white/10 px-3 py-1 rounded-[20px] border border-white/20">
               Shift: {staff.shift?.label} ({staff.shift?.start_time} - {staff.shift?.end_time})
             </div>
 
@@ -1134,7 +1140,7 @@ export default function KioskPage() {
               <button
                 type="button"
                 onClick={() => startCamera('CHECK_IN')}
-                className="bg-[rgba(74,222,128,0.15)] border border-[rgba(74,222,128,0.3)] hover:bg-[rgba(74,222,128,0.25)] text-[#4ADE80] py-[18px] rounded-xl text-xs font-bold flex flex-col items-center justify-center space-y-2 active:scale-[0.98] transition-all"
+                className="bg-[rgba(45,122,58,0.15)] border border-[rgba(45,122,58,0.3)] hover:bg-[rgba(45,122,58,0.25)] text-[#2D7A3A] py-[18px] rounded-[12px] text-xs font-bold flex flex-col items-center justify-center space-y-2 active:scale-[0.98] transition-all min-h-[48px]"
               >
                 <UserCheck size={22} strokeWidth={1.5} />
                 <span>CHECK IN</span>
@@ -1143,7 +1149,7 @@ export default function KioskPage() {
               <button
                 type="button"
                 onClick={() => startCamera('CHECK_OUT')}
-                className="bg-[rgba(96,165,250,0.15)] border border-[rgba(96,165,250,0.3)] hover:bg-[rgba(96,165,250,0.25)] text-[#60A5FA] py-[18px] rounded-xl text-xs font-bold flex flex-col items-center justify-center space-y-2 active:scale-[0.98] transition-all"
+                className="bg-[rgba(26,95,168,0.15)] border border-[rgba(26,95,168,0.3)] hover:bg-[rgba(26,95,168,0.25)] text-[#1A5FA8] py-[18px] rounded-[12px] text-xs font-bold flex flex-col items-center justify-center space-y-2 active:scale-[0.98] transition-all min-h-[48px]"
               >
                 <LogOut size={22} strokeWidth={1.5} />
                 <span>CHECK OUT</span>
@@ -1152,7 +1158,7 @@ export default function KioskPage() {
               <button
                 type="button"
                 onClick={handleBreakStart}
-                className="bg-[rgba(251,191,36,0.15)] border border-[rgba(251,191,36,0.3)] hover:bg-[rgba(251,191,36,0.25)] text-[#FBBF24] py-[18px] rounded-xl text-xs font-bold flex flex-col items-center justify-center space-y-2 active:scale-[0.98] transition-all"
+                className="bg-[rgba(184,134,11,0.15)] border border-[rgba(184,134,11,0.3)] hover:bg-[rgba(184,134,11,0.25)] text-[#B8860B] py-[18px] rounded-[12px] text-xs font-bold flex flex-col items-center justify-center space-y-2 active:scale-[0.98] transition-all min-h-[48px]"
               >
                 <Coffee size={22} strokeWidth={1.5} />
                 <span>BREAK START</span>
@@ -1161,7 +1167,7 @@ export default function KioskPage() {
               <button
                 type="button"
                 onClick={handleBreakEnd}
-                className="bg-transparent border border-white/30 hover:bg-white/10 text-white py-[18px] rounded-xl text-xs font-bold flex flex-col items-center justify-center space-y-2 active:scale-[0.98] transition-all"
+                className="bg-transparent border border-white/20 hover:bg-white/10 text-white py-[18px] rounded-[12px] text-xs font-bold flex flex-col items-center justify-center space-y-2 active:scale-[0.98] transition-all min-h-[48px]"
               >
                 <RotateCcw size={22} strokeWidth={1.5} />
                 <span>BREAK END</span>
@@ -1171,7 +1177,8 @@ export default function KioskPage() {
             <button
               type="button"
               onClick={resetKiosk}
-              className="mt-8 border border-[#363A48] text-[#9CA3AF] hover:text-white px-4 py-2 rounded-xl text-xs font-bold bg-transparent transition-all"
+              className="mt-8 border border-[#333333] text-[#999999] hover:text-white px-4 py-2.5 rounded-[12px] text-xs font-bold bg-transparent transition-all min-h-[40px]"
+
             >
               Cancel
             </button>
@@ -1179,26 +1186,26 @@ export default function KioskPage() {
         )}
 
         {kioskState === 'CAMERA' && (
-          <div className="absolute inset-0 bg-[#1E2028] z-50 flex flex-col">
+          <div className="absolute inset-0 bg-[#1A1A1A] z-50 flex flex-col">
             <button
               type="button"
               onClick={resetKiosk}
-              className="absolute top-6 left-6 text-white font-bold bg-[#252830]/80 border border-[#363A48] px-4 py-2 rounded-full text-xs z-50 active:scale-95"
+              className="absolute top-6 left-6 text-white font-bold bg-[#222222]/80 border border-[#333333] px-4 py-2 rounded-[20px] text-xs z-50 active:scale-95"
             >
               Cancel
             </button>
 
             {cameraError ? (
               <div className="flex-1 flex flex-col items-center justify-center p-6 text-center space-y-4">
-                <Camera size={48} strokeWidth={1.5} className="text-[#9CA3AF]" />
+                <Camera size={48} strokeWidth={1.5} className="text-[#999999]" />
                 <h3 className="text-lg font-bold">Camera access required</h3>
-                <p className="text-sm text-[#9CA3AF]">
+                <p className="text-sm text-[#999999]">
                   Please allow camera permissions in your browser settings to verify your identity.
                 </p>
                 <button
                   type="button"
                   onClick={() => startCamera(flow)}
-                  className="bg-white text-[#1E2028] font-bold px-6 py-2.5 rounded-lg text-sm active:scale-95"
+                  className="bg-white text-[#1A1A1A] font-bold px-6 py-2.5 rounded-[12px] text-sm active:scale-95"
                 >
                   Retry Camera
                 </button>
@@ -1216,16 +1223,16 @@ export default function KioskPage() {
                   <div className="absolute inset-0 bg-black/40" />
 
                   {/* Circular Face Overlay */}
-                  <div className="z-10 w-64 h-64 rounded-full border-4 border-white shadow-[0_0_0_9999px_rgba(30,32,40,0.85)] flex items-center justify-center relative">
+                  <div className="z-10 w-64 h-64 rounded-full border-4 border-white shadow-[0_0_0_9999px_rgba(26,26,26,0.85)] flex items-center justify-center relative">
                     <div className="absolute inset-0 border-2 border-transparent rounded-full animate-pulse" />
                   </div>
                 </div>
 
-                <div className="p-6 bg-[#252830] border-t border-[#2A2D38] flex justify-center pb-12">
+                <div className="p-6 bg-[#222222] border-t border-[#333333] flex justify-center pb-12">
                   <button
                     type="button"
                     onClick={handleCapture}
-                    className="bg-white hover:bg-gray-200 text-[#1E2028] font-black text-base py-3.5 px-10 rounded-full active:scale-95 transition-transform flex items-center space-x-2 shadow-lg"
+                    className="bg-white hover:bg-gray-200 text-[#1A1A1A] font-bold text-base py-3.5 px-10 rounded-[28px] active:scale-95 transition-transform flex items-center space-x-2 shadow-lg"
                   >
                     <Camera size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
                     <span>Take Photo</span>
@@ -1239,8 +1246,8 @@ export default function KioskPage() {
         {/* Error Modal */}
         {kioskState === 'ERROR' && (
           <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm">
-            <div className="bg-[#2E3140] border border-[#363A48] text-white p-6 rounded-2xl max-w-[280px] w-full text-center shadow-2xl flex flex-col items-center">
-              <AlertCircle size={48} strokeWidth={1.5} className="text-[#F87171] mb-3" />
+            <div className="bg-[#222222] border border-[#333333] text-white p-6 rounded-[14px] max-w-[280px] w-full text-center shadow-lg flex flex-col items-center">
+              <AlertCircle size={48} strokeWidth={1.5} className="text-[#C0392B] mb-3" />
               <h3 className="text-base font-black leading-tight">{errorMsg}</h3>
             </div>
           </div>
@@ -1250,16 +1257,16 @@ export default function KioskPage() {
         {kioskState === 'RESULT' && resultData && staff && (
           <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md">
             <div
-              className={`p-8 rounded-[24px] max-w-[300px] w-full text-center shadow-2xl flex flex-col items-center border ${
+              className={`p-8 rounded-[14px] max-w-[300px] w-full text-center shadow-lg flex flex-col items-center border ${
                 resultData.status === 'green'
-                  ? 'bg-[rgba(74,222,128,0.12)] border-[rgba(74,222,128,0.3)] text-[#4ADE80]'
+                  ? 'bg-[rgba(45,122,58,0.12)] border-[rgba(45,122,58,0.3)] text-[#4ADE80]'
                   : resultData.status === 'yellow'
-                  ? 'bg-[rgba(251,191,36,0.12)] border-[rgba(251,191,36,0.3)] text-[#FBBF24]'
+                  ? 'bg-[rgba(184,134,11,0.12)] border-[rgba(184,134,11,0.3)] text-[#FBBF24]'
                   : resultData.status === 'orange'
                   ? 'bg-[rgba(251,146,60,0.12)] border-[rgba(251,146,60,0.3)] text-[#FB923C]'
                   : resultData.status === 'red'
-                  ? 'bg-[rgba(248,113,113,0.12)] border-[rgba(248,113,113,0.3)] text-[#F87171]'
-                  : 'bg-[rgba(96,165,250,0.12)] border-[rgba(96,165,250,0.3)] text-[#60A5FA]'
+                  ? 'bg-[rgba(192,57,43,0.12)] border-[rgba(192,57,43,0.3)] text-[#F87171]'
+                  : 'bg-[rgba(26,95,168,0.12)] border-[rgba(26,95,168,0.3)] text-[#60A5FA]'
               }`}
             >
               <div className="mb-4">
@@ -1279,7 +1286,7 @@ export default function KioskPage() {
               </div>
 
               <h2 className="text-2xl font-black mb-1 truncate max-w-full text-white">{staff.name}</h2>
-              <div className="bg-white/10 border border-white/20 text-xs font-bold px-3 py-1 rounded-full mb-5 text-white">
+              <div className="bg-white/10 border border-white/20 text-xs font-bold px-3 py-1 rounded-[20px] mb-5 text-white">
                 {formatTime(currentTime).split(' ')[0]}
               </div>
 
@@ -1297,24 +1304,24 @@ export default function KioskPage() {
 
       {/* Kiosk Status Bar */}
       {kioskState !== 'CAMERA' && (
-        <div className="bg-[#252830] border-t border-[#2A2D38] py-4 px-6 flex justify-between items-center text-xs font-black tracking-wider text-[#6B7280] select-none pb-[calc(16px+env(safe-area-inset-bottom,0px))]">
+        <div className="bg-[#222222] border-t border-[#333333] py-4 px-6 flex justify-between items-center text-xs font-bold tracking-wider text-[#999999] select-none pb-[calc(16px+env(safe-area-inset-bottom,0px))]">
           <div className="flex items-center space-x-1.5">
-            <UserCheck size={16} strokeWidth={1.5} className="text-[#4ADE80]" />
+            <UserCheck size={16} strokeWidth={1.5} className="text-[#2D7A3A]" />
             <span className="text-white font-bold">{stats.checkedIn}</span>
             <span>Checked in</span>
           </div>
           <div className="flex items-center space-x-1.5">
-            <Timer size={16} strokeWidth={1.5} className="text-[#FBBF24]" />
+            <Timer size={16} strokeWidth={1.5} className="text-[#B8860B]" />
             <span className="text-white font-bold">{stats.late}</span>
             <span>Late</span>
           </div>
           <div className="flex items-center space-x-1.5">
-            <Coffee size={16} strokeWidth={1.5} className="text-[#FBBF24]" />
+            <Coffee size={16} strokeWidth={1.5} className="text-[#B8860B]" />
             <span className="text-white font-bold">{stats.onBreak || 0}</span>
             <span>On break</span>
           </div>
           <div className="flex items-center space-x-1.5">
-            <LogOut size={16} strokeWidth={1.5} className="text-[#60A5FA]" />
+            <LogOut size={16} strokeWidth={1.5} className="text-[#1A5FA8]" />
             <span className="text-white font-bold">{stats.checkedOut}</span>
             <span>Checked out</span>
           </div>
@@ -1345,11 +1352,11 @@ export default function KioskPage() {
       {/* Sign Out Confirmation Modal */}
       {showSignOutConfirm && (
         <div className="fixed inset-0 z-[12000] flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
-          <div className="bg-[#252830] border border-[#2A2D38] rounded-[20px] max-w-xs w-full p-6 flex flex-col space-y-4 shadow-2xl text-center">
+          <div className="bg-[#222222] border border-[#333333] rounded-[14px] max-w-xs w-full p-6 flex flex-col space-y-4 shadow-lg text-center">
             <div className="flex flex-col items-center">
-              <AlertTriangle size={36} strokeWidth={1.5} className="text-[#FBBF24] mb-2" />
+              <AlertTriangle size={36} strokeWidth={1.5} className="text-[#B8860B] mb-2" />
               <h3 className="text-white text-base font-bold">Sign out of kiosk?</h3>
-              <p className="text-[var(--text-secondary)] text-xs font-semibold mt-1">
+              <p className="text-[#999999] text-xs font-semibold mt-1">
                 You will need to sign in again to access this branch kiosk.
               </p>
             </div>
@@ -1357,14 +1364,14 @@ export default function KioskPage() {
               <button
                 type="button"
                 onClick={() => setShowSignOutConfirm(false)}
-                className="flex-1 min-h-[38px] bg-transparent border border-[#363A48] text-white font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
+                className="flex-1 min-h-[38px] bg-transparent border border-[#333333] text-white font-bold text-xs rounded-[12px] active:scale-95 transition-all cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={handleConfirmSignOut}
-                className="flex-1 min-h-[38px] bg-red-600 hover:bg-red-700 text-white font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
+                className="flex-1 min-h-[38px] bg-[#C0392B] hover:bg-[#A93226] text-white font-bold text-xs rounded-[12px] active:scale-95 transition-all cursor-pointer"
               >
                 Sign out
               </button>

@@ -6,7 +6,6 @@ import { supabase } from '@/lib/supabase';
 import { createNotification } from '@/lib/notifications';
 import Link from 'next/link';
 import {
-  LayoutDashboard,
   Clock,
   Users,
   ClipboardList,
@@ -19,7 +18,6 @@ import {
   UserX,
   AlertCircle,
   CircleCheck,
-  CircleX,
   ChevronRight,
   Activity,
   Cake,
@@ -50,18 +48,6 @@ interface AttendanceRecord {
   status: 'present' | 'late' | 'absent';
   color_code: 'green' | 'yellow' | 'orange' | 'red';
   minutes_late: number;
-}
-
-interface LeaveRequest {
-  id: string;
-  staff_id: string;
-  date: string;
-  status: 'pending' | 'approved' | 'rejected';
-}
-
-interface AdjustmentRecord {
-  id: string;
-  status: 'pending' | 'approved' | 'rejected';
 }
 
 export default function DashboardPage() {
@@ -382,12 +368,12 @@ export default function DashboardPage() {
 
   if (errorMsg) {
     return (
-      <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-6 text-center max-w-sm mx-auto my-8 flex flex-col items-center justify-center">
-        <AlertCircle size={48} strokeWidth={1.5} style={{ color: '#F87171' }} className="mb-3" />
-        <h3 className="text-base font-bold text-white mb-1">
+      <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-6 text-center max-w-sm mx-auto my-8 flex flex-col items-center justify-center shadow-sm">
+        <AlertCircle size={48} strokeWidth={1.5} style={{ color: '#C0392B' }} className="mb-3" />
+        <h3 className="text-base font-bold text-[#1A1A1A] mb-1">
           {errorMsg}
         </h3>
-        <p className="text-xs text-[var(--text-muted)] mb-5">
+        <p className="text-xs text-[#999999] mb-5">
           Please verify your connection and try again.
         </p>
         <button
@@ -396,7 +382,7 @@ export default function DashboardPage() {
             setErrorMsg('');
             fetchDashboardData();
           }}
-          className="bg-white text-[#1E2028] font-bold px-6 py-2 rounded-[10px] text-sm active:scale-95 transition-transform"
+          className="bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold px-6 py-2.5 rounded-[10px] text-xs active:scale-95 transition-all shadow"
         >
           Retry
         </button>
@@ -408,10 +394,10 @@ export default function DashboardPage() {
     <div className="space-y-6">
       {/* Header Info */}
       <div>
-        <p className="text-[var(--text-muted)] text-[12px] font-semibold mb-0.5">
+        <p className="text-[#999999] text-xs font-semibold mb-0.5">
           {getFormattedDate()}
         </p>
-        <h1 className="text-white text-2xl font-bold">{getGreeting()}</h1>
+        <h1 className="text-[#1A1A1A] text-2xl font-bold">{getGreeting()} 👋</h1>
       </div>
 
       {loading ? (
@@ -424,23 +410,23 @@ export default function DashboardPage() {
         <>
           {/* Branch tabs wrapper */}
           {canSeeAllBranches && (
-            <div className="flex border-b border-[var(--border)]">
+            <div className="flex bg-[#F2F2F2] rounded-full p-1 w-full">
               <button
                 onClick={() => setActiveTab('daily')}
-                className={`flex-1 text-center py-2.5 text-sm font-bold transition-all border-b-2 ${
+                className={`flex-1 text-center py-2 text-xs font-bold rounded-full transition-all ${
                   activeTab === 'daily'
-                    ? 'border-white text-white'
-                    : 'border-transparent text-[var(--text-secondary)]'
+                    ? 'bg-[#1A1A1A] text-white shadow-sm'
+                    : 'text-[#555555] hover:text-[#1A1A1A]'
                 }`}
               >
                 Nearbi Daily
               </button>
               <button
                 onClick={() => setActiveTab('hypermarket')}
-                className={`flex-1 text-center py-2.5 text-sm font-bold transition-all border-b-2 ${
+                className={`flex-1 text-center py-2 text-xs font-bold rounded-full transition-all ${
                   activeTab === 'hypermarket'
-                    ? 'border-white text-white'
-                    : 'border-transparent text-[var(--text-secondary)]'
+                    ? 'bg-[#1A1A1A] text-white shadow-sm'
+                    : 'text-[#555555] hover:text-[#1A1A1A]'
                 }`}
               >
                 Nearbi Hypermarket
@@ -448,81 +434,71 @@ export default function DashboardPage() {
             </div>
           )}
 
-          {/* Branch summary card */}
-          <div className="bg-[var(--bg-surface)] border border-[var(--border)] border-l-2 border-l-white/20 rounded-[14px] p-5 shadow-sm">
-            <div className="flex items-center space-x-2 mb-3.5">
-              <Building2 size={16} strokeWidth={1.5} style={{ color: 'white' }} />
-              <h3 className="text-white font-bold text-base capitalize">
+          {/* Branch summary card (BLACK FEATURED CARD STYLE) */}
+          <div className="featured-card bg-[#1A1A1A] rounded-[20px] p-5 shadow-[0_8px_24px_rgba(0,0,0,0.15)] text-white">
+            <div className="flex items-center space-x-2 mb-4 relative z-10">
+              <Building2 size={18} strokeWidth={1.5} className="text-white" />
+              <h3 className="text-white font-bold text-[15px] uppercase tracking-wider">
                 {activeTab === 'daily' ? 'Nearbi Daily' : 'Nearbi Hypermarket'}
               </h3>
             </div>
             
-            <div className="grid grid-cols-4 gap-2.5 text-center mb-4">
-              <div className="bg-[var(--bg-elevated)] border border-[var(--border)] rounded-[10px] p-2.5 flex flex-col justify-center">
+            <div className="grid grid-cols-4 gap-2.5 text-center mb-4 relative z-10">
+              <div className="bg-white/10 border border-white/5 rounded-[12px] p-2.5 flex flex-col justify-center">
                 <div className="text-[#4ADE80] text-xl font-extrabold">{activeStats.present}</div>
-                <div className="text-[10px] text-[var(--text-muted)] font-bold uppercase tracking-wider mt-0.5">Present</div>
+                <div className="text-[10px] text-white/60 font-bold uppercase tracking-wider mt-0.5">Present</div>
               </div>
-              <div className="bg-[var(--bg-elevated)] border border-[var(--border)] rounded-[10px] p-2.5 flex flex-col justify-center">
+              <div className="bg-white/10 border border-white/5 rounded-[12px] p-2.5 flex flex-col justify-center">
                 <div className="text-[#FBBF24] text-xl font-extrabold">{activeStats.late}</div>
-                <div className="text-[10px] text-[var(--text-muted)] font-bold uppercase tracking-wider mt-0.5">Late</div>
+                <div className="text-[10px] text-white/60 font-bold uppercase tracking-wider mt-0.5">Late</div>
               </div>
-              <div className="bg-[var(--bg-elevated)] border border-[var(--border)] rounded-[10px] p-2.5 flex flex-col justify-center">
+              <div className="bg-white/10 border border-white/5 rounded-[12px] p-2.5 flex flex-col justify-center">
                 <div className="text-[#F87171] text-xl font-extrabold">{activeStats.absent}</div>
-                <div className="text-[10px] text-[var(--text-muted)] font-bold uppercase tracking-wider mt-0.5">Absent</div>
+                <div className="text-[10px] text-white/60 font-bold uppercase tracking-wider mt-0.5">Absent</div>
               </div>
-              <div className="bg-[var(--bg-elevated)] border border-[var(--border)] rounded-[10px] p-2.5 flex flex-col justify-center">
+              <div className="bg-white/10 border border-white/5 rounded-[12px] p-2.5 flex flex-col justify-center">
                 <div className="text-[#60A5FA] text-xl font-extrabold">{activeStats.checkedOut}</div>
-                <div className="text-[10px] text-[var(--text-muted)] font-bold uppercase tracking-wider mt-0.5">Out</div>
+                <div className="text-[10px] text-white/60 font-bold uppercase tracking-wider mt-0.5">Out</div>
               </div>
             </div>
 
-            <p className="text-[var(--text-muted)] text-xs font-bold">
-              Total: {activeStats.total} staff
+            <p className="text-white/60 text-xs font-semibold relative z-10">
+              Total: <span className="text-white font-bold">{activeStats.total}</span> active staff
             </p>
           </div>
 
           {/* Alerts section */}
           {(absentStaffAlerts.length > 0 || lateArrivalsAlerts.length > 0 || pendingLeavesCount > 0 || pendingApprovalsCount > 0) && (
             <div className="space-y-3">
-              <h4 className="text-[var(--text-muted)] text-[10px] font-black uppercase tracking-widest">
+              <h4 className="text-[#999999] text-[11px] font-black uppercase tracking-wider">
                 Alerts
               </h4>
 
               {/* Absent staff alert */}
               {absentStaffAlerts.length > 0 && (
-                <div className="bg-[rgba(248,113,113,0.08)] border border-[rgba(248,113,113,0.2)] rounded-[14px] p-4 text-left">
-                  <div className="font-bold text-[#F87171] text-xs flex items-center mb-1">
-                    <UserX size={16} strokeWidth={1.5} style={{ color: '#F87171' }} className="mr-1.5 flex-shrink-0" />
+                <div className="bg-white border border-[#E8E8E8] border-l-[4px] border-l-[#C0392B] rounded-[14px] p-4 text-left shadow-sm">
+                  <div className="font-bold text-[#C0392B] text-xs flex items-center mb-1">
+                    <UserX size={16} strokeWidth={1.5} className="mr-1.5 flex-shrink-0 text-[#C0392B]" />
                     {absentStaffAlerts.length} staff absent today
                   </div>
-                  <div className="text-[11px] text-[var(--text-secondary)] opacity-90 pl-5 space-y-0.5 leading-relaxed font-semibold whitespace-pre-line">
-                    {absentStaffAlerts.map((s) => s.name).join('\n')}
+                  <div className="text-[11px] text-[#555555] pl-5 space-y-0.5 leading-relaxed font-semibold whitespace-pre-line">
+                    {absentStaffAlerts.map((s) => s.name).join(', ')}
                   </div>
                 </div>
               )}
 
               {/* Late arrivals alert */}
               {lateArrivalsAlerts.length > 0 && (
-                <div className="bg-[rgba(251,191,36,0.08)] border border-[rgba(251,191,36,0.2)] rounded-[14px] p-4 text-left">
-                  <div className="font-bold text-[#FBBF24] text-xs flex items-center mb-2">
-                    <AlertTriangle size={16} strokeWidth={1.5} style={{ color: '#FBBF24' }} className="mr-1.5 flex-shrink-0" />
+                <div className="bg-white border border-[#E8E8E8] border-l-[4px] border-l-[#B8860B] rounded-[14px] p-4 text-left shadow-sm">
+                  <div className="font-bold text-[#B8860B] text-xs flex items-center mb-2">
+                    <AlertTriangle size={16} strokeWidth={1.5} className="mr-1.5 flex-shrink-0 text-[#B8860B]" />
                     {lateArrivalsAlerts.length} staff arrived late
                   </div>
                   <div className="pl-5 space-y-1">
                     {lateArrivalsAlerts.map((s, i) => (
-                      <div key={i} className="text-[11px] text-[var(--text-secondary)] font-semibold flex items-center">
+                      <div key={i} className="text-[11px] text-[#555555] font-semibold flex items-center">
                         {s.name} — {s.minutes} mins late
-                        <span
-                          className="inline-block w-2 h-2 rounded-full ml-1.5"
-                          style={{
-                            backgroundColor:
-                              s.color === 'yellow'
-                                ? '#FBBF24'
-                                : s.color === 'orange'
-                                ? '#FB923C'
-                                : '#F87171',
-                          }}
-                        />
+                        <span className="inline-block w-1.5 h-1.5 rounded-full ml-1.5 bg-[#B8860B]" />
                       </div>
                     ))}
                   </div>
@@ -533,15 +509,15 @@ export default function DashboardPage() {
               {pendingLeavesCount > 0 && (
                 <Link
                   href="/leave"
-                  className="block bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 text-left active:bg-[var(--bg-elevated)] transition-colors"
+                  className="block bg-white border border-[#E8E8E8] border-l-[4px] border-l-[#1A1A1A] rounded-[14px] p-4 text-left active:bg-[#F8F8F8] transition-colors shadow-sm"
                 >
-                  <div className="font-bold text-white text-xs flex items-center justify-between">
-                    <span className="flex items-center">
-                      <ClipboardList size={16} strokeWidth={1.5} style={{ color: 'white' }} className="mr-1.5 flex-shrink-0" />
+                  <div className="font-bold text-[#1A1A1A] text-xs flex items-center justify-between">
+                    <span className="flex items-center text-[#1A1A1A]">
+                      <ClipboardList size={16} strokeWidth={1.5} className="mr-1.5 flex-shrink-0 text-[#1A1A1A]" />
                       {pendingLeavesCount} leave requests pending approval
                     </span>
-                    <span className="text-[10px] uppercase font-bold text-white/80 tracking-wider flex items-center">
-                      Tap to review <ChevronRight size={14} strokeWidth={1.5} className="ml-1" />
+                    <span className="text-[10px] uppercase font-bold text-[#999999] tracking-wider flex items-center">
+                      Review <ChevronRight size={14} strokeWidth={1.5} className="ml-0.5" />
                     </span>
                   </div>
                 </Link>
@@ -551,15 +527,15 @@ export default function DashboardPage() {
               {pendingApprovalsCount > 0 && (
                 <Link
                   href="/approvals"
-                  className="block bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 text-left active:bg-[var(--bg-elevated)] transition-colors"
+                  className="block bg-white border border-[#E8E8E8] border-l-[4px] border-l-[#1A1A1A] rounded-[14px] p-4 text-left active:bg-[#F8F8F8] transition-colors shadow-sm"
                 >
-                  <div className="font-bold text-white text-xs flex items-center justify-between">
-                    <span className="flex items-center">
-                      <CheckSquare size={16} strokeWidth={1.5} style={{ color: 'white' }} className="mr-1.5 flex-shrink-0" />
+                  <div className="font-bold text-[#1A1A1A] text-xs flex items-center justify-between">
+                    <span className="flex items-center text-[#1A1A1A]">
+                      <CheckSquare size={16} strokeWidth={1.5} className="mr-1.5 flex-shrink-0 text-[#1A1A1A]" />
                       {pendingApprovalsCount} OT/early-in approvals pending
                     </span>
-                    <span className="text-[10px] uppercase font-bold text-white/80 tracking-wider flex items-center">
-                      Review <ChevronRight size={14} strokeWidth={1.5} className="ml-1" />
+                    <span className="text-[10px] uppercase font-bold text-[#999999] tracking-wider flex items-center">
+                      Review <ChevronRight size={14} strokeWidth={1.5} className="ml-0.5" />
                     </span>
                   </div>
                 </Link>
@@ -567,7 +543,7 @@ export default function DashboardPage() {
             </div>
           )}
 
-          {/* Birthday Tracker Card (Hidden from Admin/Owner) */}
+          {/* Birthday Tracker Card */}
           {user?.role !== 'admin' && (() => {
             const activeBranchStaff = staffList.filter((s) => s.branch_id === activeTab);
             const activeBranchBirthdays = activeBranchStaff
@@ -583,35 +559,34 @@ export default function DashboardPage() {
 
             return (
               <div className="space-y-3">
-                <h4 className="text-[var(--text-muted)] text-[10px] font-black uppercase tracking-widest">
-                  <span style={{display:'flex',
-                    alignItems:'center', gap:'6px'}}>
-                    <Cake size={16} strokeWidth={1.5} />
-                    Upcoming Birthdays
-                  </span>
+                <h4 className="text-[#999999] text-[11px] font-black uppercase tracking-wider flex items-center gap-1">
+                  <Cake size={14} strokeWidth={1.5} />
+                  <span>Upcoming Birthdays</span>
                 </h4>
-                <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 space-y-3.5 shadow-sm">
+                <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 space-y-3 shadow-sm">
                   {activeBranchBirthdays.map((s) => {
                     const dob = new Date(s.date_of_birth!);
                     const formattedDob = dob.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
                     return (
                       <div key={s.id} className="flex items-center justify-between text-xs font-semibold">
                         <div className="flex items-center space-x-2.5">
-                          <PartyPopper size={14} strokeWidth={1.5} />
+                          <div className="w-7 h-7 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center font-bold text-xs">
+                            {s.name.charAt(0).toUpperCase()}
+                          </div>
                           <div>
-                            <p className="font-bold text-white leading-none">{s.name}</p>
-                            <p className="text-[10px] text-[var(--text-muted)] mt-0.5 leading-none">{s.department}</p>
+                            <p className="font-bold text-[#1A1A1A] leading-tight">{s.name}</p>
+                            <p className="text-[10px] text-[#999999] mt-0.5 leading-tight">{s.department}</p>
                           </div>
                         </div>
                         <div className="text-right">
-                          <span className={`font-bold px-2 py-0.5 rounded text-[10px] uppercase tracking-wider ${
+                          <span className={`font-bold px-2 py-0.5 rounded-full text-[9px] uppercase tracking-wider ${
                             s.daysUntil === 0 
-                              ? 'bg-[rgba(74,222,128,0.12)] text-[#4ADE80] border border-[rgba(74,222,128,0.2)]'
-                              : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)] border border-[var(--border-strong)]'
+                              ? 'bg-[#EDF7EF] text-[#2D7A3A] border border-[#C3E6CB]'
+                              : 'bg-[#F2F2F2] text-[#555555] border border-[#E8E8E8]'
                           }`}>
                             {s.daysUntil === 0 ? (
-                              <span className="flex items-center gap-1">
-                                Today <PartyPopper size={14} strokeWidth={1.5} />
+                              <span className="flex items-center gap-1 font-extrabold">
+                                Today <PartyPopper size={11} strokeWidth={2} />
                               </span>
                             ) : (
                               `In ${s.daysUntil} days (${formattedDob})`
@@ -628,41 +603,49 @@ export default function DashboardPage() {
 
           {/* Quick Actions */}
           <div>
-            <h4 className="text-[var(--text-muted)] text-[10px] font-black uppercase tracking-widest mb-3">
+            <h4 className="text-[#999999] text-[11px] font-black uppercase tracking-wider mb-3">
               Quick Actions
             </h4>
             
             <div className="grid grid-cols-2 gap-3">
               <Link
                 href="/attendance"
-                className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 min-height-[72px] flex flex-col items-center justify-center text-center hover:border-white/30 active:border-white/30 transition-all"
+                className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group"
               >
-                <Clock size={24} strokeWidth={1.5} style={{ color: '#FBBF24' }} className="mb-1.5" />
-                <span className="text-xs font-bold text-[var(--text-primary)]">Attendance</span>
+                <div className="w-9 h-9 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center mb-2">
+                  <Clock size={16} strokeWidth={1.5} className="text-white" />
+                </div>
+                <span className="text-[13px] font-bold text-[#1A1A1A]">Attendance</span>
               </Link>
 
               <Link
                 href="/staff"
-                className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 min-height-[72px] flex flex-col items-center justify-center text-center hover:border-white/30 active:border-white/30 transition-all"
+                className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group"
               >
-                <Users size={24} strokeWidth={1.5} style={{ color: '#60A5FA' }} className="mb-1.5" />
-                <span className="text-xs font-bold text-[var(--text-primary)]">Staff</span>
+                <div className="w-9 h-9 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center mb-2">
+                  <Users size={16} strokeWidth={1.5} className="text-white" />
+                </div>
+                <span className="text-[13px] font-bold text-[#1A1A1A]">Staff</span>
               </Link>
 
               <Link
                 href="/leave"
-                className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 min-height-[72px] flex flex-col items-center justify-center text-center hover:border-white/30 active:border-white/30 transition-all"
+                className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group"
               >
-                <ClipboardList size={24} strokeWidth={1.5} style={{ color: '#4ADE80' }} className="mb-1.5" />
-                <span className="text-xs font-bold text-[var(--text-primary)]">Leave Requests</span>
+                <div className="w-9 h-9 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center mb-2">
+                  <ClipboardList size={16} strokeWidth={1.5} className="text-white" />
+                </div>
+                <span className="text-[13px] font-bold text-[#1A1A1A]">Leave Requests</span>
               </Link>
 
               <Link
                 href="/approvals"
-                className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 min-height-[72px] flex flex-col items-center justify-center text-center hover:border-white/30 active:border-white/30 transition-all"
+                className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group"
               >
-                <CheckSquare size={24} strokeWidth={1.5} style={{ color: '#FB923C' }} className="mb-1.5" />
-                <span className="text-xs font-bold text-[var(--text-primary)]">Approvals</span>
+                <div className="w-9 h-9 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center mb-2">
+                  <CheckSquare size={16} strokeWidth={1.5} className="text-white" />
+                </div>
+                <span className="text-[13px] font-bold text-[#1A1A1A]">Approvals</span>
               </Link>
 
               {/* Owner/Ops only Settings + Salary links */}
@@ -670,18 +653,22 @@ export default function DashboardPage() {
                 <>
                   <Link
                     href="/salary"
-                    className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 min-height-[72px] flex flex-col items-center justify-center text-center hover:border-white/30 active:border-white/30 transition-all"
+                    className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group"
                   >
-                    <Wallet size={24} strokeWidth={1.5} style={{ color: '#4ADE80' }} className="mb-1.5" />
-                    <span className="text-xs font-bold text-[var(--text-primary)]">Salary</span>
+                    <div className="w-9 h-9 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center mb-2">
+                      <Wallet size={16} strokeWidth={1.5} className="text-white" />
+                    </div>
+                    <span className="text-[13px] font-bold text-[#1A1A1A]">Salary</span>
                   </Link>
 
                   <Link
                     href="/settings"
-                    className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 min-height-[72px] flex flex-col items-center justify-center text-center hover:border-white/30 active:border-white/30 transition-all"
+                    className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group"
                   >
-                    <Settings size={24} strokeWidth={1.5} style={{ color: '#9CA3AF' }} className="mb-1.5" />
-                    <span className="text-xs font-bold text-[var(--text-primary)]">Settings</span>
+                    <div className="w-9 h-9 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center mb-2">
+                      <Settings size={16} strokeWidth={1.5} className="text-white" />
+                    </div>
+                    <span className="text-[13px] font-bold text-[#1A1A1A]">Settings</span>
                   </Link>
                 </>
               )}
@@ -690,20 +677,24 @@ export default function DashboardPage() {
               {user?.role !== 'admin' && (
                 <Link
                   href="/wall"
-                  className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 min-height-[72px] flex flex-col items-center justify-center text-center hover:border-white/30 active:border-white/30 transition-all col-span-2"
+                  className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group col-span-2"
                 >
-                  <Activity size={24} strokeWidth={1.5} style={{ color: '#F87171' }} className="mb-1.5" />
-                  <span className="text-xs font-bold text-[var(--text-primary)]">The Wall</span>
+                  <div className="w-9 h-9 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center mb-2 mx-auto">
+                    <Activity size={16} strokeWidth={1.5} className="text-white" />
+                  </div>
+                  <span className="text-[13px] font-bold text-[#1A1A1A]">The Wall</span>
                 </Link>
               )}
 
               {/* Open kiosk */}
               <Link
                 href="/kiosk"
-                className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 min-height-[72px] flex flex-col items-center justify-center text-center hover:border-white/30 active:border-white/30 transition-all col-span-2"
+                className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group col-span-2"
               >
-                <Fingerprint size={24} strokeWidth={1.5} style={{ color: '#60A5FA' }} className="mb-1.5" />
-                <span className="text-xs font-bold text-[var(--text-primary)]">Open Attendance Kiosk</span>
+                <div className="w-9 h-9 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center mb-2 mx-auto">
+                  <Fingerprint size={16} strokeWidth={1.5} className="text-white" />
+                </div>
+                <span className="text-[13px] font-bold text-[#1A1A1A]">Open Attendance Kiosk</span>
               </Link>
             </div>
           </div>

@@ -2,14 +2,16 @@
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
+import { supabase } from './supabase';
 
-export type Role = 'admin' | 'ops_manager' | 'staff_executive' | 'kiosk';
+export type Role = 'admin' | 'ops_manager' | 'staff_executive' | 'kiosk' | 'staff';
 
 export interface AuthUser {
   email: string;
   role: Role;
   branch: string | null;
   name: string;
+  staffId?: string;
 }
 
 export const VALID_USERS: Record<string, AuthUser & { password: string }> = {
@@ -63,6 +65,8 @@ interface AuthContextType {
   canSeeSalaryBreakdown: boolean;
   canSeeAllBranches: boolean;
   login: (email: string, pass: string) => Promise<boolean>;
+  staffLogin: (mobile: string, pass: string) => Promise<boolean>;
+  changePassword: (mobile: string, oldPass: string, newPass: string) => Promise<boolean>;
   logout: () => void;
   setBranch: (branchId: string | null) => void;
   isLoading: boolean;
@@ -109,18 +113,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    if (user.role === 'kiosk') {
-      if (pathname !== '/kiosk') {
-        router.replace('/kiosk');
+    if (user.role === 'staff') {
+      if (!pathname.startsWith('/my')) {
+        router.replace('/my');
       }
     } else {
-      // Other roles visiting /kiosk -> redirect to dashboard
-      if (pathname === '/kiosk') {
-        router.replace('/dashboard');
-      }
-      // Other roles visiting / -> redirect to dashboard
-      else if (pathname === '/') {
-        router.replace('/dashboard');
+      if (pathname.startsWith('/my')) {
+        if (user.role === 'kiosk') {
+          router.replace('/kiosk');
+        } else {
+          router.replace('/dashboard');
+        }
+      } else if (user.role === 'kiosk') {
+        if (pathname !== '/kiosk') {
+          router.replace('/kiosk');
+        }
+      } else {
+        // Other roles visiting /kiosk -> redirect to dashboard
+        if (pathname === '/kiosk') {
+          router.replace('/dashboard');
+        }
+        // Other roles visiting / -> redirect to dashboard
+        else if (pathname === '/') {
+          router.replace('/dashboard');
+        }
       }
     }
   }, [user, pathname, isLoading, router]);
@@ -152,6 +168,54 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return false;
   };
 
+  const staffLogin = async (mobile: string, pass: string): Promise<boolean> => {
+    const { data: account, error } = await supabase
+      .from('staff_accounts')
+      .select('*, staff(*)')
+      .eq('mobile_number', mobile.trim())
+      .maybeSingle();
+
+    if (error || !account) return false;
+    if (account.password !== pass) return false;
+
+    const u: AuthUser = {
+      email: mobile,
+      role: 'staff',
+      staffId: account.staff_id,
+      name: account.staff?.name,
+      branch: account.staff?.branch_id,
+    };
+    setUser(u);
+    localStorage.setItem('nearbi_user', JSON.stringify(u));
+
+    // Update last login
+    await supabase
+      .from('staff_accounts')
+      .update({ last_login: new Date().toISOString() })
+      .eq('id', account.id);
+
+    router.push('/my');
+    return true;
+  };
+
+  const changePassword = async (
+    mobile: string,
+    oldPassword: string,
+    newPassword: string
+  ): Promise<boolean> => {
+    const { data, error } = await supabase
+      .from('staff_accounts')
+      .select('id, password')
+      .eq('mobile_number', mobile)
+      .maybeSingle();
+    if (error || !data || data.password !== oldPassword) return false;
+    await supabase
+      .from('staff_accounts')
+      .update({ password: newPassword })
+      .eq('id', data.id);
+    return true;
+  };
+
   const logout = () => {
     setUser(null);
     setUserBranchState(null);
@@ -161,19 +225,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const setBranch = (branchId: string | null) => {
-    // Only allow setting branch if user is allowed to see multiple branches
-    const role = user?.role;
-    const isHeadHr = role === 'staff_executive' && user?.branch === null;
-    const isOwnerOrOps = role === 'admin' || role === 'ops_manager';
-    const isKiosk = role === 'kiosk';
-    
-    if (isOwnerOrOps || isHeadHr || isKiosk) {
-      setUserBranchState(branchId);
-      if (branchId) {
-        localStorage.setItem('nearbi_branch', branchId);
-      } else {
-        localStorage.removeItem('nearbi_branch');
-      }
+    // Allow ALL roles to set branch
+    // Remove any role restrictions on this function
+    setUserBranchState(branchId);
+    if (branchId) {
+      localStorage.setItem('nearbi_branch', branchId);
+    } else {
+      localStorage.removeItem('nearbi_branch');
     }
   };
 
@@ -191,6 +249,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         canSeeSalaryBreakdown,
         canSeeAllBranches,
         login,
+        staffLogin,
+        changePassword,
         logout,
         setBranch,
         isLoading

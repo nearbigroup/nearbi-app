@@ -185,7 +185,7 @@ export default function NotificationsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-white text-2xl font-bold">Notifications</h1>
+          <h1 className="text-[#1A1A1A] text-2xl font-bold">Notifications</h1>
           <p className="text-[var(--text-muted)] text-xs font-semibold">
             Alert logs
           </p>
@@ -193,14 +193,14 @@ export default function NotificationsPage() {
         <button
           onClick={handleMarkAllRead}
           disabled={notifications.filter((n) => !n.is_read).length === 0}
-          className="min-h-[44px] bg-transparent border border-[var(--border-strong)] disabled:opacity-30 disabled:pointer-events-none active:scale-95 px-4 rounded-lg text-xs font-bold text-[var(--text-secondary)] hover:text-white hover:border-white transition-all"
+          className="min-h-[44px] bg-white border border-[#E8E8E8] disabled:opacity-30 disabled:pointer-events-none active:scale-95 px-4 rounded-xl text-xs font-bold text-[#1A1A1A] hover:bg-[#F8F8F8] transition-all cursor-pointer shadow-sm"
         >
           Mark all as read
         </button>
       </div>
 
       {errorMsg && (
-        <div className="bg-[var(--danger-bg)] border border-[var(--danger)] text-[#F87171] text-xs font-bold px-4 py-3 rounded-[10px] flex items-center justify-between">
+        <div className="bg-[var(--danger-bg)] border border-[var(--danger)]/30 text-[var(--danger)] text-xs font-bold px-4 py-3 rounded-[12px] flex items-center justify-between shadow-sm">
           <span>{errorMsg}</span>
           <button onClick={fetchNotifications} className="text-xs underline font-bold">
             Retry
@@ -216,9 +216,9 @@ export default function NotificationsPage() {
           <div className="skeleton h-[72px] w-full" />
         </div>
       ) : notifications.length === 0 ? (
-        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-8 text-center flex flex-col items-center justify-center my-6">
-          <Bell size={48} strokeWidth={1} style={{ color: '#2D3140' }} className="mb-2" />
-          <h3 className="text-sm font-bold text-white">Inbox clean!</h3>
+        <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-8 text-center flex flex-col items-center justify-center my-6 shadow-sm">
+          <Bell size={48} strokeWidth={1} style={{ color: '#999999' }} className="mb-2" />
+          <h3 className="text-sm font-bold text-[#1A1A1A]">Inbox clean!</h3>
           <p className="text-xs text-[var(--text-muted)] mt-1">
             You don't have any notifications right now.
           </p>
@@ -233,29 +233,29 @@ export default function NotificationsPage() {
                 onClick={() => handleNotificationClick(notif)}
                 className={`border rounded-[14px] p-3.5 flex items-start space-x-3.5 cursor-pointer transition-all ${
                   isUnread
-                    ? 'bg-[rgba(251,191,36,0.06)] border-[#FBBF24]/20 hover:border-[#FBBF24]/40'
-                    : 'bg-[var(--bg-surface)] border-[var(--border)] hover:border-white/20'
+                    ? 'bg-[var(--warning-bg)] border-[var(--warning)]/20 hover:border-[var(--warning)]/40 hover:bg-[var(--warning-bg)]/80'
+                    : 'bg-white border-[#E8E8E8] hover:bg-[#F8F8F8]'
                 }`}
               >
                 {/* Type Emoji */}
-                <div className="w-10 h-10 rounded-full bg-[var(--bg-elevated)] border border-[var(--border-strong)] flex items-center justify-center flex-shrink-0 relative">
+                <div className="w-10 h-10 rounded-full bg-[#F8F8F8] border border-[#E8E8E8] flex items-center justify-center flex-shrink-0 relative">
                   {getIconForType(notif.type)}
                   {isUnread && (
-                    <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-[#FBBF24] border-2 border-[var(--bg-surface)] rounded-full" />
+                    <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-[var(--warning)] border-2 border-white rounded-full" />
                   )}
                 </div>
 
                 {/* Details */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between mb-0.5">
-                    <h3 className={`text-xs font-bold truncate ${isUnread ? 'text-white' : 'text-[var(--text-secondary)]'}`}>
+                    <h3 className={`text-xs font-bold truncate ${isUnread ? 'text-[#1A1A1A]' : 'text-[#555555]'}`}>
                       {notif.title}
                     </h3>
                     <span className="text-[9px] font-bold text-[var(--text-muted)] whitespace-nowrap pl-2">
                       {formatReceivedTime(notif.created_at)}
                     </span>
                   </div>
-                  <p className="text-[11px] text-[var(--text-muted)] font-semibold leading-normal truncate">
+                  <p className={`text-[11px] font-semibold leading-normal truncate ${isUnread ? 'text-[#1A1A1A]' : 'text-[var(--text-muted)]'}`}>
                     {scrubMessageBody(notif.type, notif.message)}
                   </p>
                 </div>
@@ -267,7 +267,7 @@ export default function NotificationsPage() {
 
       {/* Global Toast */}
       {toastMsg && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[15000] bg-[var(--success-bg)] border border-[var(--success)] text-[#4ADE80] font-bold text-xs px-4 py-2.5 rounded-full shadow-lg">
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[15000] bg-[var(--success-bg)] border border-[var(--success)]/20 text-[var(--success)] font-bold text-xs px-4 py-2.5 rounded-full shadow-lg">
           {toastMsg}
         </div>
       )}

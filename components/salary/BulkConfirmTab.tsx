@@ -42,12 +42,24 @@ export default function BulkConfirmTab() {
       if (staffError) throw staffError;
       if (!staffData) return;
 
-      // 2. Fetch OT minutes from attendance for this month
+      // 2. Fetch OT minutes and other details from attendance for this month
+      const year = parseInt(month.split('-')[0]);
+      const monthNum = parseInt(month.split('-')[1]);
       const startDate = `${month}-01`;
-      const endDate = `${month}-31`;
+      const endDate = new Date(year, monthNum, 0).toISOString().split('T')[0];
       const { data: attData, error: attError } = await supabase
         .from('attendance')
-        .select('staff_id, date, check_in_time, status, ot_minutes, ot_approved, early_leave_minutes')
+        .select(`
+          staff_id,
+          date,
+          check_in_time,
+          status,
+          ot_minutes,
+          ot_approved,
+          early_in_minutes,
+          early_in_approved,
+          early_leave_minutes
+        `)
         .gte('date', startDate)
         .lte('date', endDate);
 
@@ -118,36 +130,31 @@ export default function BulkConfirmTab() {
       const year = parseInt(month.split('-')[0]);
       const monthNum = parseInt(month.split('-')[1]);
       
-      const config = {
-        monthlySalary: s.monthly_salary,
-        offDaysPerMonth: s.off_days_per_month,
-        shiftHours: s.shift.hours,
-        year,
-        month: monthNum,
-      };
-      
-      const calendarDays = new Date(year, monthNum, 0).getDate();
-      
       // Filter attendance records for current staff
       const staffAtt = attendanceRecords.filter((r) => r.staff_id === s.id);
       
       const extraLeaveDays = extraLeaves[s.id] || 0;
       
-      const daysActuallyWorked = Math.max(0, (staffAtt.filter(
-        (r) => r.check_in_time !== null
-      ).length || 0) - extraLeaveDays);
+      // Real days worked
+      const daysActuallyWorked = Math.max(
+        0,
+        (staffAtt.filter((r) => r.check_in_time !== null).length || 0) - extraLeaveDays
+      );
 
-      const approvedOTMins = staffAtt.filter(
-        (r) => r.ot_approved === true
-      ).reduce((sum, r) => sum + (r.ot_minutes || 0), 0) || 0;
+      // Approved OT minutes only
+      const approvedOTMinutes = staffAtt
+        .filter((r) => r.ot_approved === true)
+        .reduce((sum, r) => sum + (r.ot_minutes || 0), 0) || 0;
 
-      const earlyLeaveMins = staffAtt.reduce(
+      // Approved early check-in minutes only
+      const approvedEarlyInMinutes = staffAtt
+        .filter((r) => r.early_in_approved === true)
+        .reduce((sum, r) => sum + (r.early_in_minutes || 0), 0) || 0;
+
+      // Early leave minutes total
+      const earlyLeaveMinutes = staffAtt.reduce(
         (sum, r) => sum + (r.early_leave_minutes || 0), 0
       ) || 0;
-
-      // Hourly rate for early leave deduction
-      const hourlyRate = s.monthly_salary / ((30 - s.off_days_per_month) * s.shift.hours);
-      const earlyLeaveDeduction = (earlyLeaveMins / 60) * hourlyRate;
 
       // Calculate confirmed late fines (not waived)
       const staffLateFines = lateFines.filter(
@@ -163,26 +170,39 @@ export default function BulkConfirmTab() {
         (sum, sf) => sum + Number(sf.edited_amount ?? sf.amount), 0
       );
 
-      const attendance = {
-        daysActuallyWorked,
-        confirmedFines: totalLateFinesAmt,
-        approvedOTMinutes: approvedOTMins,
-        approvedEarlyInMinutes: 0,
-        earlyLeaveDeductionAmount: earlyLeaveDeduction,
-      };
-      
-      const breakdown = calculateSalary(config, attendance);
-      const netSalary = Math.max(0, breakdown.netSalary - totalSpecialFinesAmt);
+      const shiftHours = s.shift?.hours || 9;
+
+      const breakdown = calculateSalary(
+        {
+          monthlySalary: s.monthly_salary,
+          offDaysPerMonth: s.off_days_per_month as 0 | 2 | 4,
+          shiftHours,
+          year,
+          month: monthNum,
+        },
+        {
+          daysActuallyWorked,
+          confirmedLateFines: totalLateFinesAmt,
+          confirmedSpecialFines: totalSpecialFinesAmt,
+          approvedOTMinutes,
+          approvedEarlyInMinutes,
+          earlyLeaveMinutes,
+        }
+      );
+
+      const netSalary = Math.max(0, breakdown.netSalary);
 
       newSalaryData[s.id] = {
         net_salary: netSalary,
         ot_pay: breakdown.otPay,
-        leave_deduction: breakdown.dailyRate * extraLeaveDays,
+        early_in_pay: breakdown.earlyInPay,
+        leave_deduction: breakdown.missingDays * breakdown.dailyRate,
+        extra_days_pay: breakdown.extraDaysWorked * breakdown.dailyRate,
         confirmed_fines: totalLateFinesAmt,
         confirmed_special_fines: totalSpecialFinesAmt,
         paid_days: breakdown.paidDays,
-        early_leave_deduction: earlyLeaveDeduction,
-        ot_minutes: approvedOTMins,
+        early_leave_deduction: breakdown.earlyLeaveDeduction,
+        ot_minutes: approvedOTMinutes,
       };
     });
     
@@ -212,6 +232,7 @@ export default function BulkConfirmTab() {
           paid_days: bd.paid_days || 30,
           leave_deduction: bd.leave_deduction,
           ot_pay: bd.ot_pay,
+          early_in_pay: bd.early_in_pay || 0,
           early_leave_deduction: bd.early_leave_deduction || 0,
           extra_leave_days: extraLeaves[s.id] || 0,
           ot_minutes: bd.ot_minutes || 0,
@@ -275,7 +296,7 @@ export default function BulkConfirmTab() {
     <div className="space-y-5 select-none">
       {/* Title block */}
       <div className="print:hidden">
-        <h2 className="text-white text-base font-bold">
+        <h2 className="text-[#1A1A1A] text-base font-bold">
           Salary Confirmation — {formatMonthDisplay(month)}
         </h2>
         <p className="text-[var(--text-muted)] text-xs font-semibold">
@@ -284,7 +305,7 @@ export default function BulkConfirmTab() {
       </div>
 
       {errorMsg && (
-        <div className="bg-[var(--danger-bg)] border border-[var(--danger)] text-[#F87171] text-xs font-bold px-4 py-3 rounded-[10px] flex items-center justify-between">
+        <div className="bg-[var(--danger-bg)] border border-[var(--danger)]/30 text-[var(--danger)] text-xs font-bold px-4 py-3 rounded-[12px] flex items-center justify-between shadow-sm">
           <span>{errorMsg}</span>
           <button onClick={fetchData} className="text-xs underline font-bold">
             Retry
@@ -300,13 +321,13 @@ export default function BulkConfirmTab() {
             <button
               key={b}
               onClick={() => setFilterBranch(b)}
-              className={`flex-1 text-center py-2.5 rounded-[10px] border text-xs font-bold uppercase tracking-wider transition-all ${
+              className={`flex-1 text-center py-2.5 rounded-[12px] border text-xs font-bold uppercase tracking-wider transition-all cursor-pointer ${
                 isActive
-                  ? 'bg-white text-[#1E2028] border-white'
-                  : 'bg-[var(--bg-surface)] text-[var(--text-secondary)] border-[var(--border)] hover:border-white/20 active:scale-95'
+                  ? 'bg-[#1A1A1A] text-white border-[#1A1A1A]'
+                  : 'bg-white text-[#555555] border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-95'
               }`}
             >
-              {b === 'all' ? 'All Branches' : b === 'daily' ? 'Daily' : 'Hypermarket'}
+              {b === 'all' ? 'All' : b === 'daily' ? 'Daily' : 'Hypermarket'}
             </button>
           );
         })}
@@ -322,15 +343,15 @@ export default function BulkConfirmTab() {
           return (
             <div
               key={s.id}
-              className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 flex flex-col space-y-4 shadow-sm"
+              className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col space-y-4 shadow-sm"
             >
               {/* Profile Card Header */}
               <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 rounded-full bg-white/10 text-white border border-white/20 font-bold text-base flex items-center justify-center flex-shrink-0">
+                <div className="w-10 h-10 rounded-full bg-[#1A1A1A] text-white font-bold text-base flex items-center justify-center flex-shrink-0">
                   {s.name.charAt(0).toUpperCase()}
                 </div>
                 <div>
-                  <h3 className="font-bold text-sm text-white leading-none">
+                  <h3 className="font-bold text-sm text-[#1A1A1A] leading-none">
                     {s.name}
                   </h3>
                   <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-1">
@@ -340,77 +361,88 @@ export default function BulkConfirmTab() {
               </div>
 
               {/* Salary items grid breakdown */}
-              <div className="grid grid-cols-2 gap-2 text-xs bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-3">
+              <div className="grid grid-cols-2 gap-2 text-xs bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3">
                 <div className="flex flex-col">
                   <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Base</span>
-                  <span className="text-white font-bold mt-0.5">
+                  <span className="text-[#1A1A1A] font-bold mt-0.5">
                     {formatCurrency(s.monthly_salary)}
                   </span>
                 </div>
                 <div className="flex flex-col items-end">
                   <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">OT Pay</span>
-                  <span className={`font-bold mt-0.5 ${bd.ot_pay > 0 ? 'text-[#4ADE80]' : 'text-[var(--text-secondary)]'}`}>
+                  <span className={`font-bold mt-0.5 ${bd.ot_pay > 0 ? 'text-[var(--success)]' : 'text-[#555555]'}`}>
                     +{formatCurrency(bd.ot_pay)}
                   </span>
                 </div>
                 <div className="flex flex-col">
-                  <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Leaves Deducted</span>
-                  <span className={`font-bold mt-0.5 ${bd.leave_deduction > 0 ? 'text-[#F87171]' : 'text-[var(--text-secondary)]'}`}>
-                    -{formatCurrency(bd.leave_deduction)}
-                  </span>
+                  {bd.extra_days_pay > 0 ? (
+                    <>
+                      <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Extra Days Worked</span>
+                      <span className="text-[var(--success)] font-bold mt-0.5">
+                        +{formatCurrency(bd.extra_days_pay)}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Leaves Deducted</span>
+                      <span className={`font-bold mt-0.5 ${bd.leave_deduction > 0 ? 'text-[var(--danger)]' : 'text-[#555555]'}`}>
+                        -{formatCurrency(bd.leave_deduction)}
+                      </span>
+                    </>
+                  )}
                 </div>
                 <div className="flex flex-col items-end">
                   <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Late Fines</span>
-                  <span className={`font-bold mt-0.5 ${bd.confirmed_fines > 0 ? 'text-[#F87171]' : 'text-[var(--text-secondary)]'}`}>
+                  <span className={`font-bold mt-0.5 ${bd.confirmed_fines > 0 ? 'text-[var(--danger)]' : 'text-[#555555]'}`}>
                     -{formatCurrency(bd.confirmed_fines)}
                   </span>
                 </div>
                 <div className="flex flex-col">
                   <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Special Fines</span>
-                  <span className={`font-bold mt-0.5 ${bd.confirmed_special_fines > 0 ? 'text-[#F87171]' : 'text-[var(--text-secondary)]'}`}>
+                  <span className={`font-bold mt-0.5 ${bd.confirmed_special_fines > 0 ? 'text-[var(--danger)]' : 'text-[#555555]'}`}>
                     -{formatCurrency(bd.confirmed_special_fines)}
                   </span>
                 </div>
                 <div className="flex flex-col items-end">
                   <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Net Salary</span>
-                  <span className="text-white font-bold text-sm mt-0.5">
+                  <span className="text-[#1A1A1A] font-bold text-sm mt-0.5">
                     {formatCurrency(bd.net_salary)}
                   </span>
                 </div>
               </div>
 
               {/* Actions row */}
-              <div className="flex items-center justify-between pt-3 border-t border-[var(--border)] print:hidden">
+              <div className="flex items-center justify-between pt-3 border-t border-[#E8E8E8] print:hidden">
                 {!isConfirmed ? (
                   <>
-                    <div className="flex items-center space-x-2 bg-[var(--bg-input)] border border-[var(--border)] rounded-lg p-1.5">
-                      <span className="text-[10px] font-bold text-[var(--text-secondary)] mr-1">Extra Leave:</span>
+                    <div className="flex items-center space-x-2 bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-1.5">
+                      <span className="text-[10px] font-bold text-[#555555] mr-1">Extra Leave:</span>
                       <button
                         onClick={() => handleUpdateLeave(s.id, -1)}
-                        className="w-6 h-6 rounded bg-[var(--bg-elevated)] hover:bg-[var(--border-strong)] active:scale-95 text-white font-bold text-xs flex items-center justify-center"
+                        className="w-6 h-6 rounded bg-[#EBEBEB] hover:bg-[#D0D0D0] active:scale-95 text-[#1A1A1A] font-bold text-xs flex items-center justify-center cursor-pointer"
                       >
                         -
                       </button>
-                      <span className="w-5 text-center text-xs font-bold text-white">
+                      <span className="w-5 text-center text-xs font-bold text-[#1A1A1A]">
                         {extraLeaves[s.id] || 0}
                       </span>
                       <button
                         onClick={() => handleUpdateLeave(s.id, 1)}
-                        className="w-6 h-6 rounded bg-[var(--bg-elevated)] hover:bg-[var(--border-strong)] active:scale-95 text-white font-bold text-xs flex items-center justify-center"
+                        className="w-6 h-6 rounded bg-[#EBEBEB] hover:bg-[#D0D0D0] active:scale-95 text-[#1A1A1A] font-bold text-xs flex items-center justify-center cursor-pointer"
                       >
                         +
                       </button>
                     </div>
-                    <span className="text-[10px] font-bold text-[#FBBF24] bg-[rgba(251,191,36,0.1)] border border-[rgba(251,191,36,0.2)] px-2 py-0.5 rounded uppercase">
+                    <span className="text-[10px] font-bold text-[var(--warning)] bg-[var(--warning-bg)] border border-[var(--warning)]/20 px-2.5 py-0.5 rounded-[20px] uppercase">
                       Pending
                     </span>
                   </>
                 ) : (
-                  <div className="w-full flex justify-between items-center bg-[rgba(74,222,128,0.12)] border border-[rgba(74,222,128,0.2)] px-3 py-2 rounded-lg text-xs">
-                    <span className="text-[var(--text-secondary)] font-semibold">
+                  <div className="w-full flex justify-between items-center bg-[var(--success-bg)] border border-[var(--success)]/20 px-3 py-2 rounded-xl text-xs">
+                    <span className="text-[#555555] font-semibold">
                       Confirmed by {isConfirmed.confirmed_by.split('@')[0]}
                     </span>
-                    <span className="text-[#4ADE80] font-bold flex items-center">
+                    <span className="text-[var(--success)] font-bold flex items-center">
                       <Check size={14} strokeWidth={1.5} className="mr-1" />
                       <span>Confirmed</span>
                     </span>
@@ -429,7 +461,7 @@ export default function BulkConfirmTab() {
         })}
 
         {filteredStaff.length === 0 && (
-          <div className="text-center py-8 text-[var(--text-muted)] text-xs font-bold italic">
+          <div className="text-center py-8 text-[var(--text-muted)] text-xs font-semibold italic">
             No active staff found for this branch.
           </div>
         )}
@@ -440,12 +472,12 @@ export default function BulkConfirmTab() {
         <button
           onClick={handleConfirmAll}
           disabled={confirming}
-          className="w-full min-h-[46px] bg-white text-[#1E2028] font-bold text-sm rounded-xl transition-all print:hidden active:scale-95"
+          className="w-full min-h-[46px] bg-[#1A1A1A] text-white font-bold text-sm rounded-xl transition-all print:hidden hover:bg-[#333333] active:scale-95 cursor-pointer"
         >
           {confirming ? 'Saving Confirmations...' : `CONFIRM ALL SALARIES (${unconfirmedCount})`}
         </button>
       ) : (
-        <div className="w-full bg-[rgba(74,222,128,0.12)] border border-[rgba(74,222,128,0.2)] text-[#4ADE80] font-bold text-center py-3.5 rounded-xl print:hidden text-xs flex items-center justify-center space-x-1.5">
+        <div className="w-full bg-[var(--success-bg)] border border-[var(--success)]/20 text-[var(--success)] font-bold text-center py-3.5 rounded-xl print:hidden text-xs flex items-center justify-center space-x-1.5">
           <Check size={14} strokeWidth={1.5} />
           <span>All branch salaries confirmed for this month.</span>
         </div>

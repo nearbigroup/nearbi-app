@@ -117,19 +117,19 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     };
   }, [user, userBranch, pathname]);
 
-  if (pathname === '/' || pathname === '/kiosk' || isLoading || !user) {
+  if (pathname === '/' || pathname === '/kiosk' || pathname.startsWith('/my') || isLoading || !user) {
     return <>{children}</>;
   }
 
   // Filter bottom nav tabs based on role
   const isStaffExec = user.role === 'staff_executive';
   const navItems = [
-    { label: 'Dashboard', path: '/dashboard', icon: <LayoutDashboard size={22} strokeWidth={1.5} style={{ color: 'currentColor' }} /> },
-    { label: 'Attend', path: '/attendance', icon: <Clock size={22} strokeWidth={1.5} style={{ color: 'currentColor' }} /> },
-    { label: 'Staff', path: '/staff', icon: <Users size={22} strokeWidth={1.5} style={{ color: 'currentColor' }} /> },
-    { label: 'Leave', path: '/leave', icon: <ClipboardList size={22} strokeWidth={1.5} style={{ color: 'currentColor' }} /> },
-    ...(!isStaffExec ? [{ label: 'Salary', path: '/salary', icon: <Wallet size={22} strokeWidth={1.5} style={{ color: 'currentColor' }} /> }] : []),
-    { label: 'Approvals', path: '/approvals', icon: <CheckSquare size={22} strokeWidth={1.5} style={{ color: 'currentColor' }} /> },
+    { label: 'Dashboard', path: '/dashboard', icon: <LayoutDashboard size={22} strokeWidth={1.5} /> },
+    { label: 'Attend', path: '/attendance', icon: <Clock size={22} strokeWidth={1.5} /> },
+    { label: 'Staff', path: '/staff', icon: <Users size={22} strokeWidth={1.5} /> },
+    { label: 'Leave', path: '/leave', icon: <ClipboardList size={22} strokeWidth={1.5} /> },
+    ...(!isStaffExec ? [{ label: 'Salary', path: '/salary', icon: <Wallet size={22} strokeWidth={1.5} /> }] : []),
+    { label: 'Approvals', path: '/approvals', icon: <CheckSquare size={22} strokeWidth={1.5} /> },
   ];
 
   const getBranchLabel = () => {
@@ -139,19 +139,19 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <div className="min-h-screen bg-[var(--bg-primary)] flex flex-col relative app-frame">
+    <div className="min-h-screen bg-[#F8F8F8] flex flex-col relative app-frame font-sans">
       {/* Toast Alert */}
       {activeToast && (
-        <div className="fixed top-[70px] left-4 right-4 z-[99999] bg-[var(--bg-elevated)] text-white p-4 rounded-xl border border-[var(--border-strong)] border-l-[3px] border-l-white shadow-2xl transition-all duration-300">
+        <div className="fixed top-[70px] left-4 right-4 z-[99999] bg-white text-[#1A1A1A] p-4 rounded-[14px] border border-[#E8E8E8] border-l-[4px] border-l-[#1A1A1A] shadow-[0_4px_12px_rgba(0,0,0,0.10)] transition-all duration-300">
           <div className="flex items-start space-x-3">
-            <Bell size={20} strokeWidth={1.5} style={{ color: '#FBBF24' }} className="flex-shrink-0 mt-0.5" />
+            <Bell size={20} strokeWidth={1.5} className="text-[#1A1A1A] flex-shrink-0 mt-0.5" />
             <div className="flex-1">
-              <h4 className="font-bold text-sm text-white">{activeToast.title}</h4>
-              <p className="text-xs text-[var(--text-secondary)] mt-0.5">{activeToast.message}</p>
+              <h4 className="font-bold text-sm text-[#1A1A1A]">{activeToast.title}</h4>
+              <p className="text-xs text-[#555555] mt-0.5">{activeToast.message}</p>
             </div>
             <button
               onClick={() => setActiveToast(null)}
-              className="text-[var(--text-muted)] hover:text-white text-sm font-bold flex items-center justify-center p-0.5"
+              className="text-[#999999] hover:text-[#1A1A1A] text-sm font-bold flex items-center justify-center p-0.5"
             >
               <X size={16} strokeWidth={1.5} style={{ color: 'currentColor' }} />
             </button>
@@ -160,38 +160,38 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       )}
 
       {/* Top Bar */}
-      <header className="bg-[var(--bg-surface)] text-white sticky top-0 z-[1000] px-4 py-3 flex items-center justify-between min-h-[56px] border-b border-[var(--border)] select-none pt-[calc(12px+env(safe-area-inset-top,0px))]">
+      <header className="bg-white text-[#1A1A1A] sticky top-0 z-[1000] px-5 py-3 flex items-center justify-between min-h-[56px] border-b border-[#E8E8E8] shadow-[0_1px_3px_rgba(0,0,0,0.06)] select-none pt-[calc(12px+env(safe-area-inset-top,0px))]">
         <div className="flex items-center space-x-2">
-          <div className="font-[900] text-[20px] tracking-tight flex items-center">
-            <span className="text-white">near</span>
-            <span className="text-[#FBBF24]">bi</span>
+          <div className="font-[900] text-[22px] tracking-tight flex items-center letter-spacing-[-1px]">
+            <span className="text-[#1A1A1A]">near</span>
+            <span className="text-[#1A1A1A]">bi</span>
           </div>
-          <div className="border border-white/20 text-white text-[10px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ml-1.5">
+          <div className="bg-[#1A1A1A] text-white text-[10px] px-[7px] py-[2px] rounded-[4px] font-bold uppercase tracking-wider ml-1.5">
             STAFF
           </div>
         </div>
 
-        <div className="text-[var(--text-secondary)] font-medium text-xs text-center truncate max-w-[150px]">
+        <div className="text-[#555555] font-semibold text-xs text-center truncate max-w-[150px]">
           {getBranchLabel()}
         </div>
 
-        <div className="flex items-center space-x-3">
+        <div className="flex items-center space-x-3.5">
           <button
             onClick={() => router.push('/notifications')}
-            className="relative p-1 focus:outline-none flex items-center justify-center text-[var(--text-secondary)] hover:text-white"
+            className="relative p-1 focus:outline-none flex items-center justify-center text-[#1A1A1A] hover:text-[#333333] transition-colors"
           >
             <Bell size={20} strokeWidth={1.5} style={{ color: 'currentColor' }} />
             {unreadCount > 0 && (
-              <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-[#F87171] text-white text-[9px] font-bold">
+              <span className="absolute -top-1 -right-1 flex h-4 w-4 items-center justify-center rounded-full bg-[#C0392B] text-white text-[9px] font-bold">
                 {unreadCount}
               </span>
             )}
           </button>
           <button
             onClick={logout}
-            className="border border-[var(--border-strong)] text-[var(--text-secondary)] bg-transparent px-2.5 py-1 text-xs rounded-md font-bold active:border-white active:text-white transition-all hover:text-white hover:border-white flex items-center space-x-1.5"
+            className="bg-[#F2F2F2] text-[#555555] hover:text-[#1A1A1A] hover:bg-[#EBEBEB] px-3 py-1.5 text-xs rounded-[8px] font-semibold transition-all flex items-center space-x-1.5"
           >
-            <LogOut size={16} strokeWidth={1.5} style={{ color: 'currentColor' }} />
+            <LogOut size={14} strokeWidth={1.5} style={{ color: 'currentColor' }} />
             <span>Sign out</span>
           </button>
         </div>
@@ -203,7 +203,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       </main>
 
       {/* Bottom Nav Bar */}
-      <nav className="fixed bottom-0 left-0 right-0 z-[9999] bg-[var(--bg-surface)] border-t border-[var(--border)] shadow-[0_-1px_0_var(--border)] pb-[env(safe-area-inset-bottom,16px)]">
+      <nav className="fixed bottom-0 left-0 right-0 z-[9999] bg-white border-t border-[#E8E8E8] shadow-[0_-2px_12px_rgba(0,0,0,0.06)] pb-[env(safe-area-inset-bottom,16px)]">
         <div className="max-w-md mx-auto flex items-center justify-around">
           {navItems.map((item) => {
             const isActive = pathname === item.path;
@@ -213,8 +213,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 href={item.path}
                 className={`flex-1 flex flex-col items-center justify-center min-h-[60px] cursor-pointer border-t-2 select-none transition-all ${
                   isActive
-                    ? 'border-white text-white bg-white/5'
-                    : 'border-transparent text-[var(--text-secondary)] hover:text-white'
+                    ? 'border-[#1A1A1A] text-[#1A1A1A] bg-[#F8F8F8]'
+                    : 'border-transparent text-[#BBBBBB] hover:text-[#1A1A1A]'
                 }`}
               >
                 <span className="mb-0.5">{item.icon}</span>

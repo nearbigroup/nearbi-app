@@ -54,9 +54,9 @@ export default function SettingsPage() {
 
   const [settings, setSettings] = useState<FineSettings>({
     id: 'default',
-    yellow_fine: 50,
-    orange_fine: 100,
-    red_fine: 200,
+    yellow_fine: 25,
+    orange_fine: 50,
+    red_fine: 100,
     yellow_free_passes: 4,
   });
 
@@ -410,14 +410,14 @@ export default function SettingsPage() {
   if (!canSeeSalaryBreakdown) {
     return (
       <div className="min-h-[70vh] flex flex-col items-center justify-center p-6 text-center select-none">
-        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-8 max-w-sm w-full flex flex-col items-center shadow-sm">
+        <div className="bg-white border border-[var(--border)] rounded-[14px] p-8 max-w-sm w-full flex flex-col items-center shadow-sm">
           <Lock size={48} strokeWidth={1.5} className="mb-4 text-[var(--text-muted)]" />
-          <h2 className="text-lg font-bold text-white mb-2">Access Restricted</h2>
+          <h2 className="text-lg font-bold text-[#1A1A1A] mb-2">Access Restricted</h2>
           <p className="text-[var(--text-muted)] text-xs font-semibold leading-relaxed mb-6">
             Only the Owner and Operations Manager can modify system configurations.
           </p>
           <div className="font-[900] text-lg tracking-tight flex items-center leading-none opacity-40">
-            <span className="text-white">near</span>
+            <span className="text-[#1A1A1A]">near</span>
             <span className="text-[#FBBF24]">bi</span>
           </div>
         </div>
@@ -433,14 +433,14 @@ export default function SettingsPage() {
     <div className="space-y-6 pb-6">
       {/* Header */}
       <div>
-        <h1 className="text-white text-2xl font-bold">Settings</h1>
+        <h1 className="text-[#1A1A1A] text-2xl font-bold">Settings</h1>
         <p className="text-[var(--text-muted)] text-xs font-semibold">
           System rules configuration
         </p>
       </div>
 
       {errorMsg && (
-        <div className="bg-[var(--danger-bg)] border border-[var(--danger)] text-[#F87171] text-xs font-bold px-4 py-3 rounded-[10px] flex items-center justify-between">
+        <div className="bg-[var(--danger-bg)] border border-[var(--danger)]/20 text-[var(--danger)] text-xs font-bold px-4 py-3 rounded-[10px] flex items-center justify-between">
           <span>{errorMsg}</span>
           <button onClick={fetchData} className="text-xs underline font-bold">
             Retry
@@ -456,8 +456,8 @@ export default function SettingsPage() {
       ) : (
         <>
           {/* Late Fine Settings Card */}
-          <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-5 shadow-sm">
-            <h2 className="text-white font-bold text-sm mb-4">
+          <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-5 shadow-sm">
+            <h2 className="text-[#1A1A1A] font-bold text-sm mb-4">
               1. Late Fine Settings
             </h2>
 
@@ -471,7 +471,7 @@ export default function SettingsPage() {
                     type="number"
                     value={settings.yellow_fine}
                     onChange={(e) => setSettings({ ...settings, yellow_fine: Number(e.target.value) })}
-                    className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-sm focus:outline-none focus:border-white/40 text-white font-bold"
+                    className="w-full text-[#1A1A1A] font-bold"
                     required
                   />
                 </div>
@@ -484,7 +484,7 @@ export default function SettingsPage() {
                     type="number"
                     value={settings.yellow_free_passes}
                     onChange={(e) => setSettings({ ...settings, yellow_free_passes: Number(e.target.value) })}
-                    className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-sm focus:outline-none focus:border-white/40 text-white font-bold"
+                    className="w-full text-[#1A1A1A] font-bold"
                     required
                   />
                 </div>
@@ -499,7 +499,7 @@ export default function SettingsPage() {
                     type="number"
                     value={settings.orange_fine}
                     onChange={(e) => setSettings({ ...settings, orange_fine: Number(e.target.value) })}
-                    className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-sm focus:outline-none focus:border-white/40 text-white font-bold"
+                    className="w-full text-[#1A1A1A] font-bold"
                     required
                   />
                 </div>
@@ -512,7 +512,7 @@ export default function SettingsPage() {
                     type="number"
                     value={settings.red_fine}
                     onChange={(e) => setSettings({ ...settings, red_fine: Number(e.target.value) })}
-                    className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-sm focus:outline-none focus:border-white/40 text-white font-bold"
+                    className="w-full text-[#1A1A1A] font-bold"
                     required
                   />
                 </div>
@@ -521,7 +521,7 @@ export default function SettingsPage() {
               <button
                 type="submit"
                 disabled={savingSettings}
-                className="w-full min-h-[42px] bg-white text-[#1E2028] font-bold text-xs rounded-xl hover:bg-gray-200 active:scale-95 transition-all shadow mt-2"
+                className="w-full min-h-[44px] bg-[#1A1A1A] text-white font-bold text-xs rounded-xl hover:bg-[#333333] active:scale-95 transition-all shadow-sm mt-2"
               >
                 {savingSettings ? 'Saving...' : 'Save Settings'}
               </button>
@@ -529,8 +529,8 @@ export default function SettingsPage() {
           </div>
 
           {/* Fine Exemptions Card */}
-          <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-5 shadow-sm space-y-4">
-            <h2 className="text-white font-bold text-sm">
+          <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-5 shadow-sm space-y-4">
+            <h2 className="text-[#1A1A1A] font-bold text-sm">
               2. Fine Exemptions
             </h2>
 
@@ -543,11 +543,11 @@ export default function SettingsPage() {
                 <select
                   value={selectedStaffId}
                   onChange={(e) => setSelectedStaffId(e.target.value)}
-                  className="flex-1 bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-2.5 text-xs focus:outline-none focus:border-white/40 text-white font-bold"
+                  className="flex-1 text-[#1A1A1A] font-bold"
                 >
-                  <option value="" className="bg-[var(--bg-surface)] text-[var(--text-muted)]">Select staff member...</option>
+                  <option value="" className="bg-white text-[var(--text-muted)]">Select staff member...</option>
                   {staffList.map((st) => (
-                    <option key={st.id} value={st.id} className="bg-[var(--bg-surface)]">
+                    <option key={st.id} value={st.id} className="bg-white">
                       {st.name} ({st.department} - {getBranchName(st.branch_id)})
                     </option>
                   ))}
@@ -557,7 +557,7 @@ export default function SettingsPage() {
                   type="button"
                   onClick={handleAddExemption}
                   disabled={addingExemption || !selectedStaffId}
-                  className="bg-white hover:bg-gray-200 text-[#1E2028] font-bold text-xs px-4 rounded-xl active:scale-95 disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center space-x-1"
+                  className="bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold text-xs px-4 rounded-xl active:scale-95 disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center space-x-1"
                 >
                   <Plus size={14} strokeWidth={1.5} style={{ color: 'currentColor' }} />
                   <span>Add</span>
@@ -566,7 +566,7 @@ export default function SettingsPage() {
             </div>
 
             {/* List of exemptions */}
-            <div className="space-y-2 pt-2 border-t border-[var(--border-strong)]">
+            <div className="space-y-2 pt-2 border-t border-[var(--border)]">
               <h3 className="text-xs font-bold text-[var(--text-secondary)] mb-2">Exempted List</h3>
               
               {exemptions.length === 0 ? (
@@ -578,10 +578,10 @@ export default function SettingsPage() {
                   {exemptions.map((ex) => (
                     <div
                       key={ex.id}
-                      className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-2.5 flex items-center justify-between"
+                      className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-2.5 flex items-center justify-between"
                     >
                       <div>
-                        <div className="font-bold text-xs text-white">
+                        <div className="font-bold text-xs text-[#1A1A1A]">
                           {ex.staff?.name}
                         </div>
                         <div className="text-[10px] text-[var(--text-muted)] font-bold">
@@ -592,7 +592,7 @@ export default function SettingsPage() {
                       <button
                         type="button"
                         onClick={() => handleRemoveExemption(ex.id)}
-                        className="text-[#F87171] hover:bg-[var(--danger-bg)] p-2 rounded active:scale-90 flex items-center justify-center"
+                        className="text-[var(--danger)] hover:bg-[var(--danger-bg)] p-2 rounded active:scale-90 flex items-center justify-center"
                         title="Remove Exemption"
                       >
                         <Trash2 size={16} strokeWidth={1.5} />
@@ -605,15 +605,15 @@ export default function SettingsPage() {
           </div>
 
           {/* Break Settings Card */}
-          <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-5 shadow-sm space-y-4">
-            <h2 className="text-white font-bold text-sm">
+          <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-5 shadow-sm space-y-4">
+            <h2 className="text-[#1A1A1A] font-bold text-sm">
               3. Break Schedule Settings
             </h2>
 
             <form onSubmit={handleSaveBreakSettings} className="space-y-4">
               {/* Morning Tea */}
-              <div className="space-y-2 border-b border-[var(--border-strong)]/40 pb-3">
-                <h3 className="text-xs font-bold text-white uppercase tracking-wider">Morning Tea</h3>
+              <div className="space-y-2 border-b border-[var(--border)] pb-3">
+                <h3 className="text-xs font-bold text-[#1A1A1A] uppercase tracking-wider">Morning Tea</h3>
                 <div className="grid grid-cols-3 gap-2">
                   <div>
                     <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
@@ -623,7 +623,7 @@ export default function SettingsPage() {
                       type="number"
                       value={breakSettings.morning_tea_duration}
                       onChange={(e) => setBreakSettings({ ...breakSettings, morning_tea_duration: Number(e.target.value) })}
-                      className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-2.5 text-xs focus:outline-none focus:border-white/40 text-white font-bold"
+                      className="w-full text-[#1A1A1A] font-bold"
                       required
                     />
                   </div>
@@ -636,7 +636,7 @@ export default function SettingsPage() {
                       placeholder="09:30"
                       value={breakSettings.morning_tea_start}
                       onChange={(e) => setBreakSettings({ ...breakSettings, morning_tea_start: e.target.value })}
-                      className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-2.5 text-xs focus:outline-none focus:border-white/40 text-white font-bold"
+                      className="w-full text-[#1A1A1A] font-bold"
                       required
                     />
                   </div>
@@ -649,7 +649,7 @@ export default function SettingsPage() {
                       placeholder="11:30"
                       value={breakSettings.morning_tea_end}
                       onChange={(e) => setBreakSettings({ ...breakSettings, morning_tea_end: e.target.value })}
-                      className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-2.5 text-xs focus:outline-none focus:border-white/40 text-white font-bold"
+                      className="w-full text-[#1A1A1A] font-bold"
                       required
                     />
                   </div>
@@ -657,8 +657,8 @@ export default function SettingsPage() {
               </div>
 
               {/* Food Break */}
-              <div className="space-y-2 border-b border-[var(--border-strong)]/40 pb-3">
-                <h3 className="text-xs font-bold text-white uppercase tracking-wider">Food Break</h3>
+              <div className="space-y-2 border-b border-[var(--border)] pb-3">
+                <h3 className="text-xs font-bold text-[#1A1A1A] uppercase tracking-wider">Food Break</h3>
                 <div className="grid grid-cols-3 gap-2">
                   <div>
                     <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
@@ -668,7 +668,7 @@ export default function SettingsPage() {
                       type="number"
                       value={breakSettings.food_break_duration}
                       onChange={(e) => setBreakSettings({ ...breakSettings, food_break_duration: Number(e.target.value) })}
-                      className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-2.5 text-xs focus:outline-none focus:border-white/40 text-white font-bold"
+                      className="w-full text-[#1A1A1A] font-bold"
                       required
                     />
                   </div>
@@ -681,7 +681,7 @@ export default function SettingsPage() {
                       placeholder="12:00"
                       value={breakSettings.food_break_start}
                       onChange={(e) => setBreakSettings({ ...breakSettings, food_break_start: e.target.value })}
-                      className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-2.5 text-xs focus:outline-none focus:border-white/40 text-white font-bold"
+                      className="w-full text-[#1A1A1A] font-bold"
                       required
                     />
                   </div>
@@ -694,7 +694,7 @@ export default function SettingsPage() {
                       placeholder="15:00"
                       value={breakSettings.food_break_end}
                       onChange={(e) => setBreakSettings({ ...breakSettings, food_break_end: e.target.value })}
-                      className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-2.5 text-xs focus:outline-none focus:border-white/40 text-white font-bold"
+                      className="w-full text-[#1A1A1A] font-bold"
                       required
                     />
                   </div>
@@ -703,7 +703,7 @@ export default function SettingsPage() {
 
               {/* Evening Tea */}
               <div className="space-y-2 pb-2">
-                <h3 className="text-xs font-bold text-white uppercase tracking-wider">Evening Tea</h3>
+                <h3 className="text-xs font-bold text-[#1A1A1A] uppercase tracking-wider">Evening Tea</h3>
                 <div className="grid grid-cols-3 gap-2">
                   <div>
                     <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
@@ -713,7 +713,7 @@ export default function SettingsPage() {
                       type="number"
                       value={breakSettings.evening_tea_duration}
                       onChange={(e) => setBreakSettings({ ...breakSettings, evening_tea_duration: Number(e.target.value) })}
-                      className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-2.5 text-xs focus:outline-none focus:border-white/40 text-white font-bold"
+                      className="w-full text-[#1A1A1A] font-bold"
                       required
                     />
                   </div>
@@ -726,7 +726,7 @@ export default function SettingsPage() {
                       placeholder="16:00"
                       value={breakSettings.evening_tea_start}
                       onChange={(e) => setBreakSettings({ ...breakSettings, evening_tea_start: e.target.value })}
-                      className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-2.5 text-xs focus:outline-none focus:border-white/40 text-white font-bold"
+                      className="w-full text-[#1A1A1A] font-bold"
                       required
                     />
                   </div>
@@ -739,7 +739,7 @@ export default function SettingsPage() {
                       placeholder="18:30"
                       value={breakSettings.evening_tea_end}
                       onChange={(e) => setBreakSettings({ ...breakSettings, evening_tea_end: e.target.value })}
-                      className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-2.5 text-xs focus:outline-none focus:border-white/40 text-white font-bold"
+                      className="w-full text-[#1A1A1A] font-bold"
                       required
                     />
                   </div>
@@ -749,7 +749,7 @@ export default function SettingsPage() {
               <button
                 type="submit"
                 disabled={savingBreakSettings}
-                className="w-full min-h-[42px] bg-white text-[#1E2028] font-bold text-xs rounded-xl hover:bg-gray-200 active:scale-95 transition-all shadow mt-2"
+                className="w-full min-h-[44px] bg-[#1A1A1A] text-white font-bold text-xs rounded-xl hover:bg-[#333333] active:scale-95 transition-all shadow-sm mt-2"
               >
                 {savingBreakSettings ? 'Saving...' : 'Save Break Settings'}
               </button>
@@ -760,19 +760,19 @@ export default function SettingsPage() {
           {user?.role === 'admin' && (
             <div className="space-y-4 pt-6">
               <div>
-                <h2 className="text-red-500 font-extrabold text-sm tracking-wider">
+                <h2 className="text-[var(--danger)] font-extrabold text-sm tracking-wider">
                   DANGER ZONE
                 </h2>
-                <div className="text-red-500/40 text-xs font-semibold select-none leading-none my-1">
+                <div className="text-[var(--danger)]/20 text-xs font-semibold select-none leading-none my-1">
                   ─────────────────────────────
                 </div>
               </div>
 
               {/* Red bordered card */}
-              <div className="bg-[var(--bg-surface)] border border-red-500 rounded-[14px] p-5 shadow-sm space-y-5">
+              <div className="bg-white border border-[var(--danger)] rounded-[14px] p-5 shadow-sm space-y-5">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="space-y-1">
-                    <p className="text-white text-xs font-bold">Clear all attendance data</p>
+                    <p className="text-[#1A1A1A] text-xs font-bold">Clear all attendance data</p>
                     <p className="text-[var(--text-muted)] text-[10px] font-semibold leading-normal max-w-md">
                       Deletes all records from attendance, late_fines, break_logs, wall_events, notifications tables. Staff profiles are kept. Only activity data removed.
                     </p>
@@ -783,15 +783,15 @@ export default function SettingsPage() {
                       setDangerAction('CLEAR_ATTENDANCE');
                       setConfirmText('');
                     }}
-                    className="min-h-[38px] px-4 bg-transparent border border-red-500 text-red-500 hover:text-white hover:bg-red-500 font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+                    className="min-h-[38px] px-4 bg-transparent border border-[var(--danger)] text-[var(--danger)] hover:text-white hover:bg-[var(--danger)] font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer whitespace-nowrap"
                   >
                     Clear Attendance Data
                   </button>
                 </div>
 
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-t border-red-500/20">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-t border-[var(--border)]">
                   <div className="space-y-1">
-                    <p className="text-white text-xs font-bold">Delete inactive staff</p>
+                    <p className="text-[#1A1A1A] text-xs font-bold">Delete inactive staff</p>
                     <p className="text-[var(--text-muted)] text-[10px] font-semibold leading-normal max-w-md">
                       Deletes staff where active = false along with all their related records.
                     </p>
@@ -802,7 +802,7 @@ export default function SettingsPage() {
                       setDangerAction('DELETE_INACTIVE');
                       setConfirmText('');
                     }}
-                    className="min-h-[38px] px-4 bg-transparent border border-red-500 text-red-500 hover:text-white hover:bg-red-500 font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+                    className="min-h-[38px] px-4 bg-transparent border border-[var(--danger)] text-[var(--danger)] hover:text-white hover:bg-[var(--danger)] font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer whitespace-nowrap"
                   >
                     Delete Inactive Staff
                   </button>
@@ -816,10 +816,10 @@ export default function SettingsPage() {
       {/* Danger Zone Confirmation Modal */}
       {dangerAction && (
         <div className="fixed inset-0 z-[12000] flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm">
-          <div className="bg-[var(--bg-surface)] rounded-[20px] max-w-sm w-full border-2 border-red-500 p-6 flex flex-col space-y-4 shadow-2xl">
+          <div className="bg-white rounded-[20px] max-w-sm w-full border border-[var(--danger)] p-6 flex flex-col space-y-4 shadow-2xl">
             <div>
-              <h3 className="text-red-500 text-base font-black uppercase tracking-wider">Danger Zone</h3>
-              <p className="text-white text-sm font-bold mt-2">
+              <h3 className="text-[var(--danger)] text-base font-black uppercase tracking-wider">Danger Zone</h3>
+              <p className="text-[#1A1A1A] text-sm font-bold mt-2">
                 {dangerAction === 'CLEAR_ATTENDANCE' 
                   ? 'Clear All Attendance Data' 
                   : 'Delete Inactive Staff'}
@@ -831,7 +831,7 @@ export default function SettingsPage() {
               </p>
             </div>
 
-            <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-[10px] text-red-400 font-bold">
+            <div className="bg-[var(--danger-bg)] border border-[var(--danger)]/20 rounded-lg p-3 text-[10px] text-[var(--danger)] font-bold">
               WARNING: This action is permanent and cannot be undone.
             </div>
 
@@ -844,7 +844,7 @@ export default function SettingsPage() {
                 value={confirmText}
                 onChange={(e) => setConfirmText(e.target.value)}
                 placeholder="Type DELETE"
-                className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-sm focus:outline-none focus:border-red-500/40 text-white font-bold placeholder-white/20"
+                className="w-full text-[#1A1A1A] font-bold"
               />
             </div>
 
@@ -864,7 +864,7 @@ export default function SettingsPage() {
                 type="button"
                 onClick={handleExecuteDangerAction}
                 disabled={confirmText !== 'DELETE' || executingDanger}
-                className="flex-1 min-h-[40px] bg-red-600 hover:bg-red-700 disabled:opacity-30 disabled:pointer-events-none text-white font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer flex items-center justify-center"
+                className="flex-1 min-h-[40px] bg-[var(--danger)] hover:bg-[#A93226] disabled:opacity-30 disabled:pointer-events-none text-white font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer flex items-center justify-center"
               >
                 {executingDanger ? 'Deleting...' : 'Confirm'}
               </button>
@@ -875,7 +875,7 @@ export default function SettingsPage() {
 
       {/* Global Toast */}
       {toastMsg && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[15000] bg-[var(--success-bg)] border border-[var(--success)] text-[#4ADE80] font-bold text-xs px-4 py-2.5 rounded-full shadow-lg">
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[15000] bg-[var(--success-bg)] border border-[var(--success)]/20 text-[var(--success)] font-bold text-xs px-4 py-2.5 rounded-full shadow-lg">
           {toastMsg}
         </div>
       )}

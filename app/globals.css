@@ -1,28 +1,40 @@
 @import "tailwindcss";
 
 :root {
-  --bg-primary: #1E2028;
-  --bg-surface: #252830;
-  --bg-elevated: #2E3140;
-  --bg-input: #2A2D38;
-  --border: #2A2D38;
-  --border-strong: #363A48;
-  --text-primary: #FFFFFF;
-  --text-secondary: #9CA3AF;
-  --text-muted: #6B7280;
-  --accent: #FFFFFF;
-  --accent-bg: rgba(255,255,255,0.08);
-  --success: #4ADE80;
-  --success-bg: rgba(74,222,128,0.1);
-  --warning: #FBBF24;
-  --warning-bg: rgba(251,191,36,0.1);
-  --danger: #F87171;
-  --danger-bg: rgba(248,113,113,0.1);
-  --info: #60A5FA;
-  --info-bg: rgba(96,165,250,0.1);
-  --late-yellow: #FBBF24;
-  --late-orange: #FB923C;
-  --late-red: #F87171;
+  --bg-primary: #FFFFFF;
+  --bg-secondary: #F8F8F8;
+  --bg-surface: #F2F2F2;
+  --bg-elevated: #EBEBEB;
+  --bg-dark: #1A1A1A;
+  --bg-dark-card: #222222;
+  --text-primary: #1A1A1A;
+  --text-secondary: #555555;
+  --text-muted: #999999;
+  --text-white: #FFFFFF;
+  --accent: #1A1A1A;
+  --accent-hover: #333333;
+  --border: #E8E8E8;
+  --border-strong: #D0D0D0;
+  
+  --success: #2D7A3A;
+  --success-bg: #EDF7EF;
+  --warning: #B8860B;
+  --warning-bg: #FDF8E7;
+  --danger: #C0392B;
+  --danger-bg: #FDECEA;
+  --info: #1A5FA8;
+  --info-bg: #EBF3FB;
+
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.08);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.10);
+  --shadow-lg: 0 8px 24px rgba(0,0,0,0.12);
+  
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+  
+  --bg-input: #F8F8F8;
 }
 
 @theme {
@@ -40,13 +52,16 @@
   --color-danger-theme: var(--danger);
   --color-info-theme: var(--info);
   
-  --font-sans: var(--font-outfit), system-ui, -apple-system, sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif;
 }
 
 * {
   box-sizing: border-box;
   -webkit-tap-highlight-color: transparent;
   -webkit-overflow-scrolling: touch;
+  transition: background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 html, body {
@@ -54,27 +69,27 @@ html, body {
   scroll-behavior: smooth;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-y: auto;
-  background: var(--bg-primary);
+  background: var(--bg-secondary);
 }
 
 body {
-  background: var(--bg-primary);
+  background: var(--bg-secondary);
   color: var(--text-primary);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
   padding-bottom: env(safe-area-inset-bottom, 20px);
 }
 
 @media (min-width: 769px) {
   body {
-    background: #121318;
+    background: #EBEBEB;
   }
   .app-frame {
     max-width: 480px;
     margin: 0 auto;
-    background: var(--bg-primary);
+    background: var(--bg-secondary);
     min-height: 100vh;
-    box-shadow: 0 0 40px rgba(0,0,0,0.4);
+    box-shadow: 0 4px 30px rgba(0,0,0,0.06);
   }
 }
 
@@ -95,23 +110,24 @@ input[type="email"],
 select, 
 textarea {
   font-size: 16px !important;
-  padding: 12px 14px !important;
-  background-color: var(--bg-input);
-  border: 1px solid var(--border);
-  color: var(--text-primary);
-  border-radius: 10px;
+  padding: 13px 16px !important;
+  background-color: var(--bg-input) !important;
+  border: 1.5px solid var(--border) !important;
+  color: var(--text-primary) !important;
+  border-radius: 12px !important;
 }
 
 input:focus, select:focus, textarea:focus {
-  border-color: rgba(255,255,255,0.4) !important;
+  border-color: var(--accent) !important;
   outline: none !important;
+  box-shadow: 0 0 0 3px rgba(26, 26, 26, 0.08) !important;
 }
 
 select {
   height: 48px !important;
   min-height: 48px !important;
   appearance: none !important;
-  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239CA3AF' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e") !important;
+  background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23999999' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e") !important;
   background-repeat: no-repeat !important;
   background-position: right 14px center !important;
   background-size: 16px !important;
@@ -120,7 +136,7 @@ select {
 
 /* Mobile active feedback replacement for hover */
 button:active, a:active {
-  opacity: 0.8;
+  opacity: 0.85;
 }
 
 @keyframes shimmer {
@@ -133,7 +149,7 @@ button:active, a:active {
 }
 
 .skeleton {
-  background: linear-gradient(90deg, #252830 25%, #2E3140 50%, #252830 75%);
+  background: linear-gradient(90deg, #F2F2F2 25%, #E8E8E8 50%, #F2F2F2 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
   border-radius: 12px;
@@ -153,3 +169,25 @@ button:active, a:active {
   scroll-behavior: smooth;
 }
 
+/* Black featured card wave texture */
+.featured-card {
+  background: #1A1A1A;
+  border-radius: 20px;
+  position: relative;
+  overflow: hidden;
+}
+.featured-card::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  right: -20%;
+  width: 200px;
+  height: 200px;
+  background: radial-gradient(
+    circle,
+    rgba(255, 255, 255, 0.06) 0%,
+    transparent 70%
+  );
+  border-radius: 50%;
+  pointer-events: none;
+}

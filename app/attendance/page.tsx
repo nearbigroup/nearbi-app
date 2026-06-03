@@ -152,18 +152,13 @@ export default function AttendancePage() {
       const { data: staffData, error } = await query.order('name');
       if (error) throw error;
       
-      if (!staffData || staffData.length === 0) {
-        alert('No active staff found for this branch');
-        return;
-      }
-      
       const headers = ['Name', 'PIN', 'Department', 'Branch'];
       for (let day = 1; day <= calendarDays; day++) {
         headers.push(`${day}-IN`);
         headers.push(`${day}-OUT`);
       }
       
-      const rows = staffData.map((s: any) => {
+      const rows = (staffData || []).map((s: any) => {
         const row: Record<string, any> = {
           'Name': s.name,
           'PIN': s.pin,
@@ -519,9 +514,9 @@ export default function AttendancePage() {
 
       const { data: fineSettings } = await supabase.from('fine_settings').select('*').limit(1).maybeSingle();
       const settings = fineSettings || {
-        yellow_fine: 50,
-        orange_fine: 100,
-        red_fine: 200,
+        yellow_fine: 25,
+        orange_fine: 50,
+        red_fine: 100,
         yellow_free_passes: 4
       };
 
@@ -900,35 +895,35 @@ export default function AttendancePage() {
   const getStatusBadge = (record: AttendanceRecord | null) => {
     if (!record || !record.check_in_time) {
       return (
-        <span className="bg-[rgba(248,113,113,0.12)] text-[#F87171] border border-[rgba(248,113,113,0.2)] text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider flex items-center space-x-1">
-          <CircleX size={16} strokeWidth={1.5} style={{ color: '#F87171' }} />
+        <span className="bg-[var(--danger-bg)] text-[var(--danger)] border border-[var(--danger)]/20 text-[10px] font-bold px-2.5 py-1.5 rounded-[20px] uppercase tracking-wider flex items-center space-x-1.5">
+          <CircleX size={14} strokeWidth={2} style={{ color: 'currentColor' }} />
           <span>Absent</span>
         </span>
       );
     }
     if (record.status === 'late') {
       return (
-        <span className="bg-[rgba(251,191,36,0.12)] text-[#FBBF24] border border-[rgba(251,191,36,0.2)] text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider flex items-center space-x-1">
-          <AlertTriangle size={16} strokeWidth={1.5} style={{ color: '#FBBF24' }} />
+        <span className="bg-[var(--warning-bg)] text-[var(--warning)] border border-[var(--warning)]/20 text-[10px] font-bold px-2.5 py-1.5 rounded-[20px] uppercase tracking-wider flex items-center space-x-1.5">
+          <AlertTriangle size={14} strokeWidth={2} style={{ color: 'currentColor' }} />
           <span>Late</span>
         </span>
       );
     }
     return (
-      <span className="bg-[rgba(74,222,128,0.12)] text-[#4ADE80] border border-[rgba(74,222,128,0.2)] text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider flex items-center space-x-1">
-        <CircleCheck size={16} strokeWidth={1.5} style={{ color: '#4ADE80' }} />
+      <span className="bg-[var(--success-bg)] text-[var(--success)] border border-[var(--success)]/20 text-[10px] font-bold px-2.5 py-1.5 rounded-[20px] uppercase tracking-wider flex items-center space-x-1.5">
+        <CircleCheck size={14} strokeWidth={2} style={{ color: 'currentColor' }} />
         <span>Present</span>
       </span>
     );
   };
 
   const getDotColor = (record: AttendanceRecord | null) => {
-    if (!record || !record.check_in_time) return 'bg-[#6B7280]';
-    if (record.color_code === 'green') return 'bg-[#4ADE80]';
-    if (record.color_code === 'yellow') return 'bg-[#FBBF24]';
+    if (!record || !record.check_in_time) return 'bg-[#999999]';
+    if (record.color_code === 'green') return 'bg-[#2D7A3A]';
+    if (record.color_code === 'yellow') return 'bg-[#B8860B]';
     if (record.color_code === 'orange') return 'bg-[#FB923C]';
-    if (record.color_code === 'red') return 'bg-[#F87171]';
-    return 'bg-[#4ADE80]';
+    if (record.color_code === 'red') return 'bg-[#C0392B]';
+    return 'bg-[#2D7A3A]';
   };
 
   const getBranchName = (id: string) => {
@@ -940,13 +935,13 @@ export default function AttendancePage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-white text-2xl font-bold">Attendance</h1>
+          <h1 className="text-[#1A1A1A] text-2xl font-bold">Attendance</h1>
           <p className="text-[var(--text-muted)] text-xs font-semibold">Today's register</p>
         </div>
         <div className="flex items-center space-x-2">
           <button
             onClick={() => setBottomSheetOpen(true)}
-            className="min-h-[40px] bg-transparent border border-[var(--border-strong)] active:border-white text-[var(--text-secondary)] px-3 rounded-[10px] text-xs font-bold flex items-center justify-center space-x-1.5 transition-all active:scale-[0.97] cursor-pointer"
+            className="min-h-[40px] bg-white border border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-[0.98] text-[#1A1A1A] px-3.5 rounded-[12px] text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-sm cursor-pointer"
           >
             <Download size={16} strokeWidth={1.5} />
             <span>Import/Export</span>
@@ -956,16 +951,16 @@ export default function AttendancePage() {
               setLoading(true);
               fetchData();
             }}
-            className="min-h-[40px] bg-transparent border border-[var(--border-strong)] active:border-white text-[var(--text-secondary)] px-3 rounded-[10px] text-xs font-bold flex items-center justify-center space-x-1.5 transition-all active:scale-[0.97]"
+            className="min-h-[40px] bg-white border border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-[0.98] text-[#1A1A1A] px-3.5 rounded-[12px] text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-sm cursor-pointer"
           >
-            <RefreshCw size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
+            <RefreshCw size={16} strokeWidth={1.5} style={{ color: 'currentColor' }} />
             <span>Refresh</span>
           </button>
         </div>
       </div>
 
       {errorMsg && (
-        <div className="bg-[var(--danger-bg)] border border-[var(--danger)] text-[#F87171] text-xs font-bold px-4 py-3 rounded-[10px] flex items-center justify-between">
+        <div className="bg-[var(--danger-bg)] border border-[var(--danger)]/30 text-[var(--danger)] text-xs font-bold px-4 py-3 rounded-[12px] flex items-center justify-between shadow-sm">
           <span>{errorMsg}</span>
           <button
             onClick={() => {
@@ -982,7 +977,7 @@ export default function AttendancePage() {
 
       {/* Branch selector (Admin/Ops/Head HR only) */}
       {canSeeAllBranches && !userBranch && (
-        <div className="flex border-b border-[var(--border)]">
+        <div className="flex border-b border-[#E8E8E8]">
           {[
             { id: 'All', label: 'All Branches' },
             { id: 'daily', label: 'Nearbi Daily' },
@@ -993,8 +988,8 @@ export default function AttendancePage() {
               onClick={() => setBranchFilter(b.id as BranchFilter)}
               className={`flex-1 text-center py-2.5 text-xs font-bold uppercase tracking-wider border-b-2 transition-all ${
                 branchFilter === b.id
-                  ? 'border-white text-white'
-                  : 'border-transparent text-[var(--text-secondary)]'
+                  ? 'border-[#1A1A1A] text-[#1A1A1A]'
+                  : 'border-transparent text-[#555555]'
               }`}
             >
               {b.label}
@@ -1013,8 +1008,8 @@ export default function AttendancePage() {
               onClick={() => setStatusFilter(pill)}
               className={`px-4 py-2 text-xs font-bold rounded-full transition-all border whitespace-nowrap ${
                 isSelected
-                  ? 'bg-white text-[#1E2028] border-white'
-                  : 'bg-[var(--bg-surface)] text-[var(--text-secondary)] border-[var(--border)] hover:border-white/20 active:scale-95'
+                  ? 'bg-[#1A1A1A] text-white border-[#1A1A1A]'
+                  : 'bg-white text-[#555555] border-[#E8E8E8] hover:border-[#D0D0D0] hover:bg-[#F8F8F8] active:scale-95'
               }`}
             >
               {pill}
@@ -1032,9 +1027,9 @@ export default function AttendancePage() {
           <div className="skeleton h-[90px] w-full" />
         </div>
       ) : filteredData.length === 0 ? (
-        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-8 text-center flex flex-col items-center justify-center my-6">
-          <Clock size={48} strokeWidth={1} style={{ color: '#2A2D38' }} className="mb-2" />
-          <h3 className="text-sm font-bold text-white">No attendance records yet today</h3>
+        <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-8 text-center flex flex-col items-center justify-center my-6 shadow-sm">
+          <Clock size={48} strokeWidth={1} className="text-[#999999] mb-2" />
+          <h3 className="text-sm font-bold text-[#1A1A1A]">No attendance records yet today</h3>
           <p className="text-xs text-[var(--text-muted)] mt-1">
             Tap refresh or check back once kiosks report registrations.
           </p>
@@ -1053,17 +1048,17 @@ export default function AttendancePage() {
               <div
                 key={item.id}
                 onClick={() => router.push('/staff/' + item.id)}
-                className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 flex items-start space-x-3.5 relative shadow-sm cursor-pointer hover:border-white/20 transition-all"
+                className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex items-start space-x-3.5 relative shadow-sm cursor-pointer hover:border-[#D0D0D0] transition-all"
               >
                 {/* Left Dot Indicator */}
-                <div className={`w-3 h-3 rounded-full flex-shrink-0 mt-2 ${getDotColor(item.record)}`} />
+                <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 mt-2 ${getDotColor(item.record)}`} />
 
                 {/* Avatar */}
                 <div
-                  className={`w-11 h-11 rounded-full text-xs font-bold flex items-center justify-center flex-shrink-0 border ${
+                  className={`w-11 h-11 rounded-full text-sm font-bold flex items-center justify-center flex-shrink-0 border ${
                     hasCheckIn
-                      ? 'bg-white/10 text-white border-white/20'
-                      : 'bg-[var(--bg-elevated)] text-[var(--text-muted)] border-[var(--border-strong)]'
+                      ? 'bg-[#1A1A1A] text-white border-[#1A1A1A]'
+                      : 'bg-[#F2F2F2] text-[#999999] border-[#E8E8E8]'
                   }`}
                 >
                   {item.name.charAt(0).toUpperCase()}
@@ -1073,7 +1068,7 @@ export default function AttendancePage() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-start justify-between">
                     <div>
-                      <h3 className="font-bold text-sm text-white leading-tight truncate">
+                      <h3 className="font-bold text-sm text-[#1A1A1A] leading-tight truncate">
                         {item.name}
                       </h3>
                       <p className="text-[11px] text-[var(--text-muted)] font-semibold mt-0.5 leading-none">
@@ -1081,7 +1076,7 @@ export default function AttendancePage() {
                       </p>
                       {/* Admin/Ops see branch indicator */}
                       {!userBranch && (
-                        <span className="inline-block text-[9px] font-bold uppercase text-[var(--text-secondary)] mt-1 bg-[var(--bg-elevated)] border border-[var(--border-strong)] px-1.5 py-0.5 rounded">
+                        <span className="inline-block text-[9px] font-bold uppercase text-[#555555] mt-1 bg-[#F2F2F2] border border-[#E8E8E8] px-1.5 py-0.5 rounded">
                           {getBranchName(item.branch_id)}
                         </span>
                       )}
@@ -1095,7 +1090,7 @@ export default function AttendancePage() {
                   {hasCheckIn && item.record && (
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                       {/* Check In Time & Photo */}
-                      <div className="bg-[rgba(74,222,128,0.1)] border border-[rgba(74,222,128,0.15)] text-[#4ADE80] text-[10px] font-bold px-2 py-1 rounded flex items-center space-x-1.5">
+                      <div className="bg-[#EDF7EF] border border-[#2D7A3A]/20 text-[#2D7A3A] text-[10px] font-bold px-2.5 py-1 rounded-[20px] flex items-center space-x-1.5">
                         <span>IN: {item.record.check_in_time}</span>
                         {item.record.check_in_photo && (
                           <button
@@ -1107,7 +1102,7 @@ export default function AttendancePage() {
                                 time: item.record!.check_in_time || '',
                               });
                             }}
-                            className="w-4 h-4 rounded-full overflow-hidden border border-[rgba(74,222,128,0.3)] active:scale-90"
+                            className="w-4.5 h-4.5 rounded-full overflow-hidden border border-[#2D7A3A]/25 active:scale-90"
                           >
                             <img
                               src={item.record.check_in_photo}
@@ -1120,14 +1115,14 @@ export default function AttendancePage() {
 
                       {/* Minutes Late */}
                       {item.record.status === 'late' && item.record.minutes_late > 0 && (
-                        <div className="bg-[rgba(251,191,36,0.1)] border border-[rgba(251,191,36,0.15)] text-[#FBBF24] text-[10px] font-bold px-2 py-1 rounded">
+                        <div className="bg-[#FDF8E7] border border-[#B8860B]/20 text-[#B8860B] text-[10px] font-bold px-2.5 py-1 rounded-[20px]">
                           {item.record.minutes_late} mins late
                         </div>
                       )}
 
                       {/* Check Out Time & Photo */}
                       {hasCheckOut && (
-                        <div className="bg-[rgba(96,165,250,0.1)] border border-[rgba(96,165,250,0.15)] text-[#60A5FA] text-[10px] font-bold px-2 py-1 rounded flex items-center space-x-1.5">
+                        <div className="bg-[#EBF3FB] border border-[#1A5FA8]/20 text-[#1A5FA8] text-[10px] font-bold px-2.5 py-1 rounded-[20px] flex items-center space-x-1.5">
                           <span>OUT: {item.record.check_out_time}</span>
                           {item.record.check_out_photo && (
                             <button
@@ -1139,7 +1134,7 @@ export default function AttendancePage() {
                                   time: item.record!.check_out_time || '',
                                 });
                               }}
-                              className="w-4 h-4 rounded-full overflow-hidden border border-[rgba(96,165,250,0.3)] active:scale-90"
+                              className="w-4.5 h-4.5 rounded-full overflow-hidden border border-[#1A5FA8]/25 active:scale-90"
                             >
                               <img
                                 src={item.record.check_out_photo}
@@ -1154,12 +1149,12 @@ export default function AttendancePage() {
                       {/* Overtime Approval status */}
                       {otAdjustment && (
                         <div
-                          className={`text-[9px] font-bold px-2 py-1 rounded border flex items-center gap-1 ${
+                          className={`text-[9px] font-bold px-2.5 py-1 rounded-[20px] border flex items-center gap-1 ${
                             otAdjustment.status === 'pending'
-                              ? 'bg-[rgba(251,191,36,0.1)] border-[rgba(251,191,36,0.15)] text-[#FBBF24]'
+                              ? 'bg-[#FDF8E7] border-[#B8860B]/20 text-[#B8860B]'
                               : otAdjustment.status === 'approved'
-                              ? 'bg-[rgba(74,222,128,0.1)] border-[rgba(74,222,128,0.15)] text-[#4ADE80]'
-                              : 'bg-[var(--bg-elevated)] border-[var(--border-strong)] text-[var(--text-muted)]'
+                              ? 'bg-[#EDF7EF] border-[#2D7A3A]/20 text-[#2D7A3A]'
+                              : 'bg-[#F2F2F2] border-[#E8E8E8] text-[#999999]'
                           }`}
                         >
                           <span>OT</span>
@@ -1184,12 +1179,12 @@ export default function AttendancePage() {
                       {/* Early Check-in Approval status */}
                       {earlyAdjustment && (
                         <div
-                          className={`text-[9px] font-bold px-2 py-1 rounded border flex items-center gap-1 ${
+                          className={`text-[9px] font-bold px-2.5 py-1 rounded-[20px] border flex items-center gap-1 ${
                             earlyAdjustment.status === 'pending'
-                              ? 'bg-[rgba(251,191,36,0.1)] border-[rgba(251,191,36,0.15)] text-[#FBBF24]'
+                              ? 'bg-[#FDF8E7] border-[#B8860B]/20 text-[#B8860B]'
                               : earlyAdjustment.status === 'approved'
-                              ? 'bg-[rgba(74,222,128,0.1)] border-[rgba(74,222,128,0.15)] text-[#4ADE80]'
-                              : 'bg-[var(--bg-elevated)] border-[var(--border-strong)] text-[var(--text-muted)]'
+                              ? 'bg-[#EDF7EF] border-[#2D7A3A]/20 text-[#2D7A3A]'
+                              : 'bg-[#F2F2F2] border-[#E8E8E8] text-[#999999]'
                           }`}
                         >
                           <span>Early In</span>
@@ -1213,7 +1208,7 @@ export default function AttendancePage() {
 
                       {/* Late fine amount */}
                       {item.fine && (
-                        <div className="bg-[rgba(248,113,113,0.1)] border border-[rgba(248,113,113,0.15)] text-[#F87171] text-[10px] font-bold px-2 py-1 rounded">
+                        <div className="bg-[#FDECEA] border border-[#C0392B]/20 text-[#C0392B] text-[10px] font-bold px-2.5 py-1 rounded-[20px]">
                           Fine: ₹{item.fine.fine_amount} {item.fine.waived && '(Waived)'}
                         </div>
                       )}
@@ -1228,7 +1223,7 @@ export default function AttendancePage() {
                           e.stopPropagation();
                           handleOpenFineModal(item);
                         }}
-                        className="bg-[rgba(248,113,113,0.12)] border border-[rgba(248,113,113,0.2)] text-[#F87171] hover:bg-[rgba(248,113,113,0.2)] font-bold text-[10px] px-2.5 py-1 rounded-[6px] flex items-center space-x-1 active:scale-95 transition-transform"
+                        className="bg-white border border-[#E8E8E8] hover:bg-[#FDECEA] hover:text-[#C0392B] hover:border-[#C0392B]/20 text-[#555555] font-bold text-[10px] px-2.5 py-1 rounded-[12px] flex items-center space-x-1 active:scale-95 transition-all shadow-sm"
                       >
                         <AlertCircle size={13} />
                         <span>Fine</span>
@@ -1245,24 +1240,24 @@ export default function AttendancePage() {
       {/* Photo Modal */}
       {selectedPhoto && (
         <div
-          className="fixed inset-0 z-[11000] bg-black/90 flex items-center justify-center p-4"
+          className="fixed inset-0 z-[11000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
           onClick={() => setSelectedPhoto(null)}
         >
-          <div className="relative max-w-sm w-full bg-[var(--bg-surface)] rounded-2xl border border-[var(--border-strong)] p-4 flex flex-col items-center">
+          <div className="relative max-w-sm w-full bg-white rounded-[14px] border border-[#E8E8E8] p-5 flex flex-col items-center shadow-lg">
             <button
               onClick={() => setSelectedPhoto(null)}
-              className="absolute top-3 right-3 text-[var(--text-muted)] hover:text-white flex items-center justify-center p-1"
+              className="absolute top-3 right-3 text-[#999999] hover:text-[#1A1A1A] flex items-center justify-center p-1"
             >
               <X size={16} strokeWidth={1.5} style={{ color: 'currentColor' }} />
             </button>
-            <h4 className="text-white text-sm font-bold mb-1">{selectedPhoto.label}</h4>
+            <h4 className="text-[#1A1A1A] text-sm font-bold mb-1">{selectedPhoto.label}</h4>
             {selectedPhoto.time && (
-              <p className="text-[10px] text-[var(--text-muted)] font-bold mb-3">Time: {selectedPhoto.time}</p>
+              <p className="text-[10px] text-[#999999] font-bold mb-3">Time: {selectedPhoto.time}</p>
             )}
             <img
               src={selectedPhoto.url}
               alt="Verification selfie"
-              className="w-full max-h-[60vh] object-contain rounded-lg border border-[var(--border)]"
+              className="w-full max-h-[60vh] object-contain rounded-lg border border-[#E8E8E8]"
             />
           </div>
         </div>
@@ -1299,27 +1294,27 @@ export default function AttendancePage() {
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => setBottomSheetOpen(false)}
           />
-          <div className="bg-[var(--bg-surface)] rounded-t-[20px] shadow-2xl relative z-10 w-full max-w-md border-t border-[var(--border-strong)] p-6 animate-slide-up flex flex-col space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center border-b border-[var(--border)] pb-3">
-              <h3 className="text-white text-base font-bold">Import / Export Attendance</h3>
+          <div className="bg-white rounded-t-[20px] shadow-lg relative z-10 w-full max-w-md border-t border-[#E8E8E8] p-6 animate-slide-up flex flex-col space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center border-b border-[#E8E8E8] pb-3">
+              <h3 className="text-[#1A1A1A] text-base font-bold">Import / Export Attendance</h3>
               <button
                 type="button"
                 onClick={() => setBottomSheetOpen(false)}
-                className="text-[var(--text-secondary)] hover:text-white"
+                className="text-[#999999] hover:text-[#1A1A1A]"
               >
                 <X size={20} />
               </button>
             </div>
 
             {/* Tabs */}
-            <div className="flex bg-[var(--bg-input)] rounded-lg p-1">
+            <div className="flex bg-[#F2F2F2] rounded-[14px] p-1">
               <button
                 type="button"
                 onClick={() => setActiveTab('export')}
                 className={`flex-1 text-center py-2 text-xs font-bold rounded-md transition-all ${
                   activeTab === 'export'
-                    ? 'bg-white text-[#1E2028]'
-                    : 'text-[var(--text-secondary)] hover:text-white'
+                    ? 'bg-white text-[#1A1A1A] shadow-sm'
+                    : 'text-[#555555] hover:text-[#1A1A1A]'
                 }`}
               >
                 Export
@@ -1339,8 +1334,8 @@ export default function AttendancePage() {
                   !(user?.role === 'admin' || user?.role === 'ops_manager' || (user?.role === 'staff_executive' && user?.branch !== null)) ? 'opacity-40 cursor-not-allowed' : ''
                 } ${
                   activeTab === 'import'
-                    ? 'bg-white text-[#1E2028]'
-                    : 'text-[var(--text-secondary)] hover:text-white'
+                    ? 'bg-white text-[#1A1A1A] shadow-sm'
+                    : 'text-[#555555] hover:text-[#1A1A1A]'
                 }`}
               >
                 Import
@@ -1358,7 +1353,7 @@ export default function AttendancePage() {
                     type="month"
                     value={selectedMonth}
                     onChange={(e) => setSelectedMonth(e.target.value)}
-                    className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-sm focus:outline-none focus:border-white/40 text-white font-bold"
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
                   />
                 </div>
 
@@ -1369,11 +1364,14 @@ export default function AttendancePage() {
                       handleDownloadGridTemplate(selectedMonth);
                       setBottomSheetOpen(false);
                     }}
-                    className="w-full min-h-[46px] bg-transparent border border-[var(--border-strong)] text-[var(--text-secondary)] hover:text-white font-bold text-xs rounded-xl flex items-center justify-center space-x-1.5 active:scale-95 transition-all cursor-pointer"
+                    className="w-full min-h-[46px] bg-white border border-[#E8E8E8] text-[#1A1A1A] hover:bg-[#F8F8F8] font-bold text-xs rounded-[12px] flex items-center justify-center space-x-1.5 active:scale-95 transition-all cursor-pointer shadow-sm"
                   >
                     <Download size={16} />
-                    <span>Download Monthly Grid Template</span>
+                    <span>Download Grid Template</span>
                   </button>
+                  <p className="text-[10px] text-[var(--text-muted)] text-center mt-1">
+                    Add staff first to pre-fill the template. You can also fill manually using PIN numbers.
+                  </p>
 
                   <button
                     type="button"
@@ -1381,7 +1379,7 @@ export default function AttendancePage() {
                       handleExportExistingAttendance(selectedMonth);
                       setBottomSheetOpen(false);
                     }}
-                    className="w-full min-h-[46px] bg-white text-[#1E2028] font-bold text-xs rounded-xl flex items-center justify-center space-x-1.5 active:scale-95 transition-all shadow hover:bg-gray-200 cursor-pointer"
+                    className="w-full min-h-[46px] bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold text-xs rounded-[12px] flex items-center justify-center space-x-1.5 active:scale-95 transition-all shadow hover:opacity-90 cursor-pointer"
                   >
                     <Download size={16} />
                     <span>Export Existing Attendance</span>
@@ -1401,7 +1399,7 @@ export default function AttendancePage() {
                     type="month"
                     value={selectedMonth}
                     onChange={(e) => setSelectedMonth(e.target.value)}
-                    className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-sm focus:outline-none focus:border-white/40 text-white font-bold mb-4"
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold mb-4"
                   />
                 </div>
 
@@ -1413,15 +1411,15 @@ export default function AttendancePage() {
                   className="hidden"
                 />
 
-                <div className="w-full py-8 border-2 border-dashed border-[var(--border-strong)] rounded-xl flex flex-col items-center justify-center space-y-3 bg-[var(--bg-input)]">
-                  <Upload size={32} className="text-[var(--text-muted)]" />
-                  <p className="text-xs text-[var(--text-muted)] font-semibold text-center px-4">
+                <div className="w-full py-8 border-2 border-dashed border-[#D0D0D0] rounded-[14px] flex flex-col items-center justify-center space-y-3 bg-[#F8F8F8]">
+                  <Upload size={32} className="text-[#999999]" />
+                  <p className="text-xs text-[#555555] font-semibold text-center px-4">
                     Upload an Excel (.xlsx) template or a CSV file
                   </p>
                   <button
                     type="button"
                     onClick={handleImportButtonClick}
-                    className="bg-white text-[#1E2028] font-bold text-xs px-4 py-2 rounded-lg active:scale-95 transition-transform cursor-pointer"
+                    className="bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold text-xs px-4 py-2 rounded-[12px] active:scale-95 transition-all cursor-pointer"
                   >
                     Choose File
                   </button>
@@ -1432,7 +1430,7 @@ export default function AttendancePage() {
             <button
               type="button"
               onClick={() => setBottomSheetOpen(false)}
-              className="w-full min-h-[44px] bg-transparent border border-[var(--border-strong)] text-[var(--text-secondary)] font-bold text-xs py-2.5 rounded-[10px] active:scale-95 transition-all cursor-pointer"
+              className="w-full min-h-[44px] bg-[#F2F2F2] hover:bg-[#EBEBEB] text-[#555555] font-bold text-xs py-2.5 rounded-[12px] active:scale-95 transition-all cursor-pointer"
             >
               Cancel
             </button>
@@ -1447,34 +1445,34 @@ export default function AttendancePage() {
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => { if (!isImporting) setImportPreviewOpen(false); }}
           />
-          <div className="bg-[var(--bg-surface)] rounded-[16px] shadow-2xl relative z-10 p-6 w-full max-w-4xl text-left border border-[var(--border-strong)] flex flex-col max-h-[85vh]">
+          <div className="bg-white rounded-[14px] shadow-lg relative z-10 p-6 w-full max-w-4xl text-left border border-[#E8E8E8] flex flex-col max-h-[85vh]">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-base font-bold text-white">Import Preview</h3>
+              <h3 className="text-base font-bold text-[#1A1A1A]">Import Preview</h3>
               <button
                 type="button"
                 onClick={() => setImportPreviewOpen(false)}
                 disabled={isImporting}
-                className="text-[var(--text-secondary)] hover:text-white"
+                className="text-[#999999] hover:text-[#1A1A1A]"
               >
                 <X size={20} />
               </button>
             </div>
 
             {/* Summary Bar */}
-            <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-lg p-3 mb-4 flex items-center justify-between text-xs font-semibold text-[var(--text-secondary)]">
+            <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 mb-4 flex items-center justify-between text-xs font-semibold text-[#555555]">
               <div>
-                <span className="text-[#4ADE80] font-bold">{importSummary.ready}</span> records ready |{' '}
-                <span className="text-[#F87171] font-bold">{importSummary.errors}</span> errors |{' '}
-                <span className="text-[#FBBF24] font-bold">{importSummary.overwrites}</span> overwrites
+                <span className="text-[#2D7A3A] font-bold">{importSummary.ready}</span> records ready |{' '}
+                <span className="text-[#C0392B] font-bold">{importSummary.errors}</span> errors |{' '}
+                <span className="text-[#B8860B] font-bold">{importSummary.overwrites}</span> overwrites
               </div>
-              {importProgress && <div className="text-white font-bold animate-pulse">{importProgress}</div>}
+              {importProgress && <div className="text-[#1A1A1A] font-bold animate-pulse">{importProgress}</div>}
             </div>
 
             {/* Table */}
-            <div className="flex-1 overflow-auto border border-[var(--border-strong)] rounded-lg">
+            <div className="flex-1 overflow-auto border border-[#E8E8E8] rounded-[12px]">
               <table className="w-full text-left text-xs whitespace-nowrap border-collapse">
                 <thead>
-                  <tr className="text-[var(--text-muted)] uppercase font-bold text-[9px] bg-[var(--bg-elevated)] border-b border-[var(--border-strong)] sticky top-0">
+                  <tr className="text-[#999999] uppercase font-bold text-[9px] bg-[#F2F2F2] border-b border-[#E8E8E8] sticky top-0">
                     <th className="p-2.5">Row</th>
                     <th className="p-2.5">Status</th>
                     <th className="p-2.5">Name</th>
@@ -1485,46 +1483,46 @@ export default function AttendancePage() {
                     <th className="p-2.5">Errors / Details</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[var(--border)]">
+                <tbody className="divide-y divide-[#E8E8E8]">
                   {importRows.map((row, idx) => (
                     <tr
                       key={idx}
-                      className={`hover:bg-[var(--bg-elevated)]/40 transition-colors ${
+                      className={`hover:bg-[#F8F8F8] transition-colors ${
                         row.status === 'error'
-                          ? 'border-l-4 border-l-[#F87171]'
+                          ? 'border-l-4 border-l-[#C0392B]'
                           : row.status === 'overwrite'
-                          ? 'border-l-4 border-l-[#FBBF24]'
-                          : 'border-l-4 border-l-[#4ADE80]'
+                          ? 'border-l-4 border-l-[#B8860B]'
+                          : 'border-l-4 border-l-[#2D7A3A]'
                       }`}
                     >
-                      <td className="p-2.5 text-[var(--text-secondary)] font-bold">{row.rowIdx}</td>
+                      <td className="p-2.5 text-[#555555] font-bold">{row.rowIdx}</td>
                       <td className="p-2.5">
                         {row.status === 'error' ? (
-                          <span className="text-[#F87171] font-bold uppercase text-[9px] bg-[#F87171]/10 border border-[#F87171]/20 px-1.5 py-0.5 rounded">
+                          <span className="text-[#C0392B] font-bold uppercase text-[9px] bg-[#FDECEA] border border-[#C0392B]/20 px-2 py-0.5 rounded-[20px]">
                             Error
                           </span>
                         ) : row.status === 'overwrite' ? (
-                          <span className="text-[#FBBF24] font-bold uppercase text-[9px] bg-[#FBBF24]/10 border border-[#FBBF24]/20 px-1.5 py-0.5 rounded">
+                          <span className="text-[#B8860B] font-bold uppercase text-[9px] bg-[#FDF8E7] border border-[#B8860B]/20 px-2 py-0.5 rounded-[20px]">
                             Overwrite
                           </span>
                         ) : (
-                          <span className="text-[#4ADE80] font-bold uppercase text-[9px] bg-[#4ADE80]/10 border border-[#4ADE80]/20 px-1.5 py-0.5 rounded">
+                          <span className="text-[#2D7A3A] font-bold uppercase text-[9px] bg-[#EDF7EF] border border-[#2D7A3A]/20 px-2 py-0.5 rounded-[20px]">
                             Ready
                           </span>
                         )}
                       </td>
-                      <td className="p-2.5 text-white font-bold">{row.name || '—'}</td>
-                      <td className="p-2.5 font-mono text-[var(--text-secondary)]">{row.pin || '—'}</td>
-                      <td className="p-2.5 text-[var(--text-secondary)]">{row.date || '—'}</td>
-                      <td className="p-2.5 text-[var(--text-secondary)] font-semibold">{row.inTime || '—'}</td>
-                      <td className="p-2.5 text-[var(--text-secondary)] font-semibold">{row.outTime || '—'}</td>
+                      <td className="p-2.5 text-[#1A1A1A] font-bold">{row.name || '—'}</td>
+                      <td className="p-2.5 font-mono text-[#555555]">{row.pin || '—'}</td>
+                      <td className="p-2.5 text-[#555555]">{row.date || '—'}</td>
+                      <td className="p-2.5 text-[#555555] font-semibold">{row.inTime || '—'}</td>
+                      <td className="p-2.5 text-[#555555] font-semibold">{row.outTime || '—'}</td>
                       <td className="p-2.5 text-xs whitespace-normal">
                         {row.status === 'error' ? (
-                          <span className="text-[#F87171] font-semibold">{row.errors.join(', ')}</span>
+                          <span className="text-[#C0392B] font-semibold">{row.errors.join(', ')}</span>
                         ) : row.status === 'overwrite' ? (
-                          <span className="text-[#FBBF24] font-semibold">Record exists for {row.name} on {row.date} — will be updated</span>
+                          <span className="text-[#B8860B] font-semibold">Record exists for {row.name} on {row.date} — will be updated</span>
                         ) : (
-                          <span className="text-[var(--text-muted)]">Ready to import</span>
+                          <span className="text-[#999999]">Ready to import</span>
                         )}
                       </td>
                     </tr>
@@ -1544,7 +1542,7 @@ export default function AttendancePage() {
                 type="button"
                 onClick={() => setImportPreviewOpen(false)}
                 disabled={isImporting}
-                className="bg-transparent border border-[var(--border-strong)] text-[var(--text-secondary)] font-bold text-xs px-4 py-2.5 rounded-[10px] active:scale-95 transition-all cursor-pointer"
+                className="bg-[#F2F2F2] hover:bg-[#EBEBEB] text-[#555555] font-bold text-xs px-4 py-2.5 rounded-[12px] active:scale-95 transition-all cursor-pointer"
               >
                 Cancel
               </button>
@@ -1552,7 +1550,7 @@ export default function AttendancePage() {
                 type="button"
                 onClick={() => executeImportAttendance('new')}
                 disabled={isImporting || importSummary.ready === 0}
-                className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] hover:border-white/20 text-white font-bold text-xs px-4 py-2.5 rounded-[10px] active:scale-95 transition-all cursor-pointer"
+                className="bg-white border border-[#E8E8E8] hover:bg-[#F8F8F8] text-[#1A1A1A] font-bold text-xs px-4 py-2.5 rounded-[12px] active:scale-95 transition-all cursor-pointer shadow-sm"
               >
                 Import new only
               </button>
@@ -1560,7 +1558,7 @@ export default function AttendancePage() {
                 type="button"
                 onClick={() => executeImportAttendance('all')}
                 disabled={isImporting || (importSummary.ready + importSummary.overwrites) === 0}
-                className="bg-[#F5A800] text-white hover:bg-[#d99400] font-bold text-xs px-4 py-2.5 rounded-[10px] active:scale-95 transition-all cursor-pointer"
+                className="bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold text-xs px-4 py-2.5 rounded-[12px] active:scale-95 transition-all cursor-pointer shadow-md"
               >
                 {isImporting ? 'Importing...' : 'Import all valid'}
               </button>

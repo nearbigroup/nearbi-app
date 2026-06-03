@@ -239,8 +239,8 @@ export default function WallPage() {
   // Access check
   if (user?.role === 'admin') {
     return (
-      <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-6 text-center max-w-sm mx-auto my-8 flex flex-col items-center justify-center">
-        <h3 className="text-base font-bold text-white mb-1">Access Denied</h3>
+      <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-6 text-center max-w-sm mx-auto my-8 flex flex-col items-center justify-center shadow-sm">
+        <h3 className="text-base font-bold text-[#1A1A1A] mb-1">Access Denied</h3>
         <p className="text-xs text-[var(--text-muted)]">Administrators do not have access to The Wall.</p>
       </div>
     );
@@ -251,23 +251,23 @@ export default function WallPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-white text-2xl font-bold flex items-center space-x-2">
-            <Activity className="text-[#F87171]" />
+          <h1 className="text-[#1A1A1A] text-2xl font-bold flex items-center space-x-2">
+            <Activity className="text-[var(--danger)]" />
             <span>The Wall</span>
           </h1>
           <p className="text-[var(--text-muted)] text-xs font-semibold">Real-time branch activity stream</p>
         </div>
         <button
           onClick={() => fetchEvents(0, false)}
-          className="min-h-[40px] bg-transparent border border-[var(--border-strong)] active:border-white text-[var(--text-secondary)] px-3 rounded-[10px] text-xs font-bold flex items-center justify-center space-x-1.5 transition-all active:scale-[0.97]"
+          className="min-h-[40px] bg-white border border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-[0.98] text-[#1A1A1A] px-3.5 rounded-[12px] text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-sm cursor-pointer"
         >
-          <RefreshCw size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} className={loading ? 'animate-spin' : ''} />
+          <RefreshCw size={16} strokeWidth={1.5} style={{ color: 'currentColor' }} className={loading ? 'animate-spin' : ''} />
           <span>Refresh</span>
         </button>
       </div>
 
       {errorMsg && (
-        <div className="bg-[var(--danger-bg)] border border-[var(--danger)] text-[#F87171] text-xs font-bold px-4 py-3 rounded-[10px] flex items-center justify-between">
+        <div className="bg-[var(--danger-bg)] border border-[var(--danger)]/30 text-[var(--danger)] text-xs font-bold px-4 py-3 rounded-[12px] flex items-center justify-between shadow-sm">
           <span>{errorMsg}</span>
           <button onClick={() => fetchEvents(0, false)} className="text-xs underline font-bold">
             Retry
@@ -287,13 +287,13 @@ export default function WallPage() {
                   setBranchFilter(b);
                   setPage(0);
                 }}
-                className={`flex-1 text-center py-2.5 rounded-[10px] border text-xs font-bold uppercase tracking-wider transition-all ${
+                className={`flex-1 text-center py-2.5 rounded-[12px] border text-xs font-bold uppercase tracking-wider transition-all cursor-pointer ${
                   isActive
-                    ? 'bg-white text-[#1E2028] border-white'
-                    : 'bg-[var(--bg-surface)] text-[var(--text-secondary)] border-[var(--border)] hover:border-white/20 active:scale-95'
+                    ? 'bg-[#1A1A1A] text-white border-[#1A1A1A]'
+                    : 'bg-white text-[#555555] border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-95'
                 }`}
               >
-                {b === 'all' ? 'All Branches' : b === 'daily' ? 'Daily' : 'Hypermarket'}
+                {b === 'all' ? 'All' : b === 'daily' ? 'Daily' : 'Hypermarket'}
               </button>
             );
           })}
@@ -311,10 +311,10 @@ export default function WallPage() {
                 setTypeFilter(pill);
                 setPage(0);
               }}
-              className={`px-4 py-2 text-xs font-bold rounded-full transition-all border whitespace-nowrap ${
+              className={`px-4 py-2 text-xs font-bold rounded-full transition-all border whitespace-nowrap cursor-pointer ${
                 isSelected
-                  ? 'bg-white text-[#1E2028] border-white'
-                  : 'bg-[var(--bg-surface)] text-[var(--text-secondary)] border-[var(--border)] hover:border-white/20 active:scale-95'
+                  ? 'bg-[#1A1A1A] text-white border-[#1A1A1A]'
+                  : 'bg-white text-[#555555] border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-95'
               }`}
             >
               {pill}
@@ -332,9 +332,9 @@ export default function WallPage() {
           <div className="skeleton h-[76px] w-full" />
         </div>
       ) : filteredEvents.length === 0 ? (
-        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-8 text-center flex flex-col items-center justify-center my-6">
-          <Activity size={48} strokeWidth={1} style={{ color: '#2A2D38' }} className="mb-2" />
-          <h3 className="text-sm font-bold text-white">No activity logged</h3>
+        <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-8 text-center flex flex-col items-center justify-center my-6 shadow-sm">
+          <Activity size={48} strokeWidth={1} style={{ color: '#999999' }} className="mb-2" />
+          <h3 className="text-sm font-bold text-[#1A1A1A]">No activity logged</h3>
           <p className="text-xs text-[var(--text-muted)] mt-1">
             Events will stream live as they happen in the branch kiosks and portal.
           </p>
@@ -348,8 +348,8 @@ export default function WallPage() {
                 key={item.id}
                 className={`border rounded-[12px] p-3.5 flex items-center justify-between shadow-sm transition-all duration-1000 ${
                   isNew
-                    ? 'bg-[rgba(251,191,36,0.15)] border-amber-500/40 scale-[1.01]'
-                    : 'bg-[var(--bg-surface)] border-[var(--border)]'
+                    ? 'bg-[var(--warning-bg)] border-[var(--warning)]/40 scale-[1.01]'
+                    : 'bg-white border-[#E8E8E8]'
                 }`}
               >
                 <div className="flex items-center space-x-3 min-w-0">
@@ -360,12 +360,12 @@ export default function WallPage() {
                     className={`${getDotColor(item.event_type)} flex-shrink-0`}
                   />
                   <div className="min-w-0">
-                    <p className="text-xs font-bold text-white leading-snug">
+                    <p className="text-xs font-semibold text-[#1A1A1A] leading-snug">
                       {item.staff_name && item.description.startsWith(item.staff_name) && item.staff_id ? (
                         <>
                           <span
                             onClick={() => router.push('/staff/' + item.staff_id)}
-                            className="underline cursor-pointer hover:text-[var(--text-secondary)] transition-colors"
+                            className="underline font-bold cursor-pointer hover:text-[#555555] transition-colors"
                           >
                             {item.staff_name}
                           </span>
@@ -382,7 +382,7 @@ export default function WallPage() {
                       {!userBranch && (
                         <>
                           <span className="text-[9px] text-[var(--text-muted)]">•</span>
-                          <span className="text-[9px] font-bold uppercase tracking-wider text-[var(--text-secondary)] bg-[var(--bg-elevated)] border border-[var(--border-strong)] px-1 rounded">
+                          <span className="text-[9px] font-bold uppercase tracking-wider text-[#555555] bg-[#F2F2F2] border border-[#E8E8E8] px-2 py-0.5 rounded-[20px]">
                             {getBranchLabel(item.branch_id)}
                           </span>
                         </>
@@ -405,7 +405,7 @@ export default function WallPage() {
             <button
               onClick={handleLoadMore}
               disabled={loadingMore}
-              className="w-full min-h-[44px] bg-[var(--bg-surface)] hover:bg-[var(--bg-elevated)] border border-[var(--border)] hover:border-white/20 active:scale-98 transition-all text-xs font-bold text-[var(--text-secondary)] rounded-xl py-3 mt-4"
+              className="w-full min-h-[44px] bg-white hover:bg-[#F8F8F8] border border-[#E8E8E8] active:scale-98 transition-all text-xs font-bold text-[#1A1A1A] rounded-xl py-3 mt-4 cursor-pointer shadow-sm"
             >
               {loadingMore ? 'Loading more events...' : 'Load more activities'}
             </button>

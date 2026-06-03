@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
-import { Search, Plus, Trash2, Eye, EyeOff, Lock, X, AlertTriangle, Users, AlertCircle, RefreshCw, Cake, Download, Upload, Check } from 'lucide-react';
+import { Search, Plus, Trash2, Eye, EyeOff, Lock, X, AlertTriangle, Users, AlertCircle, RefreshCw, Cake, Download, Upload, Check, Phone } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import * as XLSX from 'xlsx';
 import { DEPARTMENTS } from '@/lib/data';
@@ -29,8 +29,14 @@ interface StaffMember {
   monthly_salary: number;
   join_date: string;
   date_of_birth?: string | null;
+  mobile_number?: string | null;
   active: boolean;
   shift?: Shift;
+  staff_accounts?: {
+    id: string;
+    mobile_number: string;
+    last_login?: string | null;
+  }[];
 }
 
 export default function StaffPage() {
@@ -57,6 +63,7 @@ export default function StaffPage() {
     monthly_salary: '',
     join_date: '',
     date_of_birth: '',
+    mobile_number: '',
   });
   
   const [formError, setFormError] = useState('');
@@ -175,14 +182,30 @@ export default function StaffPage() {
           return;
         }
 
-        // Fetch all existing active pins from Supabase first
+        // Fetch all existing active pins and mobile numbers from Supabase first
         const { data: existingStaff, error: pinError } = await supabase
           .from('staff')
-          .select('pin, name')
+          .select('pin, name, mobile_number')
           .eq('active', true);
         if (pinError) throw pinError;
         
         const existingPins = new Set(existingStaff?.map(s => s.pin) || []);
+        const existingMobiles = new Set(
+          (existingStaff || [])
+            .map(s => s.mobile_number)
+            .filter(Boolean) as string[]
+        );
+
+        const { data: existingAccs, error: accError } = await supabase
+          .from('staff_accounts')
+          .select('mobile_number');
+        if (!accError && existingAccs) {
+          existingAccs.forEach(acc => {
+            if (acc.mobile_number) {
+              existingMobiles.add(acc.mobile_number);
+            }
+          });
+        }
 
         const validatedRows = rows.map((row: any, idx: number) => {
           const errors: string[] = [];
@@ -196,6 +219,31 @@ export default function StaffPage() {
           const salary = row.monthly_salary !== undefined ? Number(row.monthly_salary) : NaN;
           const join_date_raw = row.join_date;
           const dob_raw = row.date_of_birth;
+          const mobile_number = row.mobile_number ? String(row.mobile_number).trim() : '';
+
+          // Check if it's the example row
+          const isExample = pin === '0000' || name.toLowerCase() === 'example staff';
+
+          if (isExample) {
+            return {
+              rowIdx: idx + 1,
+              name,
+              pin,
+              branchRaw,
+              branchId: '',
+              department: deptRaw,
+              shift_start,
+              shift_end,
+              off_days_per_month: off_days,
+              monthly_salary: salary,
+              join_date: '',
+              date_of_birth: null,
+              mobile_number: '',
+              errors: [],
+              isExample: true,
+              isValid: false
+            };
+          }
 
           // 1. name validation
           if (!name) {
@@ -266,6 +314,15 @@ export default function StaffPage() {
             }
           }
 
+          // 10. mobile_number validation (optional)
+          if (mobile_number) {
+            if (!/^\d{10}$/.test(mobile_number)) {
+              errors.push('Mobile number must be exactly 10 digits');
+            } else if (existingMobiles.has(mobile_number)) {
+              errors.push(`Mobile number ${mobile_number} already in use`);
+            }
+          }
+
           return {
             rowIdx: idx + 1,
             name,
@@ -279,20 +336,32 @@ export default function StaffPage() {
             monthly_salary: salary,
             join_date: parsedJoinDate,
             date_of_birth: parsedDob || null,
+            mobile_number,
             errors,
+            isExample: false,
             isValid: errors.length === 0
           };
         });
 
-        // Add pins from the spreadsheet itself to avoid importing duplicate pins within the file
+        // Add pins & mobiles from the spreadsheet itself to avoid importing duplicate pins/mobiles within the file
         const filePins = new Map<string, number>();
+        const fileMobiles = new Map<string, number>();
         validatedRows.forEach((vr) => {
+          if (vr.isExample) return;
           if (vr.pin && /^\d{4}$/.test(vr.pin)) {
             if (filePins.has(vr.pin)) {
               vr.errors.push(`Duplicate PIN ${vr.pin} inside the file`);
               vr.isValid = false;
             } else {
               filePins.set(vr.pin, vr.rowIdx);
+            }
+          }
+          if (vr.mobile_number && /^\d{10}$/.test(vr.mobile_number)) {
+            if (fileMobiles.has(vr.mobile_number)) {
+              vr.errors.push(`Duplicate Mobile ${vr.mobile_number} inside the file`);
+              vr.isValid = false;
+            } else {
+              fileMobiles.set(vr.mobile_number, vr.rowIdx);
             }
           }
         });
@@ -355,7 +424,7 @@ export default function StaffPage() {
         }
 
         // Insert staff
-        const { error: staffErr } = await supabase.from('staff').insert({
+        const { data: newStaffData, error: staffErr } = await supabase.from('staff').insert({
           name: row.name,
           pin: row.pin,
           branch_id: row.branchId,
@@ -365,10 +434,22 @@ export default function StaffPage() {
           monthly_salary: row.monthly_salary,
           join_date: row.join_date,
           date_of_birth: row.date_of_birth,
+          mobile_number: row.mobile_number || null,
           active: true
-        });
+        }).select('id');
 
         if (staffErr) throw staffErr;
+        const insertedStaffId = newStaffData?.[0]?.id;
+
+        // Auto-create staff account if mobile_number is provided
+        if (row.mobile_number && insertedStaffId) {
+          const { error: accErr } = await supabase.from('staff_accounts').insert({
+            staff_id: insertedStaffId,
+            mobile_number: row.mobile_number,
+            password: row.pin, // PIN is default password
+          });
+          if (accErr) throw accErr;
+        }
         
         // Log to wall
         try {
@@ -396,6 +477,69 @@ export default function StaffPage() {
     }
   };
 
+  const handleDownloadStaffTemplate = () => {
+    try {
+      const headers = [
+        'name',
+        'pin',
+        'branch',
+        'department',
+        'shift_start',
+        'shift_end',
+        'off_days_per_month',
+        'monthly_salary',
+        'join_date',
+        'date_of_birth',
+        'mobile_number'
+      ];
+
+      const rows = [
+        {
+          name: 'Example Staff',
+          pin: '0000',
+          branch: 'Nearbi Daily',
+          department: 'Fulfillment',
+          shift_start: '09:00',
+          shift_end: '18:00',
+          off_days_per_month: 4,
+          monthly_salary: 15000,
+          join_date: '01/01/2026',
+          date_of_birth: '01/01/2000',
+          mobile_number: '9876543210'
+        }
+      ];
+
+      const wb = XLSX.utils.book_new();
+      const wsStaff = XLSX.utils.json_to_sheet(rows, { header: headers });
+      XLSX.utils.book_append_sheet(wb, wsStaff, 'Staff Register');
+
+      const instructions = [
+        ['HOW TO FILL THIS TEMPLATE'],
+        ['name - Full staff name (required)'],
+        ['pin - Exactly 4 digits, must be unique (required)'],
+        ['branch - Must be: Nearbi Daily OR Nearbi Hypermarket'],
+        [`department - Must be: ${DEPARTMENTS.join(' / ')}`],
+        ['shift_start - Time in HH:MM format e.g. 09:00'],
+        ['shift_end - Time in HH:MM format e.g. 18:00'],
+        ['off_days_per_month - Must be: 0 or 2 or 4'],
+        ['monthly_salary - Numbers only, no symbols'],
+        ['join_date - Format: DD/MM/YYYY'],
+        ['date_of_birth - Format: DD/MM/YYYY (optional)'],
+        ['mobile_number - 10-digit mobile number for portal login (optional)'],
+        ['DO NOT change column headers'],
+        ['The first row is an example row (Example Staff, PIN 0000) and will be skipped by the importer. Leave it as is or delete it.']
+      ];
+      const wsIns = XLSX.utils.aoa_to_sheet(instructions);
+      XLSX.utils.book_append_sheet(wb, wsIns, 'Instructions');
+
+      const filename = `Nearbi_Staff_Template.xlsx`;
+      XLSX.writeFile(wb, filename);
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to download staff template.');
+    }
+  };
+
   const handleExportStaff = async () => {
     try {
       let query = supabase
@@ -410,12 +554,21 @@ export default function StaffPage() {
       const { data: staffData, error } = await query.order('name');
       if (error) throw error;
       
-      if (!staffData || staffData.length === 0) {
-        alert('No staff found to export');
-        return;
-      }
-      
-      const rows = staffData.map((s: any) => {
+      const headers = [
+        'name',
+        'pin',
+        'branch',
+        'department',
+        'shift_start',
+        'shift_end',
+        'off_days_per_month',
+        'monthly_salary',
+        'join_date',
+        'date_of_birth',
+        'mobile_number'
+      ];
+
+      const rows = (staffData || []).map((s: any) => {
         const branchVal = s.branch_id === 'daily' ? 'Nearbi Daily' : 'Nearbi Hypermarket';
         
         let joinDateVal = '';
@@ -447,11 +600,12 @@ export default function StaffPage() {
           monthly_salary: s.monthly_salary,
           join_date: joinDateVal,
           date_of_birth: dobVal,
+          mobile_number: s.mobile_number || '',
         };
       });
       
       const wb = XLSX.utils.book_new();
-      const wsStaff = XLSX.utils.json_to_sheet(rows);
+      const wsStaff = XLSX.utils.json_to_sheet(rows, { header: headers });
       XLSX.utils.book_append_sheet(wb, wsStaff, 'Staff Register');
       
       const instructions = [
@@ -466,6 +620,7 @@ export default function StaffPage() {
         ['monthly_salary - Numbers only, no symbols'],
         ['join_date - Format: DD/MM/YYYY'],
         ['date_of_birth - Format: DD/MM/YYYY (optional)'],
+        ['mobile_number - 10-digit mobile number for portal login (optional)'],
         ['DO NOT change column headers'],
         ['DO NOT delete existing staff rows'],
         ['ADD new staff below existing rows']
@@ -486,10 +641,36 @@ export default function StaffPage() {
     }
   };
 
+  const handleResetPassword = async (staffId: string, pin: string) => {
+    try {
+      const { data: account, error: fetchErr } = await supabase
+        .from('staff_accounts')
+        .select('id')
+        .eq('staff_id', staffId)
+        .maybeSingle();
+
+      if (fetchErr || !account) {
+        alert('This staff member does not have a login account.');
+        return;
+      }
+
+      const { error: resetErr } = await supabase
+        .from('staff_accounts')
+        .update({ password: pin })
+        .eq('id', account.id);
+
+      if (resetErr) throw resetErr;
+      showToast('Password reset to PIN successfully!');
+    } catch (e: any) {
+      console.error(e);
+      alert('Failed to reset password: ' + e.message);
+    }
+  };
+
   // Fetch staff list
   const fetchStaff = async () => {
     try {
-      let query = supabase.from('staff').select('*, shift:shifts(*)').eq('active', true);
+      let query = supabase.from('staff').select('*, shift:shifts(*), staff_accounts(*)').eq('active', true);
       
       // Branch isolation
       if (userBranch) {
@@ -780,6 +961,7 @@ export default function StaffPage() {
       monthly_salary: '',
       join_date: new Date().toISOString().split('T')[0],
       date_of_birth: '',
+      mobile_number: '',
     });
     setIsCustomShift(false);
     setShowAddPanel(true);
@@ -799,6 +981,11 @@ export default function StaffPage() {
       return;
     }
 
+    if (formData.mobile_number.trim() && !/^\d{10}$/.test(formData.mobile_number.trim())) {
+      setFormError('Mobile number must be exactly 10 digits');
+      return;
+    }
+
     setFormLoading(true);
 
     try {
@@ -815,6 +1002,21 @@ export default function StaffPage() {
         return;
       }
 
+      // Validate unique mobile number across ALL staff accounts if provided
+      if (formData.mobile_number.trim()) {
+        const { data: existingMob } = await supabase
+          .from('staff_accounts')
+          .select('id')
+          .eq('mobile_number', formData.mobile_number.trim())
+          .maybeSingle();
+
+        if (existingMob) {
+          setFormError(`Mobile number ${formData.mobile_number} is already in use`);
+          setFormLoading(false);
+          return;
+        }
+      }
+
       // Generate text unique primary key for staff id
       const staffId = 'staff_' + Math.random().toString(36).substr(2, 9);
 
@@ -828,6 +1030,7 @@ export default function StaffPage() {
         monthly_salary: canSeeSalaryBreakdown ? Number(formData.monthly_salary) : 0,
         join_date: formData.join_date,
         date_of_birth: formData.date_of_birth || null,
+        mobile_number: formData.mobile_number.trim() || null,
         active: true,
       };
 
@@ -835,6 +1038,15 @@ export default function StaffPage() {
       if (error) throw error;
 
       const newId = data?.[0]?.id;
+
+      if (formData.mobile_number.trim() && newId) {
+        const { error: accError } = await supabase.from('staff_accounts').insert({
+          staff_id: newId,
+          mobile_number: formData.mobile_number.trim(),
+          password: formData.pin,
+        });
+        if (accError) throw accError;
+      }
 
       try {
         await supabase.from('wall_events').insert({
@@ -1046,7 +1258,7 @@ export default function StaffPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-white text-2xl font-bold">Staff</h1>
+          <h1 className="text-[#1A1A1A] text-2xl font-bold">Staff</h1>
           <p className="text-[var(--text-muted)] text-xs font-semibold">
             {staff.length} active staff members
           </p>
@@ -1056,16 +1268,24 @@ export default function StaffPage() {
             <button
               onClick={calculateScores}
               disabled={calculatingScores}
-              className="bg-transparent border border-[var(--border-strong)] active:border-white text-[var(--text-secondary)] hover:text-white px-3.5 py-2 rounded-[10px] text-xs font-bold flex items-center space-x-1.5 transition-all active:scale-[0.97]"
+              className="bg-white border border-[#E8E8E8] text-[#1A1A1A] hover:bg-[#F8F8F8] px-3.5 py-2 rounded-[12px] text-xs font-bold flex items-center space-x-1.5 transition-all shadow-sm active:scale-[0.97]"
             >
               <RefreshCw size={14} className={calculatingScores ? 'animate-spin' : ''} />
               <span>{calculatingScores ? 'Calculating...' : 'Recalculate Scores'}</span>
             </button>
           )}
+          <button
+            onClick={handleDownloadStaffTemplate}
+            className="bg-white border border-[#E8E8E8] text-[#1A1A1A] hover:bg-[#F8F8F8] px-3.5 py-2 rounded-[12px] text-xs font-bold flex items-center space-x-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
+            title="Download Staff Import Template"
+          >
+            <Download size={16} strokeWidth={1.5} />
+            <span>Download Template</span>
+          </button>
           {(user?.role === 'admin' || user?.role === 'ops_manager' || user?.role === 'staff_executive') && (
             <button
               onClick={handleExportStaff}
-              className="bg-transparent border border-[var(--border-strong)] active:border-white text-[var(--text-secondary)] hover:text-white px-3.5 py-2 rounded-[10px] text-xs font-bold flex items-center space-x-1.5 transition-all active:scale-95 cursor-pointer"
+              className="bg-white border border-[#E8E8E8] text-[#1A1A1A] hover:bg-[#F8F8F8] px-3.5 py-2 rounded-[12px] text-xs font-bold flex items-center space-x-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
               title="Export Staff to Excel"
             >
               <Download size={16} strokeWidth={1.5} />
@@ -1083,7 +1303,7 @@ export default function StaffPage() {
               />
               <button
                 onClick={handleImportStaffClick}
-                className="bg-transparent border border-[var(--border-strong)] active:border-white text-[var(--text-secondary)] hover:text-white px-3.5 py-2 rounded-[10px] text-xs font-bold flex items-center space-x-1.5 transition-all active:scale-95 cursor-pointer"
+                className="bg-white border border-[#E8E8E8] text-[#1A1A1A] hover:bg-[#F8F8F8] px-3.5 py-2 rounded-[12px] text-xs font-bold flex items-center space-x-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
                 title="Import Staff from Excel/CSV"
               >
                 <Upload size={16} strokeWidth={1.5} />
@@ -1093,7 +1313,7 @@ export default function StaffPage() {
           )}
           <button
             onClick={handleOpenAddPanel}
-            className="bg-white text-[#1E2028] font-bold px-4 py-2 rounded-[10px] text-sm flex items-center space-x-1.5 active:scale-95 transition-transform"
+            className="bg-[#1A1A1A] text-white hover:bg-[#333333] font-bold px-4 py-2 rounded-[12px] text-sm flex items-center space-x-1.5 active:scale-95 transition-all shadow-md"
           >
             <Plus size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
             <span>Add Staff</span>
@@ -1102,7 +1322,7 @@ export default function StaffPage() {
       </div>
 
       {errorMsg && (
-        <div className="bg-[var(--danger-bg)] border border-[var(--danger)] text-[#F87171] text-xs font-bold px-4 py-3 rounded-[10px] flex items-center justify-between">
+        <div className="bg-[#FDECEA] border border-[#C0392B]/30 text-[#C0392B] text-xs font-bold px-4 py-3 rounded-[12px] flex items-center justify-between shadow-sm">
           <span>{errorMsg}</span>
           <button onClick={fetchStaff} className="text-xs underline font-bold">
             Retry
@@ -1112,13 +1332,13 @@ export default function StaffPage() {
 
       {/* Search Input */}
       <div className="relative">
-        <Search size={18} strokeWidth={1.5} className="absolute left-4 top-1/2 -translate-y-1/2 text-[var(--text-secondary)] pointer-events-none" />
+        <Search size={18} strokeWidth={1.5} className="absolute left-4 top-1/2 -translate-y-1/2 text-[#999999] pointer-events-none" />
         <input
           type="text"
           placeholder="Search by name, department..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] pl-11 pr-4 py-3 text-white focus:outline-none focus:border-white/40 focus:ring-0 text-sm"
+          className="w-full bg-white border border-[#E8E8E8] rounded-[12px] pl-11 pr-4 py-3 text-[#1A1A1A] placeholder-[#999999] focus:outline-none focus:border-[#1A1A1A] text-sm shadow-sm transition-all"
         />
       </div>
 
@@ -1130,9 +1350,9 @@ export default function StaffPage() {
           <div className="skeleton h-[90px] w-full" />
         </div>
       ) : filteredStaff.length === 0 ? (
-        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-8 text-center flex flex-col items-center justify-center my-6">
-          <Users size={48} strokeWidth={1} style={{ color: '#2A2D38' }} className="mb-2" />
-          <h3 className="text-sm font-bold text-white">No staff found</h3>
+        <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-8 text-center flex flex-col items-center justify-center my-6 shadow-sm">
+          <Users size={48} strokeWidth={1} className="text-[#999999] mb-2" />
+          <h3 className="text-sm font-bold text-[#1A1A1A]">No staff found</h3>
           <p className="text-xs text-[var(--text-muted)] mt-1">
             {search ? 'Try adjusting your search terms.' : 'Get started by adding your first staff member.'}
           </p>
@@ -1147,8 +1367,8 @@ export default function StaffPage() {
               <div
                 key={s.id}
                 onClick={() => router.push('/staff/' + s.id)}
-                className={`bg-[var(--bg-surface)] border rounded-[14px] p-4 flex flex-col transition-all relative cursor-pointer hover:border-white/20 ${
-                  isDeleteMode ? 'border-[#F87171] ring-1 ring-[#F87171]' : 'border-[var(--border)] shadow-sm'
+                className={`bg-white border rounded-[14px] p-4 flex flex-col transition-all relative cursor-pointer hover:border-[#D0D0D0] ${
+                  isDeleteMode ? 'border-[#C0392B] ring-1 ring-[#C0392B]/30' : 'border-[#E8E8E8] shadow-sm'
                 }`}
               >
                 <div className="flex items-start space-x-3.5">
@@ -1161,21 +1381,21 @@ export default function StaffPage() {
                       }}
                       className={`w-12 h-12 rounded-full font-bold text-lg flex items-center justify-center flex-shrink-0 transition-colors ${
                         isDeleteMode
-                          ? 'bg-[rgba(248,113,113,0.15)] text-[#F87171] border border-[rgba(248,113,113,0.3)]'
-                          : 'bg-white/10 text-white border border-white/20'
+                          ? 'bg-[#FDECEA] text-[#C0392B] border border-[#C0392B]/20'
+                          : 'bg-[#1A1A1A] text-white border border-[#1A1A1A]'
                       }`}
                     >
-                      {isDeleteMode ? <Trash2 size={20} strokeWidth={1.5} style={{ color: '#F87171' }} /> : s.name.charAt(0).toUpperCase()}
+                      {isDeleteMode ? <Trash2 size={20} strokeWidth={1.5} className="text-[#C0392B]" /> : s.name.charAt(0).toUpperCase()}
                     </button>
                   ) : (
-                    <div className="w-12 h-12 rounded-full bg-white/10 text-white border border-white/20 font-bold text-lg flex items-center justify-center flex-shrink-0">
+                    <div className="w-12 h-12 rounded-full bg-[#1A1A1A] text-white border border-[#1A1A1A] font-bold text-lg flex items-center justify-center flex-shrink-0">
                       {s.name.charAt(0).toUpperCase()}
                     </div>
                   )}
 
                   {/* Profile info details */}
                   <div className="flex-1 min-w-0">
-                    <h3 className="font-bold text-sm text-white leading-tight truncate">
+                    <h3 className="font-bold text-sm text-[#1A1A1A] leading-tight truncate">
                       {s.name}
                     </h3>
                     <p className="text-[11px] text-[var(--text-muted)] font-semibold mt-0.5 leading-none">
@@ -1184,7 +1404,7 @@ export default function StaffPage() {
                     {editingDobStaffId === s.id ? (
                       <div
                         onClick={(e) => e.stopPropagation()}
-                        className="mt-2 flex items-center space-x-2 bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-lg p-2"
+                        className="mt-2 flex items-center space-x-2 bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-2.5"
                       >
                         <div className="flex-1">
                           <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase mb-0.5">Date of Birth</label>
@@ -1192,21 +1412,21 @@ export default function StaffPage() {
                             type="date"
                             value={editingDobValue}
                             onChange={(e) => setEditingDobValue(e.target.value)}
-                            className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[6px] px-2 py-1 text-[11px] text-white focus:outline-none"
+                            className="w-full bg-white border border-[#E8E8E8] rounded-[6px] px-2 py-1 text-[11px] text-[#1A1A1A] focus:outline-none focus:border-[#1A1A1A]"
                           />
                         </div>
                         <div className="flex items-end space-x-1.5 self-end mb-0.5">
                           <button
                             type="button"
                             onClick={() => handleSaveDob(s.id)}
-                            className="px-2 py-1 bg-[#4ADE80]/15 hover:bg-[#4ADE80]/25 text-[#4ADE80] border border-[#4ADE80]/30 rounded text-[10px] font-bold active:scale-95 transition-all"
+                            className="px-2.5 py-1.5 bg-[#EDF7EF] hover:bg-[#EDF7EF]/80 text-[#2D7A3A] border border-[#2D7A3A]/20 rounded-[12px] text-[10px] font-bold active:scale-95 transition-all"
                           >
                             Save
                           </button>
                           <button
                             type="button"
                             onClick={() => setEditingDobStaffId(null)}
-                            className="px-2 py-1 bg-white/5 hover:bg-white/10 text-[var(--text-secondary)] border border-[var(--border-strong)] rounded text-[10px] font-bold active:scale-95 transition-all"
+                            className="px-2.5 py-1.5 bg-[#F2F2F2] hover:bg-[#EBEBEB] text-[#555555] border border-[#E8E8E8] rounded-[12px] text-[10px] font-bold active:scale-95 transition-all"
                           >
                             Cancel
                           </button>
@@ -1215,12 +1435,12 @@ export default function StaffPage() {
                     ) : (
                       <div className="flex items-center justify-between mt-1 min-h-[16px]">
                         {s.date_of_birth ? (
-                          <div className="flex items-center space-x-1 text-[10px] text-[#FBBF24] font-semibold">
+                          <div className="flex items-center space-x-1 text-[10px] text-[#B8860B] font-semibold">
                             <Cake size={11} />
                             <span>DOB: {new Date(s.date_of_birth).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })}</span>
                           </div>
                         ) : (
-                          <div className="text-[10px] text-[var(--text-muted)] italic font-semibold">No DOB recorded</div>
+                          <div className="text-[10px] text-[var(--text-muted)] italic font-semibold font-sans">No DOB recorded</div>
                         )}
                         {(user?.role === 'admin' || user?.role === 'ops_manager') && (
                           <button
@@ -1230,7 +1450,7 @@ export default function StaffPage() {
                               setEditingDobStaffId(s.id);
                               setEditingDobValue(s.date_of_birth ? s.date_of_birth.substring(0, 10) : '');
                             }}
-                            className="text-[9px] text-[var(--text-secondary)] hover:text-white font-bold underline cursor-pointer"
+                            className="text-[9px] text-[#555555] hover:text-[#1A1A1A] font-bold underline cursor-pointer"
                           >
                             Edit DOB
                           </button>
@@ -1240,19 +1460,19 @@ export default function StaffPage() {
                     {getScoreDisplay(s.id)}
 
                     <div className="flex flex-wrap gap-1.5 mt-2.5">
-                      <span className="bg-[var(--bg-elevated)] text-[var(--text-secondary)] border border-[var(--border-strong)] text-[10px] font-bold px-2 py-0.5 rounded">
+                      <span className="bg-[#F2F2F2] text-[#555555] border border-[#E8E8E8] text-[10px] font-bold px-2.5 py-0.5 rounded-[20px]">
                         Shift: {s.shift?.label || 'None'}
                       </span>
-                      <span className="bg-[var(--bg-elevated)] text-[var(--text-secondary)] border border-[var(--border-strong)] text-[10px] font-bold px-2 py-0.5 rounded">
+                      <span className="bg-[#F2F2F2] text-[#555555] border border-[#E8E8E8] text-[10px] font-bold px-2.5 py-0.5 rounded-[20px]">
                         {s.off_days_per_month} off days
                       </span>
                     </div>
 
                     {/* PIN & Salary Display */}
-                    <div className="mt-3 bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-lg p-2.5 flex items-center justify-between">
-                      <div className="flex items-center space-x-2 text-xs font-bold text-[var(--text-secondary)]">
+                    <div className="mt-3 bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-2.5 flex items-center justify-between shadow-sm">
+                      <div className="flex items-center space-x-2 text-xs font-bold text-[#555555]">
                         <span>PIN:</span>
-                        <span className="font-mono text-sm tracking-widest text-white">
+                        <span className="font-mono text-sm tracking-widest text-[#1A1A1A]">
                           {isPinVisible ? s.pin : '••••'}
                         </span>
                         <button
@@ -1261,16 +1481,54 @@ export default function StaffPage() {
                             e.stopPropagation();
                             togglePinVisibility(s.id);
                           }}
-                          className="text-[var(--text-secondary)] hover:text-white px-1 active:scale-90 flex items-center justify-center"
+                          className="text-[#999999] hover:text-[#1A1A1A] px-1 active:scale-90 flex items-center justify-center"
                         >
                           {isPinVisible ? <EyeOff size={16} strokeWidth={1.5} /> : <Eye size={16} strokeWidth={1.5} />}
                         </button>
                       </div>
 
-                      <div className="text-xs font-bold text-white flex items-center">
-                        {canSeeSalaryBreakdown ? `₹${s.monthly_salary.toLocaleString()}/mo` : <Lock size={14} strokeWidth={1.5} className="text-[var(--text-muted)]" />}
+                      <div className="text-xs font-bold text-[#1A1A1A] flex items-center">
+                        {canSeeSalaryBreakdown ? `₹${s.monthly_salary.toLocaleString()}/mo` : <Lock size={14} strokeWidth={1.5} className="text-[#999999]" />}
                       </div>
                     </div>
+
+                    {/* Login Account Details */}
+                    {(() => {
+                      const account = s.staff_accounts?.[0];
+                      return (
+                        <div className="mt-2.5 bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-2.5 flex flex-col space-y-1.5 shadow-sm" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center space-x-1.5 text-[11px] font-bold">
+                              {account ? (
+                                <>
+                                  <Phone size={13} className="text-[#2D7A3A]" />
+                                  <span className="text-[#2D7A3A] font-mono">{account.mobile_number}</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Phone size={13} className="text-[#999999]" />
+                                  <span className="text-[#999999] italic">No Login Account</span>
+                                </>
+                              )}
+                            </div>
+                            {account && (user?.role === 'admin' || user?.role === 'ops_manager') && (
+                              <button
+                                type="button"
+                                onClick={() => handleResetPassword(s.id, s.pin)}
+                                className="bg-white border border-[#E8E8E8] text-[#1A1A1A] hover:bg-[#F8F8F8] font-bold text-[9px] px-2.5 py-1 rounded-[12px] active:scale-95 transition-all cursor-pointer shadow-sm"
+                              >
+                                Reset to PIN
+                              </button>
+                            )}
+                          </div>
+                          {account && account.last_login && (
+                            <p className="text-[9px] text-[#999999] font-semibold leading-none">
+                              Last login: {new Date(account.last_login).toLocaleString('en-US', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     {/* Fine button */}
                     {user?.role !== 'admin' && (user?.role === 'ops_manager' || user?.role === 'staff_executive') && (
@@ -1280,7 +1538,7 @@ export default function StaffPage() {
                             e.stopPropagation();
                             handleOpenFineModal(s);
                           }}
-                          className="bg-[rgba(248,113,113,0.12)] border border-[rgba(248,113,113,0.2)] text-[#F87171] hover:bg-[rgba(248,113,113,0.2)] font-bold text-[10px] px-2.5 py-1 rounded-[6px] flex items-center space-x-1 active:scale-95 transition-transform"
+                          className="bg-white border border-[#E8E8E8] hover:bg-[#FDECEA] hover:text-[#C0392B] hover:border-[#C0392B]/20 font-bold text-[10px] px-2.5 py-1 rounded-[12px] flex items-center space-x-1 active:scale-95 transition-all shadow-sm"
                         >
                           <AlertCircle size={13} />
                           <span>Fine</span>
@@ -1290,8 +1548,8 @@ export default function StaffPage() {
 
                     {/* Visibility Toggle (Ops / head HR only) */}
                     {user?.role !== 'admin' && (user?.role === 'ops_manager' || (user?.role === 'staff_executive' && user.branch === null)) && scoresMap[s.id] && (
-                      <div className="mt-3 flex items-center justify-between border-t border-[var(--border-strong)] pt-2.5">
-                        <span className="text-[10px] font-bold text-[var(--text-secondary)]">Score visible to staff</span>
+                      <div className="mt-3 flex items-center justify-between border-t border-[#E8E8E8] pt-2.5">
+                        <span className="text-[10px] font-bold text-[#555555]">Score visible to staff</span>
                         <button
                           type="button"
                           onClick={(e) => {
@@ -1299,11 +1557,11 @@ export default function StaffPage() {
                             handleToggleVisibility(s.id);
                           }}
                           className={`w-8 h-4 rounded-full relative transition-colors ${
-                            scoresMap[s.id]?.visible_to_staff ? 'bg-[#4ADE80]' : 'bg-[#363A48]'
+                            scoresMap[s.id]?.visible_to_staff ? 'bg-[#2D7A3A]' : 'bg-[#EBEBEB]'
                           }`}
                         >
                           <span
-                            className={`w-3.5 h-3.5 rounded-full bg-white absolute top-0.25 transition-transform ${
+                            className={`w-3 h-3 rounded-full bg-white absolute top-0.5 transition-transform ${
                               scoresMap[s.id]?.visible_to_staff ? 'right-0.5' : 'left-0.5'
                             }`}
                           />
@@ -1315,13 +1573,13 @@ export default function StaffPage() {
 
                 {/* Delete staff button under delete mode */}
                 {isDeleteMode && (
-                  <div className="mt-4 pt-3.5 border-t border-[var(--border)] flex justify-end">
+                  <div className="mt-4 pt-3.5 border-t border-[#E8E8E8] flex justify-end">
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         setStaffToDelete(s);
                       }}
-                      className="bg-[rgba(248,113,113,0.15)] border border-[rgba(248,113,113,0.3)] text-[#F87171] hover:bg-[rgba(248,113,113,0.25)] font-bold text-xs px-4 py-2 rounded-[10px] active:scale-95 transition-all"
+                      className="bg-white border border-[#C0392B] text-[#C0392B] hover:bg-[#FDECEA] hover:border-[#C0392B]/20 font-bold text-xs px-4 py-2 rounded-[12px] active:scale-95 transition-all shadow-sm"
                     >
                       Delete Staff Member
                     </button>
@@ -1341,24 +1599,24 @@ export default function StaffPage() {
             onClick={() => setShowAddPanel(false)}
           />
           <div
-            className="bg-[var(--bg-surface)] rounded-t-3xl shadow-2xl relative z-10 p-5 flex flex-col max-h-[85vh] overflow-y-auto w-full max-w-md mx-auto border-t border-[var(--border-strong)]"
+            className="bg-white rounded-t-[20px] shadow-lg relative z-10 p-6 flex flex-col max-h-[85vh] overflow-y-auto w-full max-w-md mx-auto border-t border-[#E8E8E8]"
             style={{ paddingBottom: 'calc(24px + env(safe-area-inset-bottom, 16px))' }}
           >
             {/* Grabber bar */}
-            <div className="w-12 h-1 bg-[var(--border-strong)] rounded-full mx-auto mb-4 flex-shrink-0" />
+            <div className="w-12 h-1 bg-[#E8E8E8] rounded-full mx-auto mb-4 flex-shrink-0" />
 
             <div className="flex justify-between items-center mb-4 flex-shrink-0">
-              <h2 className="text-lg font-bold text-white">New Staff Member</h2>
+              <h2 className="text-lg font-bold text-[#1A1A1A]">New Staff Member</h2>
               <button
                 onClick={() => setShowAddPanel(false)}
-                className="text-[var(--text-muted)] hover:text-white flex items-center justify-center p-1"
+                className="text-[#999999] hover:text-[#1A1A1A] flex items-center justify-center p-1"
               >
                 <X size={16} strokeWidth={1.5} style={{ color: 'currentColor' }} />
               </button>
             </div>
 
             {formError && (
-              <div className="bg-[var(--danger-bg)] border border-[var(--danger)] text-[#F87171] text-xs font-bold px-3 py-2 rounded-md mb-4 flex-shrink-0">
+              <div className="bg-[#FDECEA] border border-[#C0392B]/30 text-[#C0392B] text-xs font-bold px-3 py-2 rounded-[12px] mb-4 flex-shrink-0">
                 {formError}
               </div>
             )}
@@ -1373,7 +1631,7 @@ export default function StaffPage() {
                   value={formData.name}
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                   placeholder="e.g. John Doe"
-                  className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-sm focus:outline-none focus:border-white/40 text-white"
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
                   required
                 />
               </div>
@@ -1390,7 +1648,7 @@ export default function StaffPage() {
                     value={formData.pin}
                     onChange={(e) => setFormData({ ...formData, pin: e.target.value.replace(/\D/g, '').substring(0, 4) })}
                     placeholder="e.g. 1234"
-                    className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-sm focus:outline-none focus:border-white/40 text-white font-mono text-center"
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-mono text-center"
                     required
                   />
                 </div>
@@ -1402,7 +1660,7 @@ export default function StaffPage() {
                     type="date"
                     value={formData.join_date}
                     onChange={(e) => setFormData({ ...formData, join_date: e.target.value })}
-                    className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-sm focus:outline-none focus:border-white/40 text-white"
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
                     required
                   />
                 </div>
@@ -1416,7 +1674,22 @@ export default function StaffPage() {
                   type="date"
                   value={formData.date_of_birth || ''}
                   onChange={(e) => setFormData({ ...formData, date_of_birth: e.target.value })}
-                  className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-sm focus:outline-none focus:border-white/40 text-white"
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
+                  Mobile Number (for staff login)
+                </label>
+                <input
+                  type="tel"
+                  pattern="[0-9]{10}"
+                  maxLength={10}
+                  value={formData.mobile_number}
+                  onChange={(e) => setFormData({ ...formData, mobile_number: e.target.value.replace(/\D/g, '').substring(0, 10) })}
+                  placeholder="e.g. 9876543210 (10 digit mobile number)"
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-mono"
                 />
               </div>
 
@@ -1428,7 +1701,7 @@ export default function StaffPage() {
                   <select
                     value={formData.branch_id}
                     onChange={(e) => setFormData({ ...formData, branch_id: e.target.value })}
-                    className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-sm focus:outline-none focus:border-white/40 text-white"
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
                     disabled={!!userBranch}
                     required
                   >
@@ -1445,7 +1718,7 @@ export default function StaffPage() {
                   <select
                     value={formData.department}
                     onChange={(e) => setFormData({ ...formData, department: e.target.value })}
-                    className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-sm focus:outline-none focus:border-white/40 text-white"
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
                     required
                   >
                     <option value="">Select...</option>
@@ -1473,7 +1746,7 @@ export default function StaffPage() {
                       setFormData({ ...formData, shift_id: e.target.value });
                     }
                   }}
-                  className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-sm focus:outline-none focus:border-white/40 text-white mb-2"
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] mb-2"
                   required={!isCustomShift}
                 >
                   {shifts.map((s) => (
@@ -1485,10 +1758,10 @@ export default function StaffPage() {
                 </select>
 
                 {isCustomShift && (
-                  <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-3.5 space-y-3 mt-2">
-                    <h4 className="text-xs font-bold text-white">New Custom Shift</h4>
+                  <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-4 space-y-3 mt-2">
+                    <h4 className="text-xs font-bold text-[#1A1A1A]">New Custom Shift</h4>
                     {customShiftError && (
-                      <div className="bg-[var(--danger-bg)] border border-[var(--danger)] text-[#F87171] text-[10px] font-bold p-2 rounded">
+                      <div className="bg-[#FDECEA] border border-[#C0392B]/20 text-[#C0392B] text-[10px] font-bold p-2 rounded-[12px]">
                         {customShiftError}
                       </div>
                     )}
@@ -1501,7 +1774,7 @@ export default function StaffPage() {
                         value={customShift.label}
                         onChange={(e) => setCustomShift({ ...customShift, label: e.target.value })}
                         placeholder="e.g. General Shift"
-                        className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-2 text-xs focus:outline-none text-white focus:border-white/40"
+                        className="w-full bg-white border border-[#E8E8E8] rounded-[12px] p-2 text-xs focus:outline-none text-[#1A1A1A] focus:border-[#1A1A1A]"
                       />
                     </div>
                     <div className="grid grid-cols-2 gap-2">
@@ -1513,7 +1786,7 @@ export default function StaffPage() {
                           type="time"
                           value={customShift.start_time}
                           onChange={(e) => setCustomShift({ ...customShift, start_time: e.target.value })}
-                          className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-2 text-xs focus:outline-none text-white focus:border-white/40"
+                          className="w-full bg-white border border-[#E8E8E8] rounded-[12px] p-2 text-xs focus:outline-none text-[#1A1A1A] focus:border-[#1A1A1A]"
                         />
                       </div>
                       <div>
@@ -1524,7 +1797,7 @@ export default function StaffPage() {
                           type="time"
                           value={customShift.end_time}
                           onChange={(e) => setCustomShift({ ...customShift, end_time: e.target.value })}
-                          className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-2 text-xs focus:outline-none text-white focus:border-white/40"
+                          className="w-full bg-white border border-[#E8E8E8] rounded-[12px] p-2 text-xs focus:outline-none text-[#1A1A1A] focus:border-[#1A1A1A]"
                         />
                       </div>
                     </div>
@@ -1538,7 +1811,7 @@ export default function StaffPage() {
                             setFormData((prev) => ({ ...prev, shift_id: shifts[0].id }));
                           }
                         }}
-                        className="text-xs text-[var(--text-secondary)] font-bold hover:underline"
+                        className="text-xs text-[#555555] font-bold hover:underline"
                       >
                         Cancel
                       </button>
@@ -1546,7 +1819,7 @@ export default function StaffPage() {
                         type="button"
                         onClick={handleAddCustomShift}
                         disabled={customShiftLoading}
-                        className="bg-white text-[#1E2028] font-bold text-xs px-3.5 py-1.5 rounded-[10px] active:scale-95 transition-transform"
+                        className="bg-[#1A1A1A] text-white hover:bg-[#333333] font-bold text-xs px-3.5 py-1.5 rounded-[12px] active:scale-95 transition-all shadow-md"
                       >
                         {customShiftLoading ? 'Creating...' : 'Create Shift'}
                       </button>
@@ -1568,10 +1841,10 @@ export default function StaffPage() {
                         key={num}
                         type="button"
                         onClick={() => setFormData({ ...formData, off_days_per_month: num })}
-                        className={`flex-1 py-2.5 rounded-[10px] border text-xs font-bold transition-all ${
+                        className={`flex-1 py-2.5 rounded-[12px] border text-xs font-bold transition-all ${
                           isSelected
-                            ? 'bg-white text-[#1E2028] border-white'
-                            : 'bg-[var(--bg-input)] text-[var(--text-secondary)] border-[var(--border)] active:scale-95'
+                            ? 'bg-[#1A1A1A] text-white border-[#1A1A1A]'
+                            : 'bg-white text-[#555555] border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-95'
                         }`}
                       >
                         {num} Days
@@ -1592,7 +1865,7 @@ export default function StaffPage() {
                     value={formData.monthly_salary}
                     onChange={(e) => setFormData({ ...formData, monthly_salary: e.target.value })}
                     placeholder="e.g. 15000"
-                    className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-sm focus:outline-none focus:border-white/40 text-white"
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
                     required
                   />
                 </div>
@@ -1601,7 +1874,7 @@ export default function StaffPage() {
               <button
                 type="submit"
                 disabled={formLoading}
-                className="w-full min-h-[40px] bg-white text-[#1E2028] font-bold text-sm rounded-[10px] active:scale-95 transition-all mt-4"
+                className="w-full min-h-[44px] bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold text-sm rounded-[12px] active:scale-95 transition-all mt-4 shadow-md"
               >
                 {formLoading ? 'Saving...' : 'Save Staff Member'}
               </button>
@@ -1698,9 +1971,13 @@ export default function StaffPage() {
                 </span>{' '}
                 rows ready |{' '}
                 <span className="text-[#F87171] font-bold">
-                  {importRows.filter(r => !r.isValid).length}
+                  {importRows.filter(r => !r.isValid && !r.isExample).length}
                 </span>{' '}
-                rows have errors
+                rows have errors |{' '}
+                <span className="text-gray-400 font-bold">
+                  {importRows.filter(r => r.isExample).length}
+                </span>{' '}
+                example rows skipped
               </div>
               {importProgress && <div className="text-white font-bold animate-pulse">{importProgress}</div>}
             </div>
@@ -1714,6 +1991,7 @@ export default function StaffPage() {
                     <th className="p-2.5">Status</th>
                     <th className="p-2.5">Name</th>
                     <th className="p-2.5">PIN</th>
+                    <th className="p-2.5">Mobile</th>
                     <th className="p-2.5">Branch</th>
                     <th className="p-2.5">Department</th>
                     <th className="p-2.5">Errors / Details</th>
@@ -1724,12 +2002,20 @@ export default function StaffPage() {
                     <tr
                       key={row.rowIdx}
                       className={`hover:bg-[var(--bg-elevated)]/40 transition-colors ${
-                        row.isValid ? 'border-l-4 border-l-[#4ADE80]' : 'border-l-4 border-l-[#F87171]'
+                        row.isExample
+                          ? 'border-l-4 border-l-gray-500 opacity-60'
+                          : row.isValid
+                          ? 'border-l-4 border-l-[#4ADE80]'
+                          : 'border-l-4 border-l-[#F87171]'
                       }`}
                     >
                       <td className="p-2.5 text-[var(--text-secondary)] font-bold">{row.rowIdx}</td>
                       <td className="p-2.5">
-                        {row.isValid ? (
+                        {row.isExample ? (
+                          <span className="text-gray-400 font-bold uppercase text-[9px] bg-gray-500/10 border border-gray-500/20 px-1.5 py-0.5 rounded">
+                            Example (Skipped)
+                          </span>
+                        ) : row.isValid ? (
                           <span className="text-[#4ADE80] font-bold uppercase text-[9px] bg-[#4ADE80]/10 border border-[#4ADE80]/20 px-1.5 py-0.5 rounded">
                             Valid
                           </span>
@@ -1741,10 +2027,13 @@ export default function StaffPage() {
                       </td>
                       <td className="p-2.5 text-white font-bold">{row.name || '—'}</td>
                       <td className="p-2.5 font-mono text-[var(--text-secondary)]">{row.pin || '—'}</td>
+                      <td className="p-2.5 font-mono text-[var(--text-secondary)]">{row.mobile_number || '—'}</td>
                       <td className="p-2.5 text-[var(--text-secondary)]">{row.branchRaw || '—'}</td>
                       <td className="p-2.5 text-[var(--text-secondary)]">{row.department || '—'}</td>
                       <td className="p-2.5 text-xs whitespace-normal">
-                        {row.isValid ? (
+                        {row.isExample ? (
+                          <span className="text-[var(--text-muted)] italic">Example row — will not be imported</span>
+                        ) : row.isValid ? (
                           <span className="text-[var(--text-muted)]">Ready to import</span>
                         ) : (
                           <span className="text-[#F87171] font-semibold">{row.errors.join(', ')}</span>

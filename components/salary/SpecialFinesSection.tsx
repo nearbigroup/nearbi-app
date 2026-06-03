@@ -164,20 +164,20 @@ export default function SpecialFinesSection({
   const getStatusBadge = (fine: SpecialFine) => {
     if (fine.waived) {
       return (
-        <span className="bg-[rgba(107,114,128,0.12)] text-[#9CA3AF] border border-[rgba(107,114,128,0.2)] text-[9px] font-bold px-1.5 py-0.5 rounded uppercase">
+        <span className="bg-[#F2F2F2] text-[#9CA3AF] border border-[#E8E8E8] text-[9px] font-bold px-1.5 py-0.5 rounded uppercase">
           Waived
         </span>
       );
     }
     if (fine.confirmed) {
       return (
-        <span className="bg-[rgba(74,222,128,0.12)] text-[#4ADE80] border border-[rgba(74,222,128,0.2)] text-[9px] font-bold px-1.5 py-0.5 rounded uppercase">
+        <span className="bg-[var(--success-bg)] text-[var(--success)] border border-[var(--success)]/20 text-[9px] font-bold px-1.5 py-0.5 rounded uppercase">
           Confirmed
         </span>
       );
     }
     return (
-      <span className="bg-[rgba(251,191,36,0.12)] text-[#FBBF24] border border-[rgba(251,191,36,0.2)] text-[9px] font-bold px-1.5 py-0.5 rounded uppercase">
+      <span className="bg-[var(--warning-bg)] text-[var(--warning)] border border-[var(--warning)]/20 text-[9px] font-bold px-1.5 py-0.5 rounded uppercase">
         Pending
       </span>
     );
@@ -192,23 +192,23 @@ export default function SpecialFinesSection({
 
   if (fines.length === 0) {
     return (
-      <div className="text-[11px] text-[var(--text-muted)] italic py-2 border-t border-[var(--border-strong)] mt-2">
+      <div className="text-[11px] text-[var(--text-muted)] italic py-2 border-t border-[#E8E8E8] mt-2">
         No special fines logged for this staff member this month.
       </div>
     );
   }
 
   return (
-    <div className="border-t border-[var(--border-strong)] mt-3 pt-3">
+    <div className="border-t border-[#E8E8E8] mt-3 pt-3">
       <div className="flex items-center justify-between mb-2">
-        <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center space-x-1">
-          <ShieldAlert size={12} className="text-[#F87171]" />
+        <h4 className="text-xs font-bold text-[#1A1A1A] uppercase tracking-wider flex items-center space-x-1">
+          <ShieldAlert size={12} className="text-[var(--danger)]" />
           <span>Special Fines</span>
         </h4>
         {canManage && hasPending && (
           <button
             onClick={handleConfirmAll}
-            className="text-[10px] bg-[#4ADE80]/15 hover:bg-[#4ADE80]/25 text-[#4ADE80] border border-[#4ADE80]/30 font-bold px-2 py-0.5 rounded-[4px] active:scale-95 transition-all"
+            className="text-[10px] bg-[var(--success-bg)] hover:bg-[var(--success-bg)]/80 text-[var(--success)] border border-[var(--success)]/20 font-bold px-2 py-0.5 rounded-[4px] active:scale-95 transition-all cursor-pointer"
           >
             Confirm All
           </button>
@@ -218,7 +218,7 @@ export default function SpecialFinesSection({
       <div className="overflow-x-auto">
         <table className="w-full text-left border-collapse text-[11px]">
           <thead>
-            <tr className="border-b border-[var(--border-strong)] text-[var(--text-muted)] font-bold">
+            <tr className="border-b border-[#E8E8E8] text-[var(--text-muted)] font-bold">
               <th className="py-1.5 pr-2">Date</th>
               <th className="py-1.5 px-2">Reason</th>
               <th className="py-1.5 px-2">Added By</th>
@@ -227,14 +227,14 @@ export default function SpecialFinesSection({
               {canManage && <th className="py-1.5 pl-2 text-right">Actions</th>}
             </tr>
           </thead>
-          <tbody className="divide-y divide-[var(--border-strong)]/40">
+          <tbody className="divide-y divide-[#E8E8E8]">
             {fines.map((f) => {
               const displayAmt = f.edited_amount ?? f.amount;
               const isPending = !f.confirmed && !f.waived;
 
               return (
-                <tr key={f.id} className="text-white hover:bg-white/2 transition-colors">
-                  <td className="py-2 pr-2 font-semibold text-[var(--text-secondary)] whitespace-nowrap">
+                <tr key={f.id} className="text-[#1A1A1A] hover:bg-[#F8F8F8] transition-colors">
+                  <td className="py-2 pr-2 font-semibold text-[#555555] whitespace-nowrap">
                     {new Date(f.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
                   </td>
                   <td className="py-2 px-2 max-w-[120px] truncate" title={f.reason}>
@@ -249,7 +249,7 @@ export default function SpecialFinesSection({
                         type="number"
                         value={editVal}
                         onChange={(e) => setEditVal(e.target.value)}
-                        className="w-12 bg-[var(--bg-input)] border border-[var(--border)] rounded px-1 text-[10px] text-right font-bold focus:outline-none"
+                        className="w-12 bg-white border border-[#E8E8E8] rounded px-1.5 py-0.5 text-[10px] text-right font-bold text-[#1A1A1A] focus:outline-none focus:border-[#1A1A1A]"
                       />
                     ) : (
                       <>
@@ -272,14 +272,14 @@ export default function SpecialFinesSection({
                           <>
                             <button
                               onClick={() => handleEditSave(f.id)}
-                              className="p-0.5 bg-[#4ADE80]/15 hover:bg-[#4ADE80]/25 text-[#4ADE80] rounded border border-[#4ADE80]/30"
+                              className="p-1 bg-[var(--success-bg)] hover:bg-[var(--success-bg)]/80 text-[var(--success)] rounded border border-[var(--success)]/20 cursor-pointer"
                               title="Save"
                             >
                               <Check size={10} />
                             </button>
                             <button
                               onClick={() => setEditingId(null)}
-                              className="p-0.5 bg-[#F87171]/15 hover:bg-[#F87171]/25 text-[#F87171] rounded border border-[#F87171]/30"
+                              className="p-1 bg-[var(--danger-bg)] hover:bg-[var(--danger-bg)]/80 text-[var(--danger)] rounded border border-[var(--danger)]/20 cursor-pointer"
                               title="Cancel"
                             >
                               <X size={10} />
@@ -289,21 +289,21 @@ export default function SpecialFinesSection({
                           <>
                             <button
                               onClick={() => handleEditStart(f)}
-                              className="p-0.5 bg-white/5 hover:bg-white/10 text-[var(--text-secondary)] rounded border border-[var(--border-strong)]"
+                              className="p-1 bg-[#F8F8F8] hover:bg-[#EBEBEB] text-[#555555] rounded border border-[#E8E8E8] cursor-pointer"
                               title="Edit"
                             >
                               <Edit2 size={10} />
                             </button>
                             <button
                               onClick={() => handleConfirm(f.id)}
-                              className="p-0.5 bg-[#4ADE80]/15 hover:bg-[#4ADE80]/25 text-[#4ADE80] rounded border border-[#4ADE80]/30"
+                              className="p-1 bg-[var(--success-bg)] hover:bg-[var(--success-bg)]/80 text-[var(--success)] rounded border border-[var(--success)]/20 cursor-pointer"
                               title="Confirm"
                             >
                               <Check size={10} />
                             </button>
                             <button
                               onClick={() => handleWaive(f.id)}
-                              className="p-0.5 bg-[var(--danger-bg)] hover:bg-[#F87171]/25 text-[#F87171] rounded border border-[var(--danger)]"
+                              className="p-1 bg-[var(--danger-bg)] hover:bg-[var(--danger-bg)]/80 text-[var(--danger)] rounded border border-[var(--danger)]/20 cursor-pointer"
                               title="Waive"
                             >
                               <X size={10} />

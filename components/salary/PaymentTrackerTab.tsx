@@ -170,13 +170,13 @@ export default function PaymentTrackerTab() {
     <div className="space-y-5 select-none pb-6">
       {/* Title */}
       <div className="print:hidden">
-        <h2 className="text-white text-base font-bold">
+        <h2 className="text-[#1A1A1A] text-base font-bold">
           Salary Payments — {formatMonthDisplay(month)}
         </h2>
       </div>
 
       {errorMsg && (
-        <div className="bg-[var(--danger-bg)] border border-[var(--danger)] text-[#F87171] text-xs font-bold px-4 py-3 rounded-[10px] flex items-center justify-between">
+        <div className="bg-[var(--danger-bg)] border border-[var(--danger)]/30 text-[var(--danger)] text-xs font-bold px-4 py-3 rounded-[12px] flex items-center justify-between shadow-sm">
           <span>{errorMsg}</span>
           <button onClick={fetchData} className="text-xs underline font-bold">
             Retry
@@ -186,29 +186,29 @@ export default function PaymentTrackerTab() {
 
       {/* Summary grid */}
       <div className="grid grid-cols-2 gap-3.5">
-        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 shadow-sm">
+        <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 shadow-sm">
           <div className="text-[10px] text-[var(--text-muted)] font-bold uppercase tracking-wider mb-1">
             Total Confirmed
           </div>
-          <div className="text-lg font-bold text-white">
+          <div className="text-lg font-bold text-[#1A1A1A]">
             {formatCurrency(totalConfirmed)}
           </div>
         </div>
 
-        <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 shadow-sm">
+        <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 shadow-sm">
           <div className="text-[10px] text-[var(--text-muted)] font-bold uppercase tracking-wider mb-1">
             Paid ({paidList.length}/{confirmations.length})
           </div>
-          <div className="text-lg font-bold text-[#4ADE80]">
+          <div className="text-lg font-bold text-[var(--success)]">
             {formatCurrency(totalPaid)}
           </div>
         </div>
 
-        <div className="col-span-2 bg-[var(--warning-bg)] border border-[var(--warning)]/20 rounded-[14px] p-4 flex justify-between items-center animate-pulse">
-          <span className="text-xs font-bold text-[#FBBF24] uppercase tracking-wider">
+        <div className="col-span-2 bg-[var(--warning-bg)] border border-[var(--warning)]/20 rounded-[14px] p-4 flex justify-between items-center shadow-sm">
+          <span className="text-xs font-bold text-[var(--warning)] uppercase tracking-wider">
             Outstanding Amount
           </span>
-          <span className="text-xl font-bold text-[#FBBF24]">
+          <span className="text-xl font-bold text-[var(--warning)]">
             {formatCurrency(pendingAmount)}
           </span>
         </div>
@@ -216,12 +216,12 @@ export default function PaymentTrackerTab() {
 
       {/* Pending payments list */}
       <div className="space-y-3">
-        <h3 className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-widest border-b border-[var(--border)] pb-2">
+        <h3 className="text-xs font-bold text-[#1A1A1A] uppercase tracking-widest border-b border-[#E8E8E8] pb-2">
           Pending Payment ({pendingList.length})
         </h3>
         
         {pendingList.length === 0 ? (
-          <p className="text-xs text-[var(--text-muted)] font-bold italic text-center py-4">
+          <p className="text-xs text-[var(--text-muted)] font-semibold italic text-center py-4">
             No pending payouts found.
           </p>
         ) : (
@@ -231,26 +231,26 @@ export default function PaymentTrackerTab() {
             return (
               <div
                 key={s.id}
-                className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 flex justify-between items-center shadow-sm"
+                className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex justify-between items-center shadow-sm"
               >
                 <div>
-                  <h4 className="font-bold text-sm text-white">{s.name}</h4>
+                  <h4 className="font-bold text-sm text-[#1A1A1A]">{s.name}</h4>
                   <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-1">
                     {s.branch?.name || s.branch_id} • {s.department}
                     {!conf && (
-                      <span className="ml-2 text-[8px] bg-red-500/20 text-red-400 border border-red-500/20 px-1.5 py-0.5 rounded font-bold uppercase">
+                      <span className="ml-2 text-[8px] bg-[var(--danger-bg)] text-[var(--danger)] border border-[var(--danger)]/20 px-1.5 py-0.5 rounded-[20px] font-bold uppercase">
                         Unconfirmed
                       </span>
                     )}
                   </p>
                 </div>
                 <div className="text-right flex flex-col items-end">
-                  <div className="text-sm font-bold text-[#FBBF24] mb-2">
+                  <div className="text-sm font-bold text-[var(--warning)] mb-2">
                     {formatCurrency(displayAmount)}
                   </div>
                   <button
                     onClick={() => handleOpenPayment(s, conf || null)}
-                    className="bg-[var(--warning-bg)] text-[#FBBF24] border border-[var(--warning)]/20 px-3.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider active:scale-95 transition-transform"
+                    className="bg-[var(--warning-bg)] text-[var(--warning)] border border-[var(--warning)]/20 px-3.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider hover:bg-[var(--warning-bg)]/80 cursor-pointer"
                   >
                     Mark Paid
                   </button>
@@ -263,12 +263,12 @@ export default function PaymentTrackerTab() {
 
       {/* Paid section history */}
       <div className="space-y-3">
-        <h3 className="text-xs font-bold text-[var(--text-secondary)] uppercase tracking-widest border-b border-[var(--border)] pb-2 pt-2">
+        <h3 className="text-xs font-bold text-[#1A1A1A] uppercase tracking-widest border-b border-[#E8E8E8] pb-2 pt-2">
           Payments Completed ({paidList.length})
         </h3>
 
         {paidList.length === 0 ? (
-          <p className="text-xs text-[var(--text-muted)] font-bold italic text-center py-4">
+          <p className="text-xs text-[var(--text-muted)] font-semibold italic text-center py-4">
             No payments completed yet.
           </p>
         ) : (
@@ -278,12 +278,12 @@ export default function PaymentTrackerTab() {
             return (
               <div
                 key={pay.id}
-                className="bg-[var(--bg-surface)] border border-[rgba(74,222,128,0.2)] rounded-[14px] p-4 flex justify-between items-center shadow-sm opacity-90"
+                className="bg-white border border-[var(--success)]/20 rounded-[14px] p-4 flex justify-between items-center shadow-sm opacity-90"
               >
                 <div>
-                  <h4 className="font-bold text-sm text-white flex items-center">
+                  <h4 className="font-bold text-sm text-[#1A1A1A] flex items-center">
                     {s.name}
-                    <span className="ml-2 bg-[rgba(74,222,128,0.12)] text-[#4ADE80] border border-[rgba(74,222,128,0.2)] text-[8px] font-bold px-1.5 py-0.5 rounded uppercase">
+                    <span className="ml-2 bg-[#F2F2F2] text-[#555555] border border-[#E8E8E8] text-[8px] font-bold px-1.5 py-0.5 rounded uppercase">
                       {pay.payment_mode}
                     </span>
                   </h4>
@@ -292,10 +292,10 @@ export default function PaymentTrackerTab() {
                   </p>
                 </div>
                 <div className="text-right flex flex-col items-end">
-                  <div className="text-sm font-bold text-[#4ADE80]">
+                  <div className="text-sm font-bold text-[var(--success)]">
                     {formatCurrency(pay.amount_paid)}
                   </div>
-                  <span className="text-[8px] font-bold text-[#4ADE80] uppercase tracking-wider mt-1.5 flex items-center justify-end space-x-0.5">
+                  <span className="text-[8px] font-bold text-[var(--success)] uppercase tracking-wider mt-1.5 flex items-center justify-end space-x-0.5">
                     <Check size={10} strokeWidth={1.5} />
                     <span>Paid</span>
                   </span>
@@ -310,27 +310,27 @@ export default function PaymentTrackerTab() {
       {selectedStaff && (
         <div className="fixed inset-0 z-[11000] flex flex-col justify-end">
           <div
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
             onClick={() => {
               setSelectedStaff(null);
               setSelectedConf(null);
             }}
           />
           <div
-            className="bg-[var(--bg-surface)] rounded-t-3xl shadow-2xl relative z-10 p-5 flex flex-col max-h-[85vh] overflow-y-auto w-full max-w-md mx-auto border-t border-[var(--border-strong)]"
+            className="bg-white rounded-t-3xl shadow-2xl relative z-10 p-5 flex flex-col max-h-[85vh] overflow-y-auto w-full max-w-md mx-auto border-t border-[#E8E8E8]"
             style={{ paddingBottom: 'calc(24px + env(safe-area-inset-bottom, 16px))' }}
           >
             {/* Grabber */}
-            <div className="w-12 h-1 bg-[var(--border-strong)] rounded-full mx-auto mb-4 flex-shrink-0" />
+            <div className="w-12 h-1 bg-[#D0D0D0] rounded-full mx-auto mb-4 flex-shrink-0" />
 
             <div className="flex justify-between items-center mb-5 flex-shrink-0">
-              <h3 className="text-sm font-bold text-white">Record Payment</h3>
+              <h3 className="text-sm font-bold text-[#1A1A1A]">Record Payment</h3>
               <button
                 onClick={() => {
                   setSelectedStaff(null);
                   setSelectedConf(null);
                 }}
-                className="text-[var(--text-muted)] hover:text-white flex items-center justify-center p-1"
+                className="text-[var(--text-muted)] hover:text-[#1A1A1A] flex items-center justify-center p-1"
               >
                 <X size={16} strokeWidth={1.5} style={{ color: 'currentColor' }} />
               </button>
@@ -341,7 +341,7 @@ export default function PaymentTrackerTab() {
                 <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
                   Staff Name
                 </label>
-                <div className="w-full bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-[10px] p-3 text-xs font-bold text-white">
+                <div className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3 text-xs font-bold text-[#1A1A1A]">
                   {selectedStaff.name}
                 </div>
               </div>
@@ -354,7 +354,7 @@ export default function PaymentTrackerTab() {
                   type="number"
                   value={payAmount}
                   onChange={(e) => setPayAmount(e.target.value)}
-                  className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-sm font-bold focus:outline-none focus:border-white/40 text-white"
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3 text-sm font-bold focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
                   required
                 />
               </div>
@@ -367,10 +367,10 @@ export default function PaymentTrackerTab() {
                   <button
                     type="button"
                     onClick={() => setPayMode('upi')}
-                    className={`flex-1 py-2.5 rounded-[10px] border text-xs font-bold transition-all ${
+                    className={`flex-1 py-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
                       payMode === 'upi'
-                        ? 'bg-white text-[#1E2028] border-white'
-                        : 'bg-[var(--bg-input)] text-[var(--text-secondary)] border-[var(--border)]'
+                        ? 'bg-[#1A1A1A] text-white border-[#1A1A1A]'
+                        : 'bg-[#F8F8F8] text-[#555555] border border-[#E8E8E8]'
                     }`}
                   >
                     UPI / Transfer
@@ -378,10 +378,10 @@ export default function PaymentTrackerTab() {
                   <button
                     type="button"
                     onClick={() => setPayMode('cash')}
-                    className={`flex-1 py-2.5 rounded-[10px] border text-xs font-bold transition-all ${
+                    className={`flex-1 py-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
                       payMode === 'cash'
-                        ? 'bg-white text-[#1E2028] border-white'
-                        : 'bg-[var(--bg-input)] text-[var(--text-secondary)] border-[var(--border)]'
+                        ? 'bg-[#1A1A1A] text-white border-[#1A1A1A]'
+                        : 'bg-[#F8F8F8] text-[#555555] border border-[#E8E8E8]'
                     }`}
                   >
                     Cash Payment
@@ -397,7 +397,7 @@ export default function PaymentTrackerTab() {
                   type="date"
                   value={payDate}
                   onChange={(e) => setPayDate(e.target.value)}
-                  className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-xs focus:outline-none focus:border-white/40 text-white font-bold"
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3 text-xs focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
                   required
                 />
               </div>
@@ -411,7 +411,7 @@ export default function PaymentTrackerTab() {
                   value={payNotes}
                   onChange={(e) => setPayNotes(e.target.value)}
                   placeholder="e.g. Paid via HR account"
-                  className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-xs focus:outline-none focus:border-white/40 text-white"
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3 text-xs focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
                 />
               </div>
 
@@ -419,7 +419,7 @@ export default function PaymentTrackerTab() {
                 type="button"
                 onClick={handleConfirmPayment}
                 disabled={submitting || !payAmount}
-                className="w-full min-h-[44px] bg-white text-[#1E2028] font-bold text-xs rounded-[10px] active:scale-95 transition-all mt-4"
+                className="w-full min-h-[44px] bg-[#1A1A1A] text-white font-bold text-xs rounded-xl active:scale-95 transition-all mt-4 hover:bg-[#333333] cursor-pointer"
               >
                 {submitting ? 'Recording Payout...' : 'Record Payment Confirmation'}
               </button>
@@ -430,7 +430,7 @@ export default function PaymentTrackerTab() {
 
       {/* Global Toast Alert */}
       {toastMsg && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[15000] bg-[var(--success-bg)] border border-[var(--success)] text-[#4ADE80] font-bold text-xs px-4 py-2.5 rounded-full shadow-lg">
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[15000] bg-[var(--success-bg)] border border-[var(--success)]/20 text-[var(--success)] font-bold text-xs px-4 py-2.5 rounded-full shadow-lg">
           {toastMsg}
         </div>
       )}

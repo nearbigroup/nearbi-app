@@ -255,7 +255,7 @@ export default function ApprovalsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-white text-2xl font-bold">Approvals</h1>
+          <h1 className="text-[#1A1A1A] text-2xl font-bold">Approvals</h1>
           <p className="text-[var(--text-muted)] text-xs font-semibold">
             Action pending items
           </p>
@@ -265,15 +265,15 @@ export default function ApprovalsPage() {
             setLoading(true);
             fetchApprovals();
           }}
-          className="min-h-[44px] bg-transparent border border-[var(--border-strong)] text-[var(--text-secondary)] hover:text-white hover:border-white p-2.5 rounded-lg text-sm font-bold flex items-center justify-center space-x-1.5"
+          className="min-h-[40px] bg-white border border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-[0.98] text-[#1A1A1A] px-3.5 rounded-[12px] text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-sm cursor-pointer"
         >
-          <RefreshCw size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
+          <RefreshCw size={16} strokeWidth={1.5} style={{ color: 'currentColor' }} />
           <span>Refresh</span>
         </button>
       </div>
 
       {errorMsg && (
-        <div className="bg-[var(--danger-bg)] border border-[var(--danger)] text-[#F87171] text-xs font-bold px-4 py-3 rounded-[10px] flex items-center justify-between">
+        <div className="bg-[var(--danger-bg)] border border-[var(--danger)]/30 text-[var(--danger)] text-xs font-bold px-4 py-3 rounded-[12px] flex items-center justify-between shadow-sm">
           <span>{errorMsg}</span>
           <button onClick={fetchApprovals} className="text-xs underline font-bold">
             Retry
@@ -282,7 +282,7 @@ export default function ApprovalsPage() {
       )}
 
       {/* Tabs */}
-      <div className="flex border-b border-[var(--border)]">
+      <div className="flex border-b border-[#E8E8E8]">
         {[
           { id: 'ot', label: 'Overtime', count: otPending.length },
           { id: 'early_in', label: 'Early In', count: earlyPending.length },
@@ -291,16 +291,18 @@ export default function ApprovalsPage() {
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id as ApprovalTab)}
-            className={`flex-1 text-center py-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-all flex items-center justify-center space-x-1.5 ${
+            className={`flex-1 text-center py-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-all flex items-center justify-center space-x-1.5 cursor-pointer ${
               activeTab === tab.id
-                ? 'border-white text-white'
-                : 'border-transparent text-[var(--text-secondary)] hover:text-white'
+                ? 'border-[#1A1A1A] text-[#1A1A1A]'
+                : 'border-transparent text-[#555555]'
             }`}
           >
             <span>{tab.label}</span>
             <span
-              className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
-                activeTab === tab.id ? 'bg-white text-[#1E2028]' : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)]'
+              className={`text-[9.5px] font-bold px-2 py-0.5 rounded-full transition-colors ${
+                activeTab === tab.id
+                  ? 'bg-[#1A1A1A] text-white'
+                  : 'bg-[#F2F2F2] text-[#555555] border border-[#E8E8E8]'
               }`}
             >
               {tab.count}
@@ -319,9 +321,9 @@ export default function ApprovalsPage() {
         <div className="space-y-3.5">
           {activeTab === 'ot' && (
             otPending.length === 0 ? (
-              <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-8 text-center flex flex-col items-center justify-center my-6">
-                <CheckSquare size={48} strokeWidth={1} style={{ color: '#2D3140' }} className="mb-2" />
-                <h3 className="text-sm font-bold text-white">No pending overtime</h3>
+              <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-8 text-center flex flex-col items-center justify-center my-6 shadow-sm">
+                <CheckSquare size={48} strokeWidth={1} style={{ color: '#999999' }} className="mb-2" />
+                <h3 className="text-sm font-bold text-[#1A1A1A]">No pending overtime</h3>
                 <p className="text-xs text-[var(--text-muted)] mt-1">All overtime claims are approved or processed.</p>
               </div>
             ) : (
@@ -331,45 +333,45 @@ export default function ApprovalsPage() {
                 const actualHours = att ? Number(att.actual_hours_worked || 0) : 0;
                 
                 return (
-                  <div key={adj.id} className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 flex flex-col shadow-sm">
+                  <div key={adj.id} className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col shadow-sm">
                     <div className="flex items-start justify-between mb-3">
                       <div>
-                        <h3 className="font-bold text-sm text-white">{adj.staff?.name}</h3>
+                        <h3 className="font-bold text-sm text-[#1A1A1A]">{adj.staff?.name}</h3>
                         <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-0.5">
                           {adj.staff?.department} • <span className="capitalize">{getBranchLabel(adj.staff?.branch_id)}</span>
                         </p>
                       </div>
-                      <span className="text-[9px] font-bold text-[#60A5FA] bg-[var(--info-bg)] border border-[var(--info)]/20 px-1.5 py-0.5 rounded">
+                      <span className="text-[9px] font-bold text-[var(--info)] bg-[var(--info-bg)] border border-[var(--info)]/20 px-2 py-0.5 rounded-[20px]">
                         {formatDate(adj.date)}
                       </span>
                     </div>
 
-                    <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-2.5 mb-4 text-xs font-semibold text-[var(--text-secondary)] grid grid-cols-3 gap-2 text-center">
+                    <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-2.5 mb-4 text-xs font-semibold text-[#555555] grid grid-cols-3 gap-2 text-center">
                       <div>
                         <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Shift Hrs</div>
-                        <div className="text-white font-bold mt-0.5">{shiftHours} hrs</div>
+                        <div className="text-[#1A1A1A] font-bold mt-0.5">{shiftHours} hrs</div>
                       </div>
                       <div>
                         <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Actual Hrs</div>
-                        <div className="text-white font-bold mt-0.5">{actualHours} hrs</div>
+                        <div className="text-[#1A1A1A] font-bold mt-0.5">{actualHours} hrs</div>
                       </div>
                       <div>
                         <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">OT Claim</div>
-                        <div className="text-[#60A5FA] font-bold mt-0.5">{adj.minutes} mins</div>
+                        <div className="text-[var(--info)] font-bold mt-0.5">{adj.minutes} mins</div>
                       </div>
                     </div>
 
                     <div className="flex gap-3">
                       <button
                         onClick={() => handleAdjustmentAction(adj, 'rejected')}
-                        className="flex-1 min-h-[38px] bg-transparent border border-[var(--danger)] text-[#F87171] hover:bg-[var(--danger-bg)] text-xs font-bold rounded-lg active:scale-95 transition-transform flex items-center justify-center space-x-1"
+                        className="flex-1 min-h-[40px] bg-[var(--danger-bg)] border border-[var(--danger)]/20 text-[var(--danger)] hover:bg-[var(--danger-bg)]/80 text-xs font-bold rounded-[12px] active:scale-95 transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
                       >
                         <X size={14} strokeWidth={1.5} />
                         <span>Reject</span>
                       </button>
                       <button
                         onClick={() => handleAdjustmentAction(adj, 'approved')}
-                        className="flex-1 min-h-[38px] bg-white text-[#1E2028] hover:bg-gray-200 text-xs font-bold rounded-lg active:scale-95 transition-transform flex items-center justify-center space-x-1"
+                        className="flex-1 min-h-[40px] bg-[#1A1A1A] text-white hover:bg-[#333333] text-xs font-bold rounded-[12px] active:scale-[0.97] transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
                       >
                         <Check size={14} strokeWidth={1.5} />
                         <span>Approve</span>
@@ -383,9 +385,9 @@ export default function ApprovalsPage() {
 
           {activeTab === 'early_in' && (
             earlyPending.length === 0 ? (
-              <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-8 text-center flex flex-col items-center justify-center my-6">
-                <CheckSquare size={48} strokeWidth={1} style={{ color: '#2D3140' }} className="mb-2" />
-                <h3 className="text-sm font-bold text-white">No pending early entries</h3>
+              <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-8 text-center flex flex-col items-center justify-center my-6 shadow-sm">
+                <CheckSquare size={48} strokeWidth={1} style={{ color: '#999999' }} className="mb-2" />
+                <h3 className="text-sm font-bold text-[#1A1A1A]">No pending early entries</h3>
                 <p className="text-xs text-[var(--text-muted)] mt-1">All early check-ins are verified or completed.</p>
               </div>
             ) : (
@@ -395,45 +397,45 @@ export default function ApprovalsPage() {
                 const actualIn = att ? att.check_in_time || 'None' : 'None';
 
                 return (
-                  <div key={adj.id} className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 flex flex-col shadow-sm">
+                  <div key={adj.id} className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col shadow-sm">
                     <div className="flex items-start justify-between mb-3">
                       <div>
-                        <h3 className="font-bold text-sm text-white">{adj.staff?.name}</h3>
+                        <h3 className="font-bold text-sm text-[#1A1A1A]">{adj.staff?.name}</h3>
                         <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-0.5">
                           {adj.staff?.department} • <span className="capitalize">{getBranchLabel(adj.staff?.branch_id)}</span>
                         </p>
                       </div>
-                      <span className="text-[9px] font-bold text-[#60A5FA] bg-[var(--info-bg)] border border-[var(--info)]/20 px-1.5 py-0.5 rounded">
+                      <span className="text-[9px] font-bold text-[var(--info)] bg-[var(--info-bg)] border border-[var(--info)]/20 px-2 py-0.5 rounded-[20px]">
                         {formatDate(adj.date)}
                       </span>
                     </div>
 
-                    <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-2.5 mb-4 text-xs font-semibold text-[var(--text-secondary)] grid grid-cols-3 gap-2 text-center">
+                    <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-2.5 mb-4 text-xs font-semibold text-[#555555] grid grid-cols-3 gap-2 text-center">
                       <div>
                         <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Shift Start</div>
-                        <div className="text-white font-bold mt-0.5">{shiftStart}</div>
+                        <div className="text-[#1A1A1A] font-bold mt-0.5">{shiftStart}</div>
                       </div>
                       <div>
                         <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Actual IN</div>
-                        <div className="text-white font-bold mt-0.5">{actualIn}</div>
+                        <div className="text-[#1A1A1A] font-bold mt-0.5">{actualIn}</div>
                       </div>
                       <div>
                         <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Early By</div>
-                        <div className="text-[#4ADE80] font-bold mt-0.5">{adj.minutes} mins</div>
+                        <div className="text-[var(--success)] font-bold mt-0.5">{adj.minutes} mins</div>
                       </div>
                     </div>
 
                     <div className="flex gap-3">
                       <button
                         onClick={() => handleAdjustmentAction(adj, 'rejected')}
-                        className="flex-1 min-h-[38px] bg-transparent border border-[var(--danger)] text-[#F87171] hover:bg-[var(--danger-bg)] text-xs font-bold rounded-lg active:scale-95 transition-transform flex items-center justify-center space-x-1"
+                        className="flex-1 min-h-[40px] bg-[var(--danger-bg)] border border-[var(--danger)]/20 text-[var(--danger)] hover:bg-[var(--danger-bg)]/80 text-xs font-bold rounded-[12px] active:scale-95 transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
                       >
                         <X size={14} strokeWidth={1.5} />
                         <span>Reject</span>
                       </button>
                       <button
                         onClick={() => handleAdjustmentAction(adj, 'approved')}
-                        className="flex-1 min-h-[38px] bg-white text-[#1E2028] hover:bg-gray-200 text-xs font-bold rounded-lg active:scale-95 transition-transform flex items-center justify-center space-x-1"
+                        className="flex-1 min-h-[40px] bg-[#1A1A1A] text-white hover:bg-[#333333] text-xs font-bold rounded-[12px] active:scale-[0.97] transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
                       >
                         <Check size={14} strokeWidth={1.5} />
                         <span>Approve</span>
@@ -447,48 +449,48 @@ export default function ApprovalsPage() {
 
           {activeTab === 'fines' && (
             fines.length === 0 ? (
-              <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-8 text-center flex flex-col items-center justify-center my-6">
-                <CheckSquare size={48} strokeWidth={1} style={{ color: '#2D3140' }} className="mb-2" />
-                <h3 className="text-sm font-bold text-white">No pending fines</h3>
+              <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-8 text-center flex flex-col items-center justify-center my-6 shadow-sm">
+                <CheckSquare size={48} strokeWidth={1} style={{ color: '#999999' }} className="mb-2" />
+                <h3 className="text-sm font-bold text-[#1A1A1A]">No pending fines</h3>
                 <p className="text-xs text-[var(--text-muted)] mt-1">All daily late arrival fines are reviewed.</p>
               </div>
             ) : (
               fines.map((fine) => (
-                <div key={fine.id} className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[14px] p-4 flex flex-col shadow-sm">
+                <div key={fine.id} className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col shadow-sm">
                   <div className="flex items-start justify-between mb-3.5">
                     <div>
-                      <h3 className="font-bold text-sm text-white">{fine.staff?.name}</h3>
+                      <h3 className="font-bold text-sm text-[#1A1A1A]">{fine.staff?.name}</h3>
                       <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-0.5">
                         {fine.staff?.department} • <span className="capitalize">{getBranchLabel(fine.staff?.branch_id)}</span>
                       </p>
                     </div>
-                    <span className="text-[9px] font-bold text-[#FBBF24] bg-[var(--warning-bg)] border border-[var(--warning)]/20 px-1.5 py-0.5 rounded">
+                    <span className="text-[9px] font-bold text-[var(--warning)] bg-[var(--warning-bg)] border border-[var(--warning)]/20 px-2 py-0.5 rounded-[20px]">
                       {formatDate(fine.date)}
                     </span>
                   </div>
 
-                  <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-3 text-xs mb-4">
-                    <div className="flex justify-between font-bold text-[var(--text-secondary)] mb-1">
+                  <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3 text-xs mb-4">
+                    <div className="flex justify-between font-bold text-[#555555] mb-1">
                       <span>Late Minutes:</span>
-                      <span className="text-[#FBBF24]">{fine.late_minutes} mins</span>
+                      <span className="text-[var(--warning)]">{fine.late_minutes} mins</span>
                     </div>
-                    <div className="flex justify-between font-bold text-[var(--text-secondary)]">
+                    <div className="flex justify-between font-bold text-[#555555]">
                       <span>Fine Amount:</span>
-                      <span className="text-[#F87171] text-sm">₹{fine.fine_amount}</span>
+                      <span className="text-[var(--danger)] text-sm">₹{fine.fine_amount}</span>
                     </div>
                   </div>
 
                   <div className="flex gap-3">
                     <button
                       onClick={() => handleFineAction(fine, 'waived')}
-                      className="flex-1 min-h-[38px] bg-transparent border border-[var(--warning)] text-[#FBBF24] hover:bg-[var(--warning-bg)] text-xs font-bold rounded-lg active:scale-95 transition-transform flex items-center justify-center space-x-1"
+                      className="flex-1 min-h-[40px] bg-white border border-[#E8E8E8] text-[#1A1A1A] hover:bg-[#F8F8F8] text-xs font-bold rounded-[12px] active:scale-95 transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
                     >
                       <X size={14} strokeWidth={1.5} />
                       <span>Waive Fine</span>
                     </button>
                     <button
                       onClick={() => handleFineAction(fine, 'confirmed')}
-                      className="flex-1 min-h-[38px] bg-[rgba(74,222,128,0.15)] border border-[rgba(74,222,128,0.3)] text-[#4ADE80] hover:bg-[rgba(74,222,128,0.25)] text-xs font-bold rounded-lg active:scale-95 transition-transform flex items-center justify-center space-x-1"
+                      className="flex-1 min-h-[40px] bg-[#1A1A1A] text-white hover:bg-[#333333] text-xs font-bold rounded-[12px] active:scale-[0.97] transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
                     >
                       <Check size={14} strokeWidth={1.5} />
                       <span>Confirm Fine</span>
@@ -503,7 +505,7 @@ export default function ApprovalsPage() {
 
       {/* Global Toast */}
       {toastMsg && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[15000] bg-[var(--success-bg)] border border-[var(--success)] text-[#4ADE80] font-bold text-xs px-4 py-2.5 rounded-full shadow-lg">
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[15000] bg-[var(--success-bg)] border border-[var(--success)]/20 text-[var(--success)] font-bold text-xs px-4 py-2.5 rounded-full shadow-lg">
           {toastMsg}
         </div>
       )}

@@ -115,28 +115,28 @@ export default function SpecialFineBottomSheet({
   return (
     <div className="fixed inset-0 z-[11000] flex flex-col justify-end">
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
         onClick={onClose}
       />
       <div
-        className="bg-[var(--bg-surface)] rounded-t-3xl shadow-2xl relative z-10 p-5 flex flex-col max-h-[85vh] overflow-y-auto w-full max-w-md mx-auto border-t border-[var(--border-strong)]"
+        className="bg-white rounded-t-3xl shadow-2xl relative z-10 p-5 flex flex-col max-h-[85vh] overflow-y-auto w-full max-w-md mx-auto border-t border-[#E8E8E8]"
         style={{ paddingBottom: 'calc(24px + env(safe-area-inset-bottom, 16px))' }}
       >
         {/* Grabber bar */}
-        <div className="w-12 h-1 bg-[var(--border-strong)] rounded-full mx-auto mb-4 flex-shrink-0" />
+        <div className="w-12 h-1 bg-[#D0D0D0] rounded-full mx-auto mb-4 flex-shrink-0" />
 
         <div className="flex justify-between items-center mb-4 flex-shrink-0">
-          <h2 className="text-lg font-bold text-white">Add Special Fine</h2>
+          <h2 className="text-lg font-bold text-[#1A1A1A]">Add Special Fine</h2>
           <button
             onClick={onClose}
-            className="text-[var(--text-muted)] hover:text-white flex items-center justify-center p-1"
+            className="text-[var(--text-muted)] hover:text-[#1A1A1A] flex items-center justify-center p-1"
           >
             <X size={16} strokeWidth={1.5} style={{ color: 'currentColor' }} />
           </button>
         </div>
 
         {errorMsg && (
-          <div className="bg-[var(--danger-bg)] border border-[var(--danger)] text-[#F87171] text-xs font-bold px-3 py-2 rounded-md mb-4 flex-shrink-0">
+          <div className="bg-[var(--danger-bg)] border border-[var(--danger)]/30 text-[var(--danger)] text-xs font-bold px-3 py-2 rounded-xl mb-4 flex-shrink-0 shadow-sm">
             {errorMsg}
           </div>
         )}
@@ -146,7 +146,7 @@ export default function SpecialFineBottomSheet({
             <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
               Staff Member
             </label>
-            <div className="w-full bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-[10px] p-3 text-sm font-bold text-white">
+            <div className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3 text-sm font-bold text-[#1A1A1A]">
               {staffName}
             </div>
           </div>
@@ -159,7 +159,7 @@ export default function SpecialFineBottomSheet({
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               placeholder="Describe the reason... e.g. uniform violation, misconduct, negligence, damage to property"
-              className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-sm focus:outline-none focus:border-white/40 text-white min-h-[80px]"
+              className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] min-h-[80px]"
               required
             />
           </div>
@@ -170,14 +170,14 @@ export default function SpecialFineBottomSheet({
                 Amount (₹)
               </label>
               <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-[var(--text-secondary)] font-bold">₹</span>
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-[#555555] font-bold">₹</span>
                 <input
                   type="number"
                   min="1"
                   value={amount}
                   onChange={(e) => setAmount(e.target.value)}
                   placeholder="e.g. 500"
-                  className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] pl-7 pr-3 py-3 text-sm focus:outline-none focus:border-white/40 text-white font-bold"
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl pl-7 pr-3 py-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
                   required
                 />
               </div>
@@ -191,7 +191,7 @@ export default function SpecialFineBottomSheet({
                 type="date"
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
-                className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-[10px] p-3 text-sm focus:outline-none focus:border-white/40 text-white font-bold"
+                className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
                 required
               />
             </div>
@@ -200,7 +200,7 @@ export default function SpecialFineBottomSheet({
           <button
             type="submit"
             disabled={loading}
-            className="w-full min-h-[44px] bg-[#FBBF24] hover:bg-[#F59E0B] text-[#1E2028] font-bold text-sm rounded-[10px] active:scale-95 transition-all mt-4"
+            className="w-full min-h-[44px] bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold text-sm rounded-xl active:scale-[0.97] transition-all mt-4 cursor-pointer"
           >
             {loading ? 'Submitting...' : 'Submit Fine'}
           </button>
