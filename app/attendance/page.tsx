@@ -1,10 +1,10 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
-import { Clock, RefreshCw, CircleCheck, CircleX, AlertTriangle, X, AlertCircle, Download, Upload, Check } from 'lucide-react';
+import { Clock, RefreshCw, CircleCheck, CircleX, AlertTriangle, X, AlertCircle, Download, Upload, Check, List, LayoutGrid } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import * as XLSX from 'xlsx';
 import { DEPARTMENTS } from '@/lib/data';
@@ -74,6 +74,28 @@ export default function AttendancePage() {
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [fines, setFines] = useState<LateFine[]>([]);
   const [adjustments, setAdjustments] = useState<Adjustment[]>([]);
+
+  const [viewMode, setViewMode] = useState<'list' | 'floor'>('list');
+  const [breakLogs, setBreakLogs] = useState<any[]>([]);
+
+  useEffect(() => {
+    const saved = localStorage.getItem('nearbi_attendance_view');
+    if (saved === 'list' || saved === 'floor') {
+      setViewMode(saved);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (viewMode === 'floor') {
+      document.body.style.backgroundColor = '#F8F8F8';
+    } else {
+      document.body.style.backgroundColor = '';
+    }
+    return () => {
+      document.body.style.backgroundColor = '';
+    };
+  }, [viewMode]);
+
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
   const [branchFilter, setBranchFilter] = useState<BranchFilter>('All');
@@ -824,6 +846,23 @@ export default function AttendancePage() {
         setAdjustments([]);
       }
 
+      // 5. Fetch today's break logs
+      try {
+        const { data: breakData, error: breakErr } = await supabase
+          .from('break_logs')
+          .select('*')
+          .eq('date', todayStr);
+        if (breakErr) {
+          console.error('Error fetching break logs:', breakErr);
+          setBreakLogs([]);
+        } else {
+          setBreakLogs(breakData || []);
+        }
+      } catch (err: any) {
+        console.error('Exception fetching break logs:', err);
+        setBreakLogs([]);
+      }
+
     } catch (err: any) {
       console.error('Attendance fetch error:', err);
       setErrorMsg('Could not load data. Check connection.');
@@ -842,6 +881,13 @@ export default function AttendancePage() {
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'attendance' },
+        () => {
+          fetchData();
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'break_logs' },
         () => {
           fetchData();
         }
@@ -892,6 +938,215 @@ export default function AttendancePage() {
     return true;
   });
 
+  const DEPT_ORDER = [
+    'Accounts',
+    'Purchase Entry',
+    'Sales',
+    'Billing',
+    'Helper',
+    'Cleaning',
+    'Counter Staff',
+    'Packing Staff',
+    'Customer Care',
+    'Nearbi Homes',
+    'Security',
+    'Part Time',
+    'Vegetables'
+  ];
+
+  const getStaffCardDetails = (item: any) => {
+    // Check break
+    const activeBreak = breakLogs.find(
+      (b) => b.staff_id === item.id && b.break_end === null
+    );
+    if (activeBreak) {
+      return {
+        type: 'break',
+        cardClass: 'bg-[#FDF8E7] border-[1.5px] border-[#E6B800] text-[#1A1A1A]',
+        avatarClass: 'bg-[#E6B800] text-white',
+        nameClass: 'text-[#1A1A1A]',
+        statusClass: 'text-[#B8860B] flex items-center gap-1',
+        statusContent: (
+          <span className="flex items-center gap-0.5">
+            ☕ On break
+          </span>
+        )
+      };
+    }
+
+    const record = item.record;
+    if (record) {
+      if (record.status === 'late') {
+        if (record.color_code === 'yellow') {
+          return {
+            type: 'late-yellow',
+            cardClass: 'bg-[#FFFBF0] border-2 border-[#E6B800] text-[#1A1A1A]',
+            avatarClass: 'bg-[#E6B800] text-white',
+            nameClass: 'text-[#1A1A1A]',
+            statusClass: 'text-[#B8860B] flex items-center gap-1',
+            statusContent: (
+              <span className="flex items-center gap-0.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#B8860B]" />
+                {record.check_in_time} ({record.minutes_late}m)
+              </span>
+            )
+          };
+        } else if (record.color_code === 'orange') {
+          return {
+            type: 'late-orange',
+            cardClass: 'bg-[#FFF5F0] border-2 border-[#E07000] text-[#1A1A1A]',
+            avatarClass: 'bg-[#E07000] text-white',
+            nameClass: 'text-[#1A1A1A]',
+            statusClass: 'text-[#E07000] flex items-center gap-1',
+            statusContent: (
+              <span className="flex items-center gap-0.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#E07000]" />
+                {record.check_in_time} ({record.minutes_late}m)
+              </span>
+            )
+          };
+        } else {
+          // Red
+          return {
+            type: 'late-red',
+            cardClass: 'bg-[#FFF0F0] border-2 border-[#C0392B] text-[#1A1A1A]',
+            avatarClass: 'bg-[#C0392B] text-white',
+            nameClass: 'text-[#1A1A1A]',
+            statusClass: 'text-[#C0392B] flex items-center gap-1',
+            statusContent: (
+              <span className="flex items-center gap-0.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#C0392B]" />
+                {record.check_in_time} ({record.minutes_late}m)
+              </span>
+            )
+          };
+        }
+      } else {
+        // Present on time
+        return {
+          type: 'present',
+          cardClass: 'bg-[#1A1A1A] text-white border-transparent',
+          avatarClass: 'bg-white/15 text-white',
+          nameClass: 'text-white',
+          statusClass: 'text-white/60 flex items-center gap-1',
+          statusContent: (
+            <span className="flex items-center gap-0.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#4ADE80]" />
+              {record.check_in_time}
+            </span>
+          )
+        };
+      }
+    }
+
+    // No record: check if Pending or Absent
+    const now = new Date();
+    const currentMins = now.getHours() * 60 + now.getMinutes();
+    let isPending = false;
+    if (item.shift?.start_time) {
+      const [sh, sm] = item.shift.start_time.split(':').map(Number);
+      const shiftMins = sh * 60 + sm;
+      if (currentMins < shiftMins) {
+        isPending = true;
+      }
+    }
+
+    if (isPending) {
+      return {
+        type: 'pending',
+        cardClass: 'bg-[#FAFAFA] border border-[#E8E8E8] text-[#999999]',
+        avatarClass: 'bg-[#E8E8E8] text-[#999999]',
+        nameClass: 'text-[#999999]',
+        statusClass: 'text-[#999999]',
+        statusContent: 'Pending'
+      };
+    }
+
+    // Absent
+    return {
+      type: 'absent',
+      cardClass: 'bg-[#F5F5F5] border-[1.5px] border-dashed border-[#CCCCCC] opacity-75 text-[#AAAAAA]',
+      avatarClass: 'bg-[#E0E0E0] text-[#999999] opacity-50',
+      nameClass: 'text-[#AAAAAA]',
+      statusClass: 'text-[#C0392B] flex items-center gap-1',
+      statusContent: (
+        <span className="flex items-center gap-0.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-[#C0392B]" />
+          Absent
+        </span>
+      )
+    };
+  };
+
+  const summaryStats = useMemo(() => {
+    const activeBranchStaff = combinedData.filter((item) => {
+      if (userBranch) {
+        return item.branch_id === userBranch;
+      }
+      return branchFilter === 'All' || item.branch_id === branchFilter;
+    });
+
+    const present = activeBranchStaff.filter(
+      (item) => item.record && item.record.check_in_time && item.record.status !== 'late'
+    ).length;
+
+    const late = activeBranchStaff.filter(
+      (item) => item.record && item.record.check_in_time && item.record.status === 'late'
+    ).length;
+
+    const absent = activeBranchStaff.filter((item) => {
+      if (item.record && item.record.check_in_time) return false;
+      
+      const now = new Date();
+      const currentMins = now.getHours() * 60 + now.getMinutes();
+      if (item.shift?.start_time) {
+        const [sh, sm] = item.shift.start_time.split(':').map(Number);
+        const shiftMins = sh * 60 + sm;
+        if (currentMins < shiftMins) {
+          return false;
+        }
+      }
+      return true;
+    }).length;
+
+    return { present, late, absent };
+  }, [combinedData, branchFilter, userBranch]);
+
+  const floorSections = useMemo(() => {
+    return DEPT_ORDER.map((dept) => {
+      const deptStaffAll = combinedData.filter((item) => {
+        if (item.department !== dept) return false;
+        if (userBranch) {
+          if (item.branch_id !== userBranch) return false;
+        } else {
+          if (branchFilter !== 'All' && item.branch_id !== branchFilter) return false;
+        }
+        return true;
+      });
+
+      if (deptStaffAll.length === 0) return null;
+
+      const totalCount = deptStaffAll.length;
+      const presentCount = deptStaffAll.filter(
+        (item) => item.record && item.record.check_in_time
+      ).length;
+
+      const allAbsent = presentCount === 0;
+
+      const deptStaffFiltered = filteredData.filter((item) => item.department === dept);
+
+      if (deptStaffFiltered.length === 0) return null;
+
+      return {
+        name: dept,
+        staff: deptStaffFiltered,
+        presentCount,
+        totalCount,
+        allAbsent
+      };
+    }).filter(Boolean);
+  }, [combinedData, filteredData, branchFilter, userBranch]);
+
   const getStatusBadge = (record: AttendanceRecord | null) => {
     if (!record || !record.check_in_time) {
       return (
@@ -939,6 +1194,36 @@ export default function AttendancePage() {
           <p className="text-[var(--text-muted)] text-xs font-semibold">Today's register</p>
         </div>
         <div className="flex items-center space-x-2">
+          <div className="bg-[#F2F2F2] rounded-[10px] p-[3px] inline-flex items-center">
+            <button
+              onClick={() => {
+                setViewMode('list');
+                localStorage.setItem('nearbi_attendance_view', 'list');
+              }}
+              className={`px-[14px] py-[6px] text-[13px] flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
+                viewMode === 'list'
+                  ? 'bg-white rounded-[8px] shadow-[0_1px_3px_rgba(0,0,0,0.1)] text-[#1A1A1A] font-semibold'
+                  : 'bg-transparent text-[#999999]'
+              }`}
+            >
+              <List size={16} />
+              <span>List</span>
+            </button>
+            <button
+              onClick={() => {
+                setViewMode('floor');
+                localStorage.setItem('nearbi_attendance_view', 'floor');
+              }}
+              className={`px-[14px] py-[6px] text-[13px] flex items-center gap-1.5 transition-all duration-200 cursor-pointer ${
+                viewMode === 'floor'
+                  ? 'bg-white rounded-[8px] shadow-[0_1px_3px_rgba(0,0,0,0.1)] text-[#1A1A1A] font-semibold'
+                  : 'bg-transparent text-[#999999]'
+              }`}
+            >
+              <LayoutGrid size={16} />
+              <span>Floor</span>
+            </button>
+          </div>
           <button
             onClick={() => setBottomSheetOpen(true)}
             className="min-h-[40px] bg-white border border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-[0.98] text-[#1A1A1A] px-3.5 rounded-[12px] text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-sm cursor-pointer"
@@ -1018,13 +1303,106 @@ export default function AttendancePage() {
         })}
       </div>
 
-      {/* Main List */}
+      {/* Main Content */}
       {loading ? (
         <div className="space-y-3">
           <div className="skeleton h-[90px] w-full" />
           <div className="skeleton h-[90px] w-full" />
           <div className="skeleton h-[90px] w-full" />
           <div className="skeleton h-[90px] w-full" />
+        </div>
+      ) : viewMode === 'floor' ? (
+        <div className="space-y-5">
+          {/* Summary Bar */}
+          <div className="bg-white border border-[#E8E8E8] rounded-[12px] p-[10px_16px] flex gap-[20px] mb-[16px] shadow-sm">
+            <div className="flex items-center gap-[6px]">
+              <span className="text-[12px]">🟢</span>
+              <span className="font-bold text-[13px] text-[#1A1A1A]">{summaryStats.present}</span>
+              <span className="text-[11px] text-[#999999]">Present</span>
+            </div>
+            <div className="flex items-center gap-[6px]">
+              <span className="text-[12px]">🟡</span>
+              <span className="font-bold text-[13px] text-[#1A1A1A]">{summaryStats.late}</span>
+              <span className="text-[11px] text-[#999999]">Late</span>
+            </div>
+            <div className="flex items-center gap-[6px]">
+              <span className="text-[12px]">🔴</span>
+              <span className="font-bold text-[13px] text-[#1A1A1A]">{summaryStats.absent}</span>
+              <span className="text-[11px] text-[#999999]">Absent</span>
+            </div>
+          </div>
+
+          {/* Department Sections */}
+          {floorSections.length === 0 ? (
+            <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-8 text-center flex flex-col items-center justify-center my-6 shadow-sm">
+              <Clock size={48} strokeWidth={1} className="text-[#999999] mb-2" />
+              <h3 className="text-sm font-bold text-[#1A1A1A]">No staff matches the filters</h3>
+              <p className="text-xs text-[var(--text-muted)] mt-1">
+                Try selecting a different branch or status filter.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {floorSections.map((dept) => {
+                if (!dept) return null;
+                return (
+                  <div key={dept.name} className="mb-6">
+                    {/* Department Header */}
+                    <div className="flex justify-between items-center mb-2.5 border-b border-[#E8E8E8]/40 pb-1.5">
+                      <span
+                        className="text-[11px] font-semibold uppercase tracking-[0.08em]"
+                        style={{ color: dept.allAbsent ? '#C0392B' : '#999999' }}
+                      >
+                        {dept.name}
+                      </span>
+                      <span className="text-[11px] text-[#999999] font-medium">
+                        {dept.presentCount}/{dept.totalCount} present
+                      </span>
+                    </div>
+
+                    {/* Staff Cards Row/Grid */}
+                    <div
+                      className={
+                        dept.staff.length > 4
+                          ? "flex flex-wrap gap-2"
+                          : "flex flex-nowrap overflow-x-auto gap-2 scrollbar-none pb-1"
+                      }
+                    >
+                      {dept.staff.map((item) => {
+                        const cardDetails = getStaffCardDetails(item);
+                        return (
+                          <div
+                            key={item.id}
+                            onClick={() => router.push('/staff/' + item.id)}
+                            className={`w-[80px] h-[90px] sm:w-[90px] sm:h-[100px] rounded-[14px] flex flex-col items-center justify-center gap-1 p-[8px_6px] cursor-pointer shrink-0 transition-all ${cardDetails.cardClass}`}
+                          >
+                            {/* Avatar circle */}
+                            <div
+                              className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold ${cardDetails.avatarClass}`}
+                            >
+                              {item.name.charAt(0).toUpperCase()}
+                            </div>
+
+                            {/* Name */}
+                            <span
+                              className={`text-[10px] font-semibold text-center max-w-[68px] overflow-hidden text-ellipsis whitespace-nowrap ${cardDetails.nameClass}`}
+                            >
+                              {item.name.split(' ')[0]}
+                            </span>
+
+                            {/* Status line */}
+                            <span className={`text-[9px] font-medium ${cardDetails.statusClass}`}>
+                              {cardDetails.statusContent}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       ) : filteredData.length === 0 ? (
         <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-8 text-center flex flex-col items-center justify-center my-6 shadow-sm">
