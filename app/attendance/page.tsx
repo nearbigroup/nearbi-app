@@ -499,8 +499,9 @@ export default function AttendancePage() {
   const handleExportExistingAttendance = async (targetMonth: string) => {
     try {
       const [yearStr, monthStr] = targetMonth.split('-');
+      const daysInMonth = new Date(Number(yearStr), Number(monthStr), 0).getDate();
       const startDate = `${targetMonth}-01`;
-      const endDate = `${targetMonth}-31`;
+      const endDate = `${targetMonth}-${String(daysInMonth).padStart(2, '0')}`;
       
       let staffQuery = supabase.from('staff').select('*').eq('active', true);
       if (userBranch) {
@@ -720,8 +721,9 @@ export default function AttendancePage() {
 
         // Fetch existing attendance records
         const [yearStr, monthStr] = selectedMonth.split('-');
+        const daysInMonth = new Date(Number(yearStr), Number(monthStr), 0).getDate();
         const startDate = `${selectedMonth}-01`;
-        const endDate = `${selectedMonth}-31`;
+        const endDate = `${selectedMonth}-${String(daysInMonth).padStart(2, '0')}`;
         const { data: existingAttendance, error: attErr } = await supabase
           .from('attendance')
           .select('*')
@@ -833,8 +835,9 @@ export default function AttendancePage() {
       };
 
       const [yearStr, monthStr] = selectedMonth.split('-');
+      const daysInMonth = new Date(Number(yearStr), Number(monthStr), 0).getDate();
       const firstDayOfMonth = `${selectedMonth}-01`;
-      const lastDayOfMonth = `${selectedMonth}-31`;
+      const lastDayOfMonth = `${selectedMonth}-${String(daysInMonth).padStart(2, '0')}`;
       
       const { data: yellowRecords } = await supabase
         .from('attendance')
