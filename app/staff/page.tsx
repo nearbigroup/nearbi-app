@@ -765,98 +765,118 @@ export default function StaffPage() {
   const calculateScores = async () => {
     setCalculatingScores(true);
     try {
-      const now = new Date();
-      const currentMonth = now.toISOString().slice(0, 7);
-      const year = now.getFullYear();
-      const monthNum = now.getMonth() + 1;
-      const calendarDays = new Date(year, monthNum, 0).getDate();
-      const startDate = `${currentMonth}-01`;
-      const endDate = `${currentMonth}-31`;
+      const today = new Date();
+      const year = today.getFullYear();
+      const month = today.getMonth() + 1;
+      const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+      const firstDay = `${monthStr}-01`;
+      const lastDay = new Date(year, month, 0).toISOString().split('T')[0];
 
-      const { data: attendance, error: attErr } = await supabase
-        .from('attendance')
-        .select('staff_id, check_in_time, status, color_code')
-        .gte('date', startDate)
-        .lte('date', endDate);
-      if (attErr) throw attErr;
+      let successCount = 0;
+      let errorCount = 0;
 
-      const { data: lateFines, error: lfErr } = await supabase
-        .from('late_fines')
-        .select('staff_id, color_code')
-        .eq('confirmed', true)
-        .eq('waived', false)
-        .eq('month', currentMonth);
-      if (lfErr) throw lfErr;
-
-      const { data: specialFines, error: sfErr } = await supabase
-        .from('special_fines')
-        .select('staff_id')
-        .eq('confirmed', true)
-        .eq('waived', false)
-        .eq('month', currentMonth);
-      if (sfErr) throw sfErr;
-
-      const { data: adjustments, error: adjErr } = await supabase
-        .from('attendance_adjustments')
-        .select('staff_id, minutes')
-        .eq('type', 'ot')
-        .eq('status', 'approved')
-        .gte('date', startDate)
-        .lte('date', endDate);
-      if (adjErr) throw adjErr;
-
-      const upsertRows = [];
       for (const s of staff) {
-        const offDays = s.off_days_per_month || 4;
-        const required = calendarDays - offDays;
-        
-        const staffAtt = attendance?.filter(a => a.staff_id === s.id && a.check_in_time) || [];
-        const daysWorked = staffAtt.length;
-        const attendance_pct = required > 0 ? daysWorked / required : 0;
-        const attendance_score = Math.max(0, Math.min(40, Math.round(attendance_pct * 40)));
+        try {
+          // Fetch attendance for this month
+          const { data: attRecords } = await supabase
+            .from('attendance')
+            .select('check_in_time, status, color_code, ot_minutes, ot_approved')
+            .eq('staff_id', s.id)
+            .gte('date', firstDay)
+            .lte('date', lastDay);
 
-        const staffLateFinesAll = lateFines?.filter(f => f.staff_id === s.id) || [];
-        const yellow = staffLateFinesAll.filter(f => f.color_code === 'yellow').length;
-        const orange = staffLateFinesAll.filter(f => f.color_code === 'orange').length;
-        const red = staffLateFinesAll.filter(f => f.color_code === 'red').length;
-        const punctualityDeduct = (yellow * 3) + (orange * 5) + (red * 8);
-        const punctuality_score = Math.max(0, 30 - punctualityDeduct);
+          // Fetch confirmed fines
+          const { data: lateFines } = await supabase
+            .from('late_fines')
+            .select('color_code, confirmed')
+            .eq('staff_id', s.id)
+            .eq('month', monthStr);
 
-        const staffLateFinesConfirmed = staffLateFinesAll.length;
-        const staffSpecialFinesConfirmed = specialFines?.filter(f => f.staff_id === s.id).length || 0;
-        const fineDeduct = (staffLateFinesConfirmed * 2) + (staffSpecialFinesConfirmed * 5);
-        const fine_score = Math.max(0, 20 - fineDeduct);
+          const { data: specialFines } = await supabase
+            .from('special_fines')
+            .select('confirmed')
+            .eq('staff_id', s.id)
+            .eq('month', monthStr);
 
-        const staffOTAdjustments = adjustments?.filter(adj => adj.staff_id === s.id) || [];
-        const totalOTMinutes = staffOTAdjustments.reduce((sum, adj) => sum + (adj.minutes || 0), 0);
-        const ot_score = totalOTMinutes > 0 ? 10 : 5;
+          // Calculate scores
+          const calendarDays = new Date(year, month, 0).getDate();
+          const requiredDays = calendarDays - (s.off_days_per_month || 0);
+          const daysWorked = attRecords?.filter(r => r.check_in_time).length || 0;
 
-        const total_score = attendance_score + punctuality_score + fine_score + ot_score;
+          // Attendance score (40 pts)
+          const attScore = requiredDays > 0
+            ? Math.round((daysWorked / requiredDays) * 40)
+            : 40;
+          const attendanceScore = Math.min(40, Math.max(0, attScore));
 
-        upsertRows.push({
-          staff_id: s.id,
-          month: currentMonth,
-          attendance_score,
-          punctuality_score,
-          fine_score,
-          ot_score,
-          total_score,
-          visible_to_staff: scoresMap[s.id]?.visible_to_staff || false
-        });
+          // Punctuality score (30 pts)
+          let punctScore = 30;
+          const yellowCount = lateFines?.filter(f => f.color_code === 'yellow').length || 0;
+          const orangeCount = lateFines?.filter(f => f.color_code === 'orange').length || 0;
+          const redCount = lateFines?.filter(f => f.color_code === 'red').length || 0;
+          punctScore -= (yellowCount * 3);
+          punctScore -= (orangeCount * 5);
+          punctScore -= (redCount * 8);
+          const punctualityScore = Math.max(0, punctScore);
+
+          // Fine score (20 pts)
+          let fineScore = 20;
+          const confirmedLate = lateFines?.filter(f => f.confirmed).length || 0;
+          const confirmedSpecial = specialFines?.filter(f => f.confirmed).length || 0;
+          fineScore -= (confirmedLate * 2);
+          fineScore -= (confirmedSpecial * 5);
+          const finalFineScore = Math.max(0, fineScore);
+
+          // OT score (10 pts)
+          const hasOT = attRecords?.some(r => r.ot_approved && r.ot_minutes > 0);
+          const otScore = hasOT ? 10 : 5;
+
+          const totalScore = attendanceScore + punctualityScore + finalFineScore + otScore;
+
+          // Upsert to performance_scores
+          const { error: upsertError } = await supabase
+            .from('performance_scores')
+            .upsert({
+              staff_id: s.id,
+              month: monthStr,
+              attendance_score: attendanceScore,
+              punctuality_score: punctualityScore,
+              fine_score: finalFineScore,
+              ot_score: otScore,
+              total_score: totalScore,
+              calculated_at: new Date().toISOString(),
+              visible_to_staff: scoresMap[s.id]?.visible_to_staff || false
+            }, {
+              onConflict: 'staff_id,month'
+            });
+
+          if (upsertError) {
+            console.error('Score upsert error for', s.name, upsertError);
+            errorCount++;
+          } else {
+            successCount++;
+          }
+
+        } catch (staffErr) {
+          console.error('Error calculating score for', s.name, staffErr);
+          errorCount++;
+          // Continue with next staff even if one fails
+          continue;
+        }
       }
 
-      if (upsertRows.length > 0) {
-        const { error: upsertErr } = await supabase
-          .from('performance_scores')
-          .upsert(upsertRows, { onConflict: 'staff_id,month' });
-        if (upsertErr) throw upsertErr;
-      }
-
+      // Refresh scores display
       await fetchScores();
-      showToast('Scores updated');
-    } catch (e: any) {
-      console.error('Error recalculating scores:', e);
-      showToast('Recalculation failed.');
+
+      if (errorCount === 0) {
+        showToast(`Scores updated for ${successCount} staff ✓`);
+      } else {
+        showToast(`Updated ${successCount} staff. ${errorCount} failed — check console.`);
+      }
+
+    } catch (err) {
+      console.error('Recalculate scores error:', err);
+      showToast('Recalculation failed. Check console.');
     } finally {
       setCalculatingScores(false);
     }
