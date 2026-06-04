@@ -222,17 +222,21 @@ export default function StaffProfilePage() {
     if (!staff) return;
     try {
       const [yearStr, monthStr] = selectedMonth.split('-');
-      const startDate = `${selectedMonth}-01`;
-      const endDate = `${selectedMonth}-31`; // Supabase handles date logic safely
+      const year = Number(yearStr);
+      const month = Number(monthStr);
+      
+      const firstDay = `${year}-${String(month).padStart(2, '0')}-01`;
+      const lastDay = `${year}-${String(month).padStart(2, '0')}-${String(new Date(year, month, 0).getDate()).padStart(2, '0')}`;
 
       // 1. Fetch Attendance
-      const { data: attData } = await supabase
+      const { data: monthAtt } = await supabase
         .from('attendance')
         .select('*')
         .eq('staff_id', id)
-        .gte('date', startDate)
-        .lte('date', endDate);
-      setAttendance(attData || []);
+        .gte('date', firstDay)
+        .lte('date', lastDay)
+        .order('date', { ascending: true });
+      setAttendance(monthAtt || []);
 
       // 2. Fetch Late Fines
       const { data: lfData } = await supabase
@@ -255,8 +259,8 @@ export default function StaffProfilePage() {
         .from('break_logs')
         .select('*')
         .eq('staff_id', id)
-        .gte('date', startDate)
-        .lte('date', endDate);
+        .gte('date', firstDay)
+        .lte('date', lastDay);
       setBreaks(breakData || []);
 
       // 5. Fetch Performance Score

@@ -116,11 +116,17 @@ export function calculateOTMinutes(
 ): number {
   const [eh, em] = shiftEnd.split(':').map(Number);
   const [ah, am] = actualOut.split(':').map(Number);
-  const shiftEndMins = eh * 60 + em;
-  const actualOutMins = ah * 60 + am;
+
+  const shiftEndMins = (eh * 60) + em;
+  const actualOutMins = (ah * 60) + am;
+
   const diff = actualOutMins - shiftEndMins;
-  if (diff <= 30) return 0;
-  return diff - 30;
+
+  // Under 30 mins = no OT at all
+  if (diff < 30) return 0;
+
+  // 30 mins or more = full OT amount
+  return diff;
 }
 
 export function calculateEarlyLeaveMinutes(

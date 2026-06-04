@@ -88,27 +88,22 @@ export default function NotificationsPage() {
 
   const handleMarkAllRead = async () => {
     try {
-      let query = supabase.from('notifications').update({ is_read: true }).eq('is_read', false);
+      const currentRole = user?.role || 'staff_executive';
+      let query = supabase
+        .from('notifications')
+        .update({ is_read: true })
+        .eq('is_read', false)
+        .in('target_role', [currentRole, 'all']);
 
       // Apply scoping so we don't accidentally update unread notifications we shouldn't see
       if (userBranch) {
         query = query.eq('branch_id', userBranch);
       }
 
-      if (user?.role === 'staff_executive') {
-        query = query.in('type', [
-          'late_fine',
-          'ot_pending',
-          'early_in_pending',
-          'leave_request',
-          'absent_alert',
-        ]);
-      }
-
       const { error } = await query;
       if (error) throw error;
 
-      showToast('All notifications marked as read!');
+      showToast('All notifications marked as read');
       fetchNotifications();
     } catch (err) {
       console.error(err);

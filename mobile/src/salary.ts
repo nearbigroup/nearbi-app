@@ -56,5 +56,5 @@ export function calculateOTMinutes(scheduledEndTime: string, actualOutTime: stri
   const actualOut = ah * 60 + am
   const diff = actualOut - scheduledEnd
   if (diff < 30) return 0
-  return diff - 30
+  return diff
 }

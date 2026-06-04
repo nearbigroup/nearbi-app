@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
-import { Clock, RefreshCw, CircleCheck, CircleX, AlertTriangle, X, AlertCircle, Download, Upload, Check, List, LayoutGrid, MoreVertical, Plus } from 'lucide-react';
+import { Clock, RefreshCw, CircleCheck, CircleX, AlertTriangle, X, AlertCircle, Download, Upload, Check, List, LayoutGrid, MoreVertical, Plus, Camera } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import * as XLSX from 'xlsx';
 import { DEPARTMENTS } from '@/lib/data';
@@ -96,20 +96,27 @@ export default function AttendancePage() {
     };
   }, [viewMode]);
 
-  // Edit Attendance States
-  const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
-  const [editRecord, setEditRecord] = useState<any | null>(null);
+  // Edit & Detail Attendance States
+  const [detailModalOpen, setDetailModalOpen] = useState(false);
+  const [detailRecord, setDetailRecord] = useState<any>(null);
+
   const [editModalOpen, setEditModalOpen] = useState(false);
+  const [editRecord, setEditRecord] = useState<any>(null);
+
   const [editCheckInTime, setEditCheckInTime] = useState('');
   const [editCheckOutTime, setEditCheckOutTime] = useState('');
   const [editStatus, setEditStatus] = useState<'present' | 'late' | 'absent'>('present');
   const [editReason, setEditReason] = useState('');
+  const [editFineAmount, setEditFineAmount] = useState(0);
+  const [editFineWaived, setEditFineWaived] = useState(false);
+  const [otApproved, setOtApproved] = useState(false);
+  const [isAddingRecord, setIsAddingRecord] = useState(false);
 
-  // Delete Attendance States
-  const [deleteRecord, setDeleteRecord] = useState<any | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deleteRecord, setDeleteRecord] = useState<any>(null);
 
-  // Add Attendance States
+  const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
+
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [addStaffId, setAddStaffId] = useState('');
   const [addDate, setAddDate] = useState('');
@@ -118,32 +125,89 @@ export default function AttendancePage() {
   const [addStatus, setAddStatus] = useState<'present' | 'late' | 'absent'>('present');
   const [addReason, setAddReason] = useState('');
 
-  // Click outside menu closer
+  const [fineSettings, setFineSettings] = useState<any>({
+    yellow_fine: 25,
+    orange_fine: 50,
+    red_fine: 100,
+    yellow_free_passes: 4
+  });
+
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
+  const [branchFilter, setBranchFilter] = useState<BranchFilter>('All');
+  const [isMobile, setIsMobile] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [selectedPhoto, setSelectedPhoto] = useState<{ url: string; label: string; name?: string; date?: string; time?: string } | null>(null);
+
+  const [toastMsg, setToastMsg] = useState('');
+  const [fineStaff, setFineStaff] = useState<any>(null);
+  const [fineModalOpen, setFineModalOpen] = useState(false);
+
+  // Attendance Import/Export States
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [bottomSheetOpen, setBottomSheetOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<'export' | 'import'>('export');
+  const [selectedMonth, setSelectedMonth] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
+  
+  const [importPreviewOpen, setImportPreviewOpen] = useState(false);
+  const [importRows, setImportRows] = useState<any[]>([]);
+  const [importSummary, setImportSummary] = useState({ ready: 0, errors: 0, overwrites: 0 });
+  const [importProgress, setImportProgress] = useState<string | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+
+  const parseMins = (timeStr: string) => {
+    if (!timeStr) return 0;
+    const [h, m] = timeStr.split(':').map(Number);
+    return h * 60 + m;
+  };
+
+  const liveMinutesLate = useMemo(() => {
+    if (editStatus !== 'late' || !editCheckInTime) return 0;
+    const shiftStart = detailRecord?.shift?.start_time || '09:00';
+    const shiftStartMins = parseMins(shiftStart);
+    const checkInMins = parseMins(editCheckInTime);
+    const diff = checkInMins - shiftStartMins;
+    return diff > 0 ? diff : 0;
+  }, [editStatus, editCheckInTime, detailRecord]);
+
+  const liveColorCode = useMemo(() => {
+    if (editStatus === 'absent') return 'red';
+    if (editStatus === 'present') return 'green';
+    // 'late'
+    if (liveMinutesLate <= 15) return 'yellow';
+    if (liveMinutesLate <= 30) return 'orange';
+    return 'red';
+  }, [editStatus, liveMinutesLate]);
+
+  const liveHoursWorked = useMemo(() => {
+    if (!editCheckInTime || !editCheckOutTime) return 0;
+    return calculateActualHours(editCheckInTime, editCheckOutTime);
+  }, [editCheckInTime, editCheckOutTime]);
+
+  const liveOTMinutes = useMemo(() => {
+    if (!editCheckOutTime) return 0;
+    const shiftEnd = detailRecord?.shift?.end_time || '18:00';
+    return calculateOTMinutes(shiftEnd, editCheckOutTime);
+  }, [editCheckOutTime, detailRecord]);
+
   useEffect(() => {
-    const handleOutsideClick = () => {
-      setActiveMenuId(null);
-    };
-    if (activeMenuId) {
-      document.addEventListener('click', handleOutsideClick);
+    if (editStatus !== 'late') {
+      setEditFineAmount(0);
+      return;
     }
-    return () => {
-      document.removeEventListener('click', handleOutsideClick);
-    };
-  }, [activeMenuId]);
+    let amt = 0;
+    if (liveColorCode === 'yellow') amt = Number(fineSettings?.yellow_fine || 25);
+    else if (liveColorCode === 'orange') amt = Number(fineSettings?.orange_fine || 50);
+    else if (liveColorCode === 'red') amt = Number(fineSettings?.red_fine || 100);
 
-  const handleOpenEdit = (item: any) => {
-    setEditRecord(item);
-    setEditCheckInTime(item.record?.check_in_time || '');
-    setEditCheckOutTime(item.record?.check_out_time || '');
-    setEditStatus(item.record?.status || 'present');
-    setEditReason('');
-    setEditModalOpen(true);
-  };
-
-  const handleOpenDelete = (item: any) => {
-    setDeleteRecord(item);
-    setDeleteConfirmOpen(true);
-  };
+    if (detailRecord?.fine && detailRecord.fine.color_code === liveColorCode) {
+      setEditFineAmount(Number(detailRecord.fine.fine_amount));
+    } else {
+      setEditFineAmount(amt);
+    }
+  }, [liveColorCode, editStatus, detailRecord, fineSettings]);
 
   const calculateDerivedFields = (
     checkIn: string | null,
@@ -156,11 +220,6 @@ export default function AttendancePage() {
     let ot_minutes = 0;
     let early_leave_minutes = 0;
 
-    const parseMins = (timeStr: string) => {
-      const [h, m] = timeStr.split(':').map(Number);
-      return h * 60 + m;
-    };
-
     const shift_start_mins = shift?.start_time ? parseMins(shift.start_time) : 540; // 09:00 default
     const shift_end_mins = shift?.end_time ? parseMins(shift.end_time) : 1080; // 18:00 default
 
@@ -171,16 +230,11 @@ export default function AttendancePage() {
     }
 
     if (checkIn && checkOut) {
-      const checkin_mins = parseMins(checkIn);
-      const checkout_mins = parseMins(checkOut);
-      actual_hours_worked = (checkout_mins - checkin_mins) / 60;
-      if (actual_hours_worked < 0) actual_hours_worked = 0;
+      actual_hours_worked = calculateActualHours(checkIn, checkOut);
     }
 
     if (checkOut) {
-      const checkout_mins = parseMins(checkOut);
-      const diff = checkout_mins - shift_end_mins;
-      ot_minutes = diff > 30 ? diff - 30 : 0;
+      ot_minutes = calculateOTMinutes(shift?.end_time || '18:00', checkOut);
     }
 
     if (checkOut) {
@@ -197,74 +251,47 @@ export default function AttendancePage() {
     };
   };
 
-  const handleSaveEdit = async () => {
-    if (!editRecord) return;
-    try {
-      const { record, name, shift, branch_id } = editRecord;
-      const { minutes_late, actual_hours_worked, ot_minutes, early_leave_minutes } = calculateDerivedFields(
-        editCheckInTime || null,
-        editCheckOutTime || null,
-        editStatus,
-        shift
-      );
-
-      let color_code = 'green';
-      if (editStatus === 'late') {
-        if (minutes_late <= 15) {
-          color_code = 'yellow';
-        } else if (minutes_late <= 30) {
-          color_code = 'orange';
-        } else {
-          color_code = 'red';
-        }
-      }
-
-      const updateData = {
-        check_in_time: editCheckInTime || null,
-        check_out_time: editCheckOutTime || null,
-        status: editStatus,
-        minutes_late,
-        actual_hours_worked,
-        ot_minutes,
-        early_leave_minutes,
-        color_code,
-        marked_by: 'manual_edit'
-      };
-
-      const { error: updateErr } = await supabase
-        .from('attendance')
-        .update(updateData)
-        .eq('id', record.id);
-
-      if (updateErr) throw updateErr;
-
-      // Insert wall event
-      await supabase.from('wall_events').insert({
-        event_type: 'attendance_edited',
-        staff_id: editRecord.id,
-        staff_name: name,
-        branch_id,
-        description: `${name} attendance edited on ${record.date} by ${user?.email}`
-      });
-
-      showToast("Attendance updated ✓");
-      setEditModalOpen(false);
-      setEditRecord(null);
-      fetchData();
-    } catch (err: any) {
-      console.error(err);
-      alert('Failed to save changes: ' + err.message);
+  const handleOpenDetailSheet = (item: any) => {
+    setDetailRecord(item);
+    if (item.record) {
+      setEditCheckInTime(item.record.check_in_time || '');
+      setEditCheckOutTime(item.record.check_out_time || '');
+      setEditStatus(item.record.status || 'present');
+      setEditReason('');
+      setEditFineAmount(item.fine?.fine_amount ? Number(item.fine.fine_amount) : 0);
+      setEditFineWaived(item.fine?.waived || false);
+      setOtApproved(item.record.ot_approved || false);
+      setIsAddingRecord(false);
+    } else {
+      setEditCheckInTime('');
+      setEditCheckOutTime('');
+      setEditStatus('present');
+      setEditReason('');
+      setEditFineAmount(0);
+      setEditFineWaived(false);
+      setOtApproved(false);
+      setIsAddingRecord(true);
     }
+    setDetailModalOpen(true);
+  };
+
+  const handleOpenEdit = (item: any) => {
+    handleOpenDetailSheet(item);
+  };
+
+  const handleOpenDelete = (item: any) => {
+    setDeleteRecord(item);
+    setDeleteConfirmOpen(true);
   };
 
   const handleConfirmDelete = async () => {
     if (!deleteRecord) return;
     try {
       const { record, name, branch_id } = deleteRecord;
-      
-      // Optimistic update
-      setAttendance((prev) => prev.filter((a) => a.id !== record.id));
-      setDeleteConfirmOpen(false);
+      const staffId = deleteRecord.id;
+      const date = record?.date;
+
+      if (!date) return;
 
       const { error: deleteErr } = await supabase
         .from('attendance')
@@ -273,23 +300,34 @@ export default function AttendancePage() {
 
       if (deleteErr) throw deleteErr;
 
-      // Delete related late fines
       await supabase
         .from('late_fines')
         .delete()
-        .eq('staff_id', deleteRecord.id)
-        .eq('date', record.date);
+        .eq('staff_id', staffId)
+        .eq('date', date);
 
-      // Insert wall event
+      await supabase
+        .from('break_logs')
+        .delete()
+        .eq('staff_id', staffId)
+        .eq('date', date);
+
+      await supabase
+        .from('attendance_adjustments')
+        .delete()
+        .eq('staff_id', staffId)
+        .eq('date', date);
+
       await supabase.from('wall_events').insert({
         event_type: 'attendance_deleted',
-        staff_id: deleteRecord.id,
+        staff_id: staffId,
         staff_name: name,
         branch_id,
-        description: `${name} attendance record deleted for ${record.date} by ${user?.email}`
+        description: `${name} attendance record deleted for ${date} by ${user?.email}`
       });
 
       showToast("Record deleted");
+      setDeleteConfirmOpen(false);
       setDeleteRecord(null);
       fetchData();
     } catch (err: any) {
@@ -304,7 +342,6 @@ export default function AttendancePage() {
       return;
     }
     try {
-      // Check if already exists
       const { data: existing } = await supabase
         .from('attendance')
         .select('id')
@@ -358,7 +395,37 @@ export default function AttendancePage() {
 
       if (insertErr) throw insertErr;
 
-      // Insert wall event
+      if (addStatus === 'late') {
+        let fineAmount = 0;
+        if (color_code === 'yellow') fineAmount = Number(fineSettings.yellow_fine);
+        else if (color_code === 'orange') fineAmount = Number(fineSettings.orange_fine);
+        else if (color_code === 'red') fineAmount = Number(fineSettings.red_fine);
+
+        if (fineAmount > 0) {
+          const [year, monthStr] = addDate.split('-');
+          await supabase.from('late_fines').insert({
+            staff_id: addStaffId,
+            date: addDate,
+            late_minutes: minutes_late,
+            color_code,
+            fine_amount: fineAmount,
+            waived: false,
+            month: `${year}-${monthStr}`,
+            confirmed: true
+          });
+        }
+      }
+
+      if (ot_minutes > 0) {
+        await supabase.from('attendance_adjustments').insert({
+          staff_id: addStaffId,
+          date: addDate,
+          type: 'ot',
+          minutes: ot_minutes,
+          status: 'pending'
+        });
+      }
+
       await supabase.from('wall_events').insert({
         event_type: 'attendance_added',
         staff_id: addStaffId,
@@ -375,28 +442,187 @@ export default function AttendancePage() {
       alert('Failed to add record: ' + err.message);
     }
   };
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
-  const [branchFilter, setBranchFilter] = useState<BranchFilter>('All');
-  const [selectedPhoto, setSelectedPhoto] = useState<{ url: string; label: string; time?: string } | null>(null);
 
-  const [toastMsg, setToastMsg] = useState('');
-  const [fineStaff, setFineStaff] = useState<any>(null);
-  const [fineModalOpen, setFineModalOpen] = useState(false);
+  const handleSaveDetail = async () => {
+    if (!detailRecord) return;
+    try {
+      const staffId = detailRecord.id;
+      const date = detailRecord.record?.date || addDate || new Date().toISOString().split('T')[0];
+      const branchId = detailRecord.branch_id;
+      const name = detailRecord.name;
 
-  // Attendance Import/Export States
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [bottomSheetOpen, setBottomSheetOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'export' | 'import'>('export');
-  const [selectedMonth, setSelectedMonth] = useState(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-  });
-  
-  const [importPreviewOpen, setImportPreviewOpen] = useState(false);
-  const [importRows, setImportRows] = useState<any[]>([]);
-  const [importSummary, setImportSummary] = useState({ ready: 0, errors: 0, overwrites: 0 });
-  const [importProgress, setImportProgress] = useState<string | null>(null);
-  const [isImporting, setIsImporting] = useState(false);
+      if (editStatus !== 'absent') {
+        if (!editCheckInTime) {
+          alert('Check-in time is required for Present/Late status.');
+          return;
+        }
+      }
+
+      const minutes_late = liveMinutesLate;
+      const actual_hours_worked = liveHoursWorked;
+      const ot_minutes = liveOTMinutes;
+      const color_code = liveColorCode;
+
+      const attendanceData: any = {
+        staff_id: staffId,
+        date: date,
+        status: editStatus,
+        check_in_time: editStatus === 'absent' ? null : (editCheckInTime || null),
+        check_out_time: editStatus === 'absent' ? null : (editCheckOutTime || null),
+        minutes_late,
+        actual_hours_worked,
+        ot_minutes,
+        ot_approved: otApproved,
+        color_code,
+        marked_by: 'manual_edit'
+      };
+
+      const { error: attErr } = await supabase
+        .from('attendance')
+        .upsert(attendanceData, { onConflict: 'staff_id,date' });
+
+      if (attErr) throw attErr;
+
+      if (editStatus === 'late' && editFineAmount > 0) {
+        const [year, monthStr] = date.split('-');
+        const monthKey = `${year}-${monthStr}`;
+
+        const fineData = {
+          staff_id: staffId,
+          date: date,
+          late_minutes: minutes_late,
+          color_code,
+          fine_amount: editFineAmount,
+          waived: editFineWaived,
+          month: monthKey,
+          confirmed: true,
+          confirmed_by: user?.email || 'admin'
+        };
+
+        const { error: fineErr } = await supabase
+          .from('late_fines')
+          .upsert(fineData, { onConflict: 'staff_id,date' });
+
+        if (fineErr) throw fineErr;
+      } else {
+        await supabase
+          .from('late_fines')
+          .delete()
+          .eq('staff_id', staffId)
+          .eq('date', date);
+      }
+
+      if (ot_minutes > 0) {
+        const { data: existingAdj } = await supabase
+          .from('attendance_adjustments')
+          .select('id')
+          .eq('staff_id', staffId)
+          .eq('date', date)
+          .eq('type', 'ot')
+          .maybeSingle();
+
+        const adjData: any = {
+          staff_id: staffId,
+          date: date,
+          type: 'ot',
+          minutes: ot_minutes,
+          status: otApproved ? 'approved' : 'pending',
+          approved_by: otApproved ? (user?.email || 'admin') : null,
+          approved_at: otApproved ? new Date().toISOString() : null
+        };
+
+        if (existingAdj) {
+          await supabase
+            .from('attendance_adjustments')
+            .update(adjData)
+            .eq('id', existingAdj.id);
+        } else {
+          await supabase
+            .from('attendance_adjustments')
+            .insert(adjData);
+        }
+      } else {
+        await supabase
+          .from('attendance_adjustments')
+          .delete()
+          .eq('staff_id', staffId)
+          .eq('date', date)
+          .eq('type', 'ot');
+      }
+
+      await supabase.from('wall_events').insert({
+        event_type: isAddingRecord ? 'attendance_added' : 'attendance_edited',
+        staff_id: staffId,
+        staff_name: name,
+        branch_id: branchId,
+        description: `${name} attendance ${isAddingRecord ? 'added' : 'edited'} on ${date} by ${user?.email}`
+      });
+
+      showToast(`Attendance record ${isAddingRecord ? 'added' : 'updated'} successfully.`);
+      setDetailModalOpen(false);
+      setDetailRecord(null);
+      fetchData();
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to save attendance: ' + err.message);
+    }
+  };
+
+  const handleDeleteDetail = async () => {
+    if (!detailRecord) return;
+    const staffId = detailRecord.id;
+    const date = detailRecord.record?.date || addDate;
+    if (!date) return;
+
+    if (!confirm(`Are you sure you want to delete the attendance record for ${detailRecord.name} on ${date}? This will also delete any associated fines, break logs, and overtime adjustments.`)) {
+      return;
+    }
+
+    try {
+      const { error: delErr } = await supabase
+        .from('attendance')
+        .delete()
+        .eq('staff_id', staffId)
+        .eq('date', date);
+
+      if (delErr) throw delErr;
+
+      await supabase
+        .from('late_fines')
+        .delete()
+        .eq('staff_id', staffId)
+        .eq('date', date);
+
+      await supabase
+        .from('break_logs')
+        .delete()
+        .eq('staff_id', staffId)
+        .eq('date', date);
+
+      await supabase
+        .from('attendance_adjustments')
+        .delete()
+        .eq('staff_id', staffId)
+        .eq('date', date);
+
+      await supabase.from('wall_events').insert({
+        event_type: 'attendance_deleted',
+        staff_id: staffId,
+        staff_name: detailRecord.name,
+        branch_id: detailRecord.branch_id,
+        description: `${detailRecord.name} attendance record deleted for ${date} by ${user?.email}`
+      });
+
+      showToast("Attendance record deleted successfully.");
+      setDetailModalOpen(false);
+      setDetailRecord(null);
+      fetchData();
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to delete attendance: ' + err.message);
+    }
+  };
+
 
   const parseTime = (val: any): string => {
     if (!val) return '';
@@ -1068,13 +1294,23 @@ export default function AttendancePage() {
     }
   }, [userBranch]);
 
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 480);
+    };
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   const fetchData = async () => {
     try {
-      const todayStr = new Date().toISOString().split('T')[0];
+      const today = new Date();
+      const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
       // 1. Fetch staff
       try {
-        let staffQuery = supabase.from('staff').select('*, shift:shifts(*)').eq('active', true);
+        let staffQuery = supabase.from('staff').select('*, shift:shifts(*)').eq('active', true).order('name');
         if (userBranch) {
           staffQuery = staffQuery.eq('branch_id', userBranch);
         }
@@ -1084,6 +1320,7 @@ export default function AttendancePage() {
           setErrorMsg('Could not load staff list.');
           setStaff([]);
         } else {
+          console.log('Staff count:', sData?.length);
           setStaff((sData || []) as unknown as StaffMember[]);
           setErrorMsg('');
         }
@@ -1103,6 +1340,8 @@ export default function AttendancePage() {
           console.error('Attendance load error:', aErr);
           throw aErr;
         }
+        console.log('Attendance records:', attRecords?.length);
+        console.log('Sample att record:', attRecords?.[0]);
         setAttendance(attRecords || []);
       } catch (err: any) {
         console.error('Attendance fetch error:', err);
@@ -1156,6 +1395,17 @@ export default function AttendancePage() {
         setBreakLogs([]);
       }
 
+      // 6. Fetch fine settings
+      try {
+        const { data: fsData } = await supabase.from('fine_settings').select('*').limit(1).maybeSingle();
+        if (fsData) {
+          setFineSettings(fsData);
+        }
+      } catch (err) {
+        console.error('Exception fetching fine settings:', err);
+      }
+
+
     } catch (err: any) {
       console.error('Attendance fetch error:', err);
       setErrorMsg('Could not load data. Check connection.');
@@ -1194,9 +1444,17 @@ export default function AttendancePage() {
 
   // Combine staff with today's metrics (FIX 2 - Step 3)
   const combinedData = staff.map((s) => {
-    const record = attendance.find((a) => a.staff_id === s.id);
-    const lateFine = fines.find((f) => f.staff_id === s.id);
-    const staffAdjustments = adjustments.filter((adj) => adj.staff_id === s.id);
+    const record = attendance.find(
+      (a) => String(a.staff_id).trim().toLowerCase() === String(s.id).trim().toLowerCase()
+    );
+    const lateFine = fines.find(
+      (f) => String(f.staff_id).trim().toLowerCase() === String(s.id).trim().toLowerCase()
+    );
+    const staffAdjustments = adjustments.filter(
+      (adj) => String(adj.staff_id).trim().toLowerCase() === String(s.id).trim().toLowerCase()
+    );
+
+    console.log(`Staff ${s.name}: att found = ${!!record}`);
 
     return {
       ...s,
@@ -1517,30 +1775,35 @@ export default function AttendancePage() {
               <span>Floor</span>
             </button>
           </div>
-          {(user?.role === 'admin' || user?.role === 'ops_manager') && (
+          {/* Add Record & Import/Export */}
+          <div className="attendance-actions flex items-center space-x-2">
+            {(user?.role === 'admin' || user?.role === 'ops_manager') && (
+              <button
+                onClick={() => {
+                  setAddStaffId('');
+                  setAddDate(new Date().toISOString().split('T')[0]);
+                  setAddCheckIn('');
+                  setAddCheckOut('');
+                  setAddStatus('present');
+                  setAddReason('');
+                  setAddModalOpen(true);
+                }}
+                className="min-h-[40px] bg-white border border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-[0.98] text-[#1A1A1A] px-3.5 rounded-[12px] text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-sm cursor-pointer"
+              >
+                <Plus size={16} />
+                <span>Add Record</span>
+              </button>
+            )}
             <button
-              onClick={() => {
-                setAddStaffId('');
-                setAddDate(new Date().toISOString().split('T')[0]);
-                setAddCheckIn('');
-                setAddCheckOut('');
-                setAddStatus('present');
-                setAddReason('');
-                setAddModalOpen(true);
-              }}
+              onClick={() => setBottomSheetOpen(true)}
               className="min-h-[40px] bg-white border border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-[0.98] text-[#1A1A1A] px-3.5 rounded-[12px] text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-sm cursor-pointer"
             >
-              <Plus size={16} />
-              <span>Add Record</span>
+              <Download size={16} strokeWidth={1.5} />
+              <span>Import/Export</span>
             </button>
-          )}
-          <button
-            onClick={() => setBottomSheetOpen(true)}
-            className="min-h-[40px] bg-white border border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-[0.98] text-[#1A1A1A] px-3.5 rounded-[12px] text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-sm cursor-pointer"
-          >
-            <Download size={16} strokeWidth={1.5} />
-            <span>Import/Export</span>
-          </button>
+          </div>
+
+          {/* Refresh button */}
           <button
             onClick={() => {
               setLoading(true);
@@ -1548,9 +1811,51 @@ export default function AttendancePage() {
             }}
             className="min-h-[40px] bg-white border border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-[0.98] text-[#1A1A1A] px-3.5 rounded-[12px] text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-sm cursor-pointer"
           >
-            <RefreshCw size={16} strokeWidth={1.5} style={{ color: 'currentColor' }} />
-            <span>Refresh</span>
+            <RefreshCw size={16} strokeWidth={1.5} style={{ color: 'currentColor' }} className={loading ? 'animate-spin' : ''} />
+            {!isMobile && <span>Refresh</span>}
           </button>
+
+          {/* More menu button (mobile only) */}
+          <div className="attendance-more-btn relative">
+            <button
+              onClick={() => setMoreMenuOpen(!moreMenuOpen)}
+              className="min-h-[40px] w-10 bg-white border border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-[0.98] text-[#1A1A1A] rounded-[12px] flex items-center justify-center transition-all shadow-sm cursor-pointer"
+            >
+              <MoreVertical size={16} />
+            </button>
+            {moreMenuOpen && (
+              <div className="absolute right-0 top-[46px] bg-white border border-[#E8E8E8] rounded-[12px] shadow-[0_4px_12px_rgba(0,0,0,0.12)] p-1.5 z-[1000] min-w-[150px] flex flex-col space-y-1">
+                {(user?.role === 'admin' || user?.role === 'ops_manager') && (
+                  <button
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      setAddStaffId('');
+                      setAddDate(new Date().toISOString().split('T')[0]);
+                      setAddCheckIn('');
+                      setAddCheckOut('');
+                      setAddStatus('present');
+                      setAddReason('');
+                      setAddModalOpen(true);
+                    }}
+                    className="w-full text-left p-2.5 text-xs font-bold text-[#1A1A1A] hover:bg-[#F8F8F8] rounded-[8px] flex items-center space-x-2 min-h-0 h-auto cursor-pointer"
+                  >
+                    <Plus size={14} />
+                    <span>Add Record</span>
+                  </button>
+                )}
+                <button
+                  onClick={() => {
+                    setMoreMenuOpen(false);
+                    setBottomSheetOpen(true);
+                  }}
+                  className="w-full text-left p-2.5 text-xs font-bold text-[#1A1A1A] hover:bg-[#F8F8F8] rounded-[8px] flex items-center space-x-2 min-h-0 h-auto cursor-pointer"
+                >
+                  <Download size={14} strokeWidth={1.5} />
+                  <span>Import/Export</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1683,7 +1988,7 @@ export default function AttendancePage() {
                         return (
                           <div
                             key={item.id}
-                            onClick={() => router.push('/staff/' + item.id)}
+                            onClick={() => handleOpenDetailSheet(item)}
                             className={`w-[80px] h-[90px] sm:w-[90px] sm:h-[100px] rounded-[14px] flex flex-col items-center justify-center gap-1 p-[8px_6px] cursor-pointer shrink-0 transition-all ${cardDetails.cardClass}`}
                           >
                             {/* Avatar circle */}
@@ -1735,7 +2040,7 @@ export default function AttendancePage() {
             return (
               <div
                 key={item.id}
-                onClick={() => router.push('/staff/' + item.id)}
+                onClick={() => handleOpenDetailSheet(item)}
                 className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex items-start space-x-3.5 relative shadow-sm cursor-pointer hover:border-[#D0D0D0] transition-all"
               >
                 {/* Left Dot Indicator */}
@@ -1770,14 +2075,38 @@ export default function AttendancePage() {
                       )}
                     </div>
 
-                    {/* Status Badge */}
+                    {/* Status Badge & Check-in Photo */}
                     <div
-                      className="flex-shrink-0"
+                      className="flex items-center space-x-2 flex-shrink-0"
                       style={{
                         marginRight: (item.record && (user?.role === 'admin' || user?.role === 'ops_manager')) ? '20px' : '0px'
                       }}
                     >
-                      {getStatusBadge(item.record)}
+                      {item.record?.check_in_photo && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedPhoto({
+                              url: item.record!.check_in_photo!,
+                              name: item.name,
+                              label: 'Check In Photo',
+                              time: item.record!.check_in_time || '',
+                              date: item.record!.date
+                            });
+                          }}
+                          className="w-9 h-9 rounded-full overflow-hidden border border-[#E8E8E8] shadow-sm hover:scale-105 active:scale-95 transition-all cursor-pointer flex-shrink-0"
+                        >
+                          <img
+                            src={item.record.check_in_photo}
+                            alt="Selfie"
+                            className="w-full h-full object-cover"
+                          />
+                        </button>
+                      )}
+                      <div>
+                        {getStatusBadge(item.record)}
+                      </div>
                     </div>
                   </div>
 
@@ -1972,26 +2301,40 @@ export default function AttendancePage() {
       {/* Photo Modal */}
       {selectedPhoto && (
         <div
-          className="fixed inset-0 z-[11000] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+          className="fixed inset-0 z-[14000] bg-black/95 backdrop-blur-md flex flex-col justify-between p-6"
           onClick={() => setSelectedPhoto(null)}
         >
-          <div className="relative max-w-sm w-full bg-white rounded-[14px] border border-[#E8E8E8] p-5 flex flex-col items-center shadow-lg">
+          {/* Top Bar with metadata and close button */}
+          <div className="flex justify-between items-start w-full text-white relative z-10">
+            <div>
+              <h3 className="text-base font-extrabold tracking-tight">
+                {selectedPhoto.name || selectedPhoto.label}
+              </h3>
+              <p className="text-xs text-white/70 font-semibold mt-1">
+                {selectedPhoto.label !== 'Check In Photo' && selectedPhoto.label !== 'Check Out Photo' ? selectedPhoto.label : ''}
+                {selectedPhoto.date ? ` • ${selectedPhoto.date}` : ''}
+                {selectedPhoto.time ? ` • ${selectedPhoto.time}` : ''}
+              </p>
+            </div>
             <button
               onClick={() => setSelectedPhoto(null)}
-              className="absolute top-3 right-3 text-[#999999] hover:text-[#1A1A1A] flex items-center justify-center p-1"
+              className="text-white/80 hover:text-white p-2 rounded-full hover:bg-white/10 transition-colors flex items-center justify-center cursor-pointer"
             >
-              <X size={16} strokeWidth={1.5} style={{ color: 'currentColor' }} />
+              <X size={24} strokeWidth={2} />
             </button>
-            <h4 className="text-[#1A1A1A] text-sm font-bold mb-1">{selectedPhoto.label}</h4>
-            {selectedPhoto.time && (
-              <p className="text-[10px] text-[#999999] font-bold mb-3">Time: {selectedPhoto.time}</p>
-            )}
+          </div>
+
+          {/* Centered Full-size Photo */}
+          <div className="flex-1 flex items-center justify-center my-4">
             <img
               src={selectedPhoto.url}
               alt="Verification selfie"
-              className="w-full max-h-[60vh] object-contain rounded-lg border border-[#E8E8E8]"
+              className="max-w-full max-h-[75vh] object-contain rounded-[16px] shadow-2xl border border-white/10"
             />
           </div>
+
+          {/* Spacer */}
+          <div className="h-10 flex-shrink-0" />
         </div>
       )}
 
@@ -2026,149 +2369,158 @@ export default function AttendancePage() {
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => setBottomSheetOpen(false)}
           />
-          <div className="bg-white rounded-t-[20px] shadow-lg relative z-10 w-full max-w-md border-t border-[#E8E8E8] p-6 animate-slide-up flex flex-col space-y-4 max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center border-b border-[#E8E8E8] pb-3">
+          <div className="bg-white rounded-t-[20px] shadow-lg relative z-10 w-full max-w-md border-t border-[#E8E8E8] flex flex-col max-h-[90vh] animate-slide-up animate-duration-200">
+            {/* Header */}
+            <div className="p-6 pb-3 border-b border-[#E8E8E8] flex justify-between items-center">
               <h3 className="text-[#1A1A1A] text-base font-bold">Import / Export Attendance</h3>
               <button
                 type="button"
                 onClick={() => setBottomSheetOpen(false)}
-                className="text-[#999999] hover:text-[#1A1A1A]"
+                className="text-[#999999] hover:text-[#1A1A1A] p-1 rounded-full hover:bg-[#F2F2F2]"
               >
                 <X size={20} />
               </button>
             </div>
 
-            {/* Tabs */}
-            <div className="flex bg-[#F2F2F2] rounded-[14px] p-1">
-              <button
-                type="button"
-                onClick={() => setActiveTab('export')}
-                className={`flex-1 text-center py-2 text-xs font-bold rounded-md transition-all ${
-                  activeTab === 'export'
-                    ? 'bg-white text-[#1A1A1A] shadow-sm'
-                    : 'text-[#555555] hover:text-[#1A1A1A]'
-                }`}
-              >
-                Export
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const role = user?.role;
-                  const canImport = role === 'admin' || role === 'ops_manager' || (role === 'staff_executive' && user?.branch !== null);
-                  if (canImport) {
-                    setActiveTab('import');
-                  } else {
-                    alert('Import is restricted to admins, operations managers, and branch HR only.');
-                  }
-                }}
-                className={`flex-1 text-center py-2 text-xs font-bold rounded-md transition-all ${
-                  !(user?.role === 'admin' || user?.role === 'ops_manager' || (user?.role === 'staff_executive' && user?.branch !== null)) ? 'opacity-40 cursor-not-allowed' : ''
-                } ${
-                  activeTab === 'import'
-                    ? 'bg-white text-[#1A1A1A] shadow-sm'
-                    : 'text-[#555555] hover:text-[#1A1A1A]'
-                }`}
-              >
-                Import
-              </button>
+            {/* Scrollable Body */}
+            <div className="p-6 pt-3 overflow-y-auto flex-1 space-y-4">
+              {/* Tabs */}
+              <div className="flex bg-[#F2F2F2] rounded-[14px] p-1">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('export')}
+                  className={`flex-1 text-center py-2 text-xs font-bold rounded-md transition-all ${
+                    activeTab === 'export'
+                      ? 'bg-white text-[#1A1A1A] shadow-sm'
+                      : 'text-[#555555] hover:text-[#1A1A1A]'
+                  }`}
+                >
+                  Export
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const role = user?.role;
+                    const canImport = role === 'admin' || role === 'ops_manager' || (role === 'staff_executive' && user?.branch !== null);
+                    if (canImport) {
+                      setActiveTab('import');
+                    } else {
+                      alert('Import is restricted to admins, operations managers, and branch HR only.');
+                    }
+                  }}
+                  className={`flex-1 text-center py-2 text-xs font-bold rounded-md transition-all ${
+                    !(user?.role === 'admin' || user?.role === 'ops_manager' || (user?.role === 'staff_executive' && user?.branch !== null)) ? 'opacity-40 cursor-not-allowed' : ''
+                  } ${
+                    activeTab === 'import'
+                      ? 'bg-white text-[#1A1A1A] shadow-sm'
+                      : 'text-[#555555] hover:text-[#1A1A1A]'
+                  }`}
+                >
+                  Import
+                </button>
+              </div>
+
+              {/* Export Content */}
+              {activeTab === 'export' && (
+                <div className="space-y-4 pt-2">
+                  <div>
+                    <label className="block text-xs font-bold text-[var(--text-muted)] mb-1.5">
+                      Select Month
+                    </label>
+                    <input
+                      type="month"
+                      value={selectedMonth}
+                      onChange={(e) => setSelectedMonth(e.target.value)}
+                      className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
+                    />
+                  </div>
+
+                  <div className="space-y-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleDownloadGridTemplate(selectedMonth);
+                        setBottomSheetOpen(false);
+                      }}
+                      className="w-full min-h-[46px] bg-white border border-[#E8E8E8] text-[#1A1A1A] hover:bg-[#F8F8F8] font-bold text-xs rounded-[12px] flex items-center justify-center space-x-1.5 active:scale-95 transition-all cursor-pointer shadow-sm"
+                    >
+                      <Download size={16} />
+                      <span>Download Grid Template</span>
+                    </button>
+                    <p className="text-[10px] text-[var(--text-muted)] text-center mt-1">
+                      Add staff first to pre-fill the template. You can also fill manually using PIN numbers.
+                    </p>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleExportExistingAttendance(selectedMonth);
+                        setBottomSheetOpen(false);
+                      }}
+                      className="w-full min-h-[46px] bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold text-xs rounded-[12px] flex items-center justify-center space-x-1.5 active:scale-95 transition-all shadow hover:opacity-90 cursor-pointer"
+                    >
+                      <Download size={16} />
+                      <span>Export Existing Attendance</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Import Content */}
+              {activeTab === 'import' && (
+                <div className="space-y-4 pt-2 flex flex-col items-center">
+                  <div className="w-full">
+                    <label className="block text-xs font-bold text-[var(--text-muted)] mb-1.5">
+                      Select target month context for calculations:
+                    </label>
+                    <input
+                      type="month"
+                      value={selectedMonth}
+                      onChange={(e) => setSelectedMonth(e.target.value)}
+                      className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold mb-4"
+                    />
+                  </div>
+
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={handleFileChange}
+                    accept=".xlsx,.csv"
+                    className="hidden"
+                  />
+
+                  <div className="w-full py-8 border-2 border-dashed border-[#D0D0D0] rounded-[14px] flex flex-col items-center justify-center space-y-3 bg-[#F8F8F8]">
+                    <Upload size={32} className="text-[#999999]" />
+                    <p className="text-xs text-[#555555] font-semibold text-center px-4">
+                      Upload an Excel (.xlsx) template or a CSV file
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleImportButtonClick}
+                      className="bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold text-xs px-4 py-2 rounded-[12px] active:scale-95 transition-all cursor-pointer"
+                    >
+                      Choose File
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
-            {/* Export Content */}
-            {activeTab === 'export' && (
-              <div className="space-y-4 pt-2">
-                <div>
-                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1.5">
-                    Select Month
-                  </label>
-                  <input
-                    type="month"
-                    value={selectedMonth}
-                    onChange={(e) => setSelectedMonth(e.target.value)}
-                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
-                  />
-                </div>
-
-                <div className="space-y-2 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      handleDownloadGridTemplate(selectedMonth);
-                      setBottomSheetOpen(false);
-                    }}
-                    className="w-full min-h-[46px] bg-white border border-[#E8E8E8] text-[#1A1A1A] hover:bg-[#F8F8F8] font-bold text-xs rounded-[12px] flex items-center justify-center space-x-1.5 active:scale-95 transition-all cursor-pointer shadow-sm"
-                  >
-                    <Download size={16} />
-                    <span>Download Grid Template</span>
-                  </button>
-                  <p className="text-[10px] text-[var(--text-muted)] text-center mt-1">
-                    Add staff first to pre-fill the template. You can also fill manually using PIN numbers.
-                  </p>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      handleExportExistingAttendance(selectedMonth);
-                      setBottomSheetOpen(false);
-                    }}
-                    className="w-full min-h-[46px] bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold text-xs rounded-[12px] flex items-center justify-center space-x-1.5 active:scale-95 transition-all shadow hover:opacity-90 cursor-pointer"
-                  >
-                    <Download size={16} />
-                    <span>Export Existing Attendance</span>
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Import Content */}
-            {activeTab === 'import' && (
-              <div className="space-y-4 pt-2 flex flex-col items-center">
-                <div className="w-full">
-                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1.5">
-                    Select target month context for calculations:
-                  </label>
-                  <input
-                    type="month"
-                    value={selectedMonth}
-                    onChange={(e) => setSelectedMonth(e.target.value)}
-                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold mb-4"
-                  />
-                </div>
-
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  onChange={handleFileChange}
-                  accept=".xlsx,.csv"
-                  className="hidden"
-                />
-
-                <div className="w-full py-8 border-2 border-dashed border-[#D0D0D0] rounded-[14px] flex flex-col items-center justify-center space-y-3 bg-[#F8F8F8]">
-                  <Upload size={32} className="text-[#999999]" />
-                  <p className="text-xs text-[#555555] font-semibold text-center px-4">
-                    Upload an Excel (.xlsx) template or a CSV file
-                  </p>
-                  <button
-                    type="button"
-                    onClick={handleImportButtonClick}
-                    className="bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold text-xs px-4 py-2 rounded-[12px] active:scale-95 transition-all cursor-pointer"
-                  >
-                    Choose File
-                  </button>
-                </div>
-              </div>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setBottomSheetOpen(false)}
-              className="w-full min-h-[44px] bg-[#F2F2F2] hover:bg-[#EBEBEB] text-[#555555] font-bold text-xs py-2.5 rounded-[12px] active:scale-95 transition-all cursor-pointer"
-            >
-              Cancel
-            </button>
+            {/* Footer */}
+            <div className="p-6 pt-3 border-t border-[#E8E8E8] bg-white sticky bottom-0 z-10">
+              <button
+                type="button"
+                onClick={() => setBottomSheetOpen(false)}
+                className="w-full min-h-[44px] bg-[#F2F2F2] hover:bg-[#EBEBEB] text-[#555555] font-bold text-xs py-2.5 rounded-[12px] active:scale-95 transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}
+
+
 
       {/* Import Preview Modal */}
       {importPreviewOpen && (
@@ -2298,115 +2650,371 @@ export default function AttendancePage() {
           </div>
         </div>
       )}
-      {/* Edit Attendance Bottom Sheet */}
-      {editModalOpen && editRecord && (
+      {/* Attendance Detail Bottom Sheet */}
+      {detailModalOpen && detailRecord && (
         <div className="fixed inset-0 z-[12000] flex items-end justify-center">
           <div
-            className="absolute inset-0 bg-black/40 z-[999]"
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => {
-              setEditModalOpen(false);
-              setEditRecord(null);
+              setDetailModalOpen(false);
+              setDetailRecord(null);
             }}
           />
-          <div
-            className="bg-white rounded-t-[24px] shadow-lg relative z-[1000] w-full max-w-md p-6 overflow-y-auto animate-slide-up"
-            style={{
-              paddingBottom: 'calc(24px + env(safe-area-inset-bottom, 0px))',
-              maxHeight: '85vh',
-            }}
-          >
-            {/* Drag Handle */}
-            <div className="w-9 h-1 bg-[#E0E0E0] rounded-[2px] mx-auto mb-5" />
-
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-[#1A1A1A] text-base font-bold">Edit Attendance</h3>
+          <div className="bg-white rounded-t-[20px] shadow-lg relative z-10 w-full max-w-md border-t border-[#E8E8E8] flex flex-col max-h-[90vh] animate-slide-up">
+            {/* Header */}
+            <div className="p-5 pb-3 border-b border-[#E8E8E8] flex justify-between items-center">
+              <div>
+                <h3 className="text-[#1A1A1A] text-base font-bold">Attendance Details</h3>
+                <p className="text-[var(--text-muted)] text-[11px] font-semibold mt-0.5">
+                  {detailRecord.name} • {detailRecord.department}
+                </p>
+              </div>
               <button
                 type="button"
                 onClick={() => {
-                  setEditModalOpen(false);
-                  setEditRecord(null);
+                  setDetailModalOpen(false);
+                  setDetailRecord(null);
                 }}
-                className="text-[#999999] hover:text-[#1A1A1A]"
+                className="text-[#999999] hover:text-[#1A1A1A] p-1 rounded-full hover:bg-[#F2F2F2]"
               >
                 <X size={20} />
               </button>
             </div>
 
-            <div className="space-y-4">
-              <div>
-                <p className="text-xs text-[var(--text-muted)] font-semibold uppercase tracking-wider">Staff Name</p>
-                <p className="text-sm font-bold text-[#1A1A1A] mt-0.5">{editRecord.name}</p>
-              </div>
+            {/* Scrollable Content */}
+            <div className="p-5 pt-3 overflow-y-auto flex-1 space-y-4">
+              {!detailRecord.record && !isAddingRecord ? (
+                <div className="py-6 text-center">
+                  <AlertCircle className="mx-auto text-[#999999] mb-2" size={36} strokeWidth={1.5} />
+                  <p className="text-sm font-bold text-[#1A1A1A]">No attendance record found</p>
+                  <p className="text-xs text-[var(--text-muted)] mt-1">
+                    No check-in has been registered for this staff member today.
+                  </p>
+                  {(user?.role === 'admin' || user?.role === 'ops_manager') && (
+                    <button
+                      type="button"
+                      onClick={() => setIsAddingRecord(true)}
+                      className="mt-4 bg-[#1A1A1A] hover:bg-[#333333] text-white text-xs font-bold px-4 py-2.5 rounded-[12px] active:scale-95 transition-all shadow cursor-pointer"
+                    >
+                      Add Manual Record
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <>
+                  {/* Shift details */}
+                  <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-xs flex justify-between">
+                    <div>
+                      <span className="font-bold text-[#555555]">Shift:</span>{' '}
+                      <span className="text-[#1A1A1A] font-semibold">{detailRecord.shift?.label || 'No Shift'}</span>
+                    </div>
+                    <div>
+                      <span className="font-bold text-[#555555]">Hours:</span>{' '}
+                      <span className="text-[#1A1A1A] font-semibold">
+                        {detailRecord.shift?.start_time} - {detailRecord.shift?.end_time}
+                      </span>
+                    </div>
+                  </div>
 
-              <div>
-                <p className="text-xs text-[var(--text-muted)] font-semibold uppercase tracking-wider">Date</p>
-                <p className="text-sm font-bold text-[#1A1A1A] mt-0.5">{editRecord.record.date}</p>
-              </div>
+                  {/* Read-Only or Form Fields */}
+                  {user?.role === 'staff_executive' ? (
+                    <div className="space-y-3.5 bg-white border border-[#E8E8E8] rounded-[14px] p-4">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <p className="text-[10px] text-[#999999] font-bold uppercase tracking-wider">Check-in Time</p>
+                          <p className="text-sm font-bold text-[#1A1A1A] mt-0.5">{editCheckInTime || '—'}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-[#999999] font-bold uppercase tracking-wider">Check-out Time</p>
+                          <p className="text-sm font-bold text-[#1A1A1A] mt-0.5">{editCheckOutTime || '—'}</p>
+                        </div>
+                      </div>
+                      <hr className="border-[#E8E8E8]" />
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <p className="text-[10px] text-[#999999] font-bold uppercase tracking-wider">Status</p>
+                          <p className="text-sm font-bold text-[#1A1A1A] mt-0.5 capitalize">{editStatus}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] text-[#999999] font-bold uppercase tracking-wider">Reason</p>
+                          <p className="text-sm font-bold text-[#1A1A1A] mt-0.5">{editReason || '—'}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {/* Check-In */}
+                      <div>
+                        <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Check-in Time</label>
+                        <input
+                          type="time"
+                          value={editCheckInTime}
+                          onChange={(e) => {
+                            setEditCheckInTime(e.target.value);
+                            if (editStatus === 'absent') setEditStatus('present');
+                          }}
+                          className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
+                        />
+                      </div>
 
-              <div>
-                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Check-in Time</label>
-                <input
-                  type="time"
-                  value={editCheckInTime}
-                  onChange={(e) => setEditCheckInTime(e.target.value)}
-                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
-                />
-              </div>
+                      {/* Check-Out */}
+                      <div>
+                        <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Check-out Time</label>
+                        <input
+                          type="time"
+                          value={editCheckOutTime}
+                          onChange={(e) => setEditCheckOutTime(e.target.value)}
+                          className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
+                        />
+                      </div>
 
-              <div>
-                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Check-out Time</label>
-                <input
-                  type="time"
-                  value={editCheckOutTime}
-                  onChange={(e) => setEditCheckOutTime(e.target.value)}
-                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
-                />
-              </div>
+                      {/* Status */}
+                      <div>
+                        <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Status</label>
+                        <select
+                          value={editStatus}
+                          onChange={(e) => {
+                            const newStatus = e.target.value as any;
+                            setEditStatus(newStatus);
+                            if (newStatus === 'absent') {
+                              setEditCheckInTime('');
+                              setEditCheckOutTime('');
+                            }
+                          }}
+                          className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
+                        >
+                          <option value="present">Present</option>
+                          <option value="late">Late</option>
+                          <option value="absent">Absent</option>
+                        </select>
+                      </div>
 
-              <div>
-                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Status</label>
-                <select
-                  value={editStatus}
-                  onChange={(e) => setEditStatus(e.target.value as any)}
-                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
-                >
-                  <option value="present">Present</option>
-                  <option value="late">Late</option>
-                  <option value="absent">Absent</option>
-                </select>
-              </div>
+                      {/* Reason */}
+                      <div>
+                        <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Reason (optional)</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. Correcting wrong entry"
+                          value={editReason}
+                          onChange={(e) => setEditReason(e.target.value)}
+                          className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
+                        />
+                      </div>
+                    </div>
+                  )}
 
-              <div>
-                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Reason (optional)</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Correcting wrong entry"
-                  value={editReason}
-                  onChange={(e) => setEditReason(e.target.value)}
-                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
-                />
-              </div>
+                  {/* Calculations Live Preview */}
+                  {editStatus !== 'absent' && (
+                    <div className="bg-[#1A1A1A] text-white rounded-[14px] p-4 space-y-2.5 shadow">
+                      <p className="text-[10px] text-white/50 font-bold uppercase tracking-wider">Live Metrics Preview</p>
+                      <div className="grid grid-cols-3 gap-2 text-center pt-1">
+                        <div className="bg-white/5 rounded-lg p-2">
+                          <p className="text-[9px] text-white/40 font-bold">Hours Worked</p>
+                          <p className="text-sm font-bold text-white mt-0.5">{liveHoursWorked}h</p>
+                        </div>
+                        <div className="bg-white/5 rounded-lg p-2">
+                          <p className="text-[9px] text-white/40 font-bold">Status</p>
+                          <p className="text-sm font-bold capitalize mt-0.5" style={{
+                            color: liveColorCode === 'green' ? '#4ADE80' : liveColorCode === 'yellow' ? '#FBBF24' : liveColorCode === 'orange' ? '#FB923C' : '#F87171'
+                          }}>{editStatus}</p>
+                        </div>
+                        <div className="bg-white/5 rounded-lg p-2">
+                          <p className="text-[9px] text-white/40 font-bold">Overtime</p>
+                          <p className="text-sm font-bold text-white mt-0.5">{liveOTMinutes}m</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
-              <div className="flex gap-3 pt-2">
+                  {/* Photo Verification Section */}
+                  {detailRecord.record && (
+                    <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 shadow-sm space-y-3">
+                      <p className="text-[10px] text-[#999999] font-bold uppercase tracking-wider">Photo Verification</p>
+                      <div className="grid grid-cols-2 gap-4">
+                        {/* Check In Column */}
+                        <div className="flex flex-col items-center">
+                          <span className="text-[11px] font-bold text-[#555555] mb-1.5">Check In</span>
+                          {detailRecord.record.check_in_photo ? (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedPhoto({
+                                url: detailRecord.record.check_in_photo,
+                                name: detailRecord.name,
+                                label: 'Check In Photo',
+                                time: detailRecord.record.check_in_time || '',
+                                date: detailRecord.record.date
+                              })}
+                              className="w-full aspect-square max-w-[120px] rounded-[12px] overflow-hidden border border-[#E8E8E8] shadow-sm relative group hover:opacity-90 active:scale-95 transition-all cursor-pointer"
+                            >
+                              <img
+                                src={detailRecord.record.check_in_photo}
+                                alt="Check In Selfie"
+                                className="w-full h-full object-cover"
+                              />
+                            </button>
+                          ) : (
+                            <div className="w-full aspect-square max-w-[120px] rounded-[12px] bg-[#F2F2F2] border border-[#E8E8E8] flex flex-col items-center justify-center text-[#999999]">
+                              <Camera size={24} className="mb-1" strokeWidth={1.5} />
+                              <span className="text-[9px] font-bold">No Photo</span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Check Out Column */}
+                        <div className="flex flex-col items-center">
+                          <span className="text-[11px] font-bold text-[#555555] mb-1.5">Check Out</span>
+                          {detailRecord.record.check_out_photo ? (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedPhoto({
+                                url: detailRecord.record.check_out_photo,
+                                name: detailRecord.name,
+                                label: 'Check Out Photo',
+                                time: detailRecord.record.check_out_time || '',
+                                date: detailRecord.record.date
+                              })}
+                              className="w-full aspect-square max-w-[120px] rounded-[12px] overflow-hidden border border-[#E8E8E8] shadow-sm relative group hover:opacity-90 active:scale-95 transition-all cursor-pointer"
+                            >
+                              <img
+                                src={detailRecord.record.check_out_photo}
+                                alt="Check Out Selfie"
+                                className="w-full h-full object-cover"
+                              />
+                            </button>
+                          ) : (
+                            <div className="w-full aspect-square max-w-[120px] rounded-[12px] bg-[#F2F2F2] border border-[#E8E8E8] flex flex-col items-center justify-center text-[#999999]">
+                              <Camera size={24} className="mb-1" strokeWidth={1.5} />
+                              <span className="text-[9px] font-bold">No Photo</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Overtime Approval Panel */}
+                  {liveOTMinutes > 0 && (
+                    <div className="border border-[#E8E8E8] rounded-[14px] p-4 flex items-center justify-between bg-white shadow-sm">
+                      <div>
+                        <p className="text-xs font-bold text-[#1A1A1A]">Overtime ({liveOTMinutes} minutes)</p>
+                        <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-0.5">
+                          Requires manager approval for payroll payout.
+                        </p>
+                      </div>
+                      <div>
+                        {otApproved ? (
+                          <span className="bg-[#EDF7EF] border border-[#2D7A3A]/20 text-[#2D7A3A] text-xs font-bold px-3 py-1.5 rounded-full flex items-center gap-1">
+                            <Check size={14} strokeWidth={2.5} />
+                            Approved
+                          </span>
+                        ) : (
+                          user?.role !== 'staff_executive' ? (
+                            <button
+                              type="button"
+                              onClick={() => setOtApproved(true)}
+                              className="bg-[#2D7A3A] hover:bg-[#256330] text-white text-xs font-bold px-3 py-1.5 rounded-[10px] transition-all cursor-pointer active:scale-95 shadow-sm"
+                            >
+                              Approve OT
+                            </button>
+                          ) : (
+                            <span className="bg-[#F2F2F2] text-[#999999] text-xs font-bold px-3 py-1.5 rounded-full">
+                              Pending Approval
+                            </span>
+                          )
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Fine Section */}
+                  {editStatus === 'late' && (
+                    <div className="border border-[#E8E8E8] rounded-[14px] p-4 bg-white shadow-sm space-y-3.5">
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <p className="text-xs font-bold text-[#1A1A1A]">Late Penalty Fine</p>
+                          <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-0.5">
+                            Color code: <span className="capitalize font-bold text-[#1A1A1A]">{liveColorCode}</span>
+                          </p>
+                        </div>
+                        {editFineWaived ? (
+                          <span className="bg-[#F2F2F2] border border-[#E8E8E8] text-[#555555] text-xs font-bold px-2.5 py-1 rounded-full uppercase tracking-wider">
+                            Waived
+                          </span>
+                        ) : (
+                          <span className="bg-[#FDECEA] border border-[#C0392B]/20 text-[#C0392B] text-xs font-bold px-2.5 py-1 rounded-full">
+                            ₹{editFineAmount}
+                          </span>
+                        )}
+                      </div>
+
+                      {user?.role !== 'staff_executive' && (
+                        <div className="pt-1.5 space-y-3 border-t border-[#E8E8E8]/60">
+                          {/* Edit Amount */}
+                          <div className="flex items-center gap-3">
+                            <label className="text-xs font-bold text-[#555555] whitespace-nowrap">Fine Amount (₹)</label>
+                            <input
+                              type="number"
+                              disabled={editFineWaived}
+                              value={editFineAmount}
+                              onChange={(e) => setEditFineAmount(Number(e.target.value))}
+                              className="w-24 bg-[#F8F8F8] border border-[#E8E8E8] rounded-[8px] p-1.5 text-xs text-center focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold disabled:opacity-50"
+                            />
+                          </div>
+
+                          {/* Waive Checkbox */}
+                          <label className="flex items-center gap-2 cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={editFineWaived}
+                              onChange={(e) => setEditFineWaived(e.target.checked)}
+                              className="rounded border-[#D0D0D0] text-[#1A1A1A] focus:ring-[#1A1A1A] w-4 h-4"
+                            />
+                            <span className="text-xs font-bold text-[#555555]">Waive late penalty fine</span>
+                          </label>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Break logs list */}
+                  {breakLogs.filter(b => b.staff_id === detailRecord.id).length > 0 && (
+                    <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-[14px] p-4 space-y-2">
+                      <p className="text-[10px] text-[#999999] font-bold uppercase tracking-wider">Break History (Today)</p>
+                      <div className="space-y-1.5">
+                        {breakLogs.filter(b => b.staff_id === detailRecord.id).map((b, idx) => (
+                          <div key={idx} className="flex justify-between items-center text-xs text-[#555555]">
+                            <span>Break {idx + 1}: {b.break_start} - {b.break_end || 'ongoing'}</span>
+                            <span className="font-semibold">{b.duration_minutes ? `${b.duration_minutes}m` : '—'}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            {/* Sticky Action Footer */}
+            {user?.role !== 'staff_executive' && (detailRecord.record || isAddingRecord) && (
+              <div className="p-5 border-t border-[#E8E8E8] bg-white sticky bottom-0 z-10 flex gap-3">
+                {detailRecord.record && (
+                  <button
+                    type="button"
+                    onClick={handleDeleteDetail}
+                    className="flex-1 min-h-[44px] bg-white border border-[#C0392B]/20 text-[#C0392B] hover:bg-[#FDECEA] font-bold text-xs rounded-[12px] active:scale-95 transition-all flex items-center justify-center cursor-pointer"
+                  >
+                    Delete Record
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={() => {
-                    setEditModalOpen(false);
-                    setEditRecord(null);
-                  }}
-                  className="flex-1 min-h-[44px] bg-white border border-[#E8E8E8] hover:bg-[#F8F8F8] text-[#555555] font-bold text-xs rounded-[12px] active:scale-95 transition-all cursor-pointer flex items-center justify-center"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSaveEdit}
-                  className="flex-1 min-h-[44px] bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold text-xs rounded-[12px] active:scale-95 transition-all cursor-pointer flex items-center justify-center shadow-md"
+                  onClick={handleSaveDetail}
+                  className="flex-1 min-h-[44px] bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold text-xs rounded-[12px] active:scale-95 transition-all flex items-center justify-center shadow-md cursor-pointer"
                 >
                   Save Changes
                 </button>
               </div>
-            </div>
+            )}
           </div>
         </div>
       )}
@@ -2453,118 +3061,118 @@ export default function AttendancePage() {
       {addModalOpen && (
         <div className="fixed inset-0 z-[12000] flex items-end justify-center">
           <div
-            className="absolute inset-0 bg-black/40 z-[999]"
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => setAddModalOpen(false)}
           />
           <div
-            className="bg-white rounded-t-[24px] shadow-lg relative z-[1000] w-full max-w-md p-6 overflow-y-auto animate-slide-up"
-            style={{
-              paddingBottom: 'calc(24px + env(safe-area-inset-bottom, 0px))',
-              maxHeight: '85vh',
-            }}
+            className="bg-white rounded-t-[20px] shadow-lg relative z-10 w-full max-w-md border-t border-[#E8E8E8] flex flex-col max-h-[90vh] animate-slide-up"
           >
-            {/* Drag Handle */}
-            <div className="w-9 h-1 bg-[#E0E0E0] rounded-[2px] mx-auto mb-5" />
-
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-[#1A1A1A] text-base font-bold">Add Attendance Record</h3>
+            {/* Header */}
+            <div className="p-5 pb-3 border-b border-[#E8E8E8] flex-shrink-0 flex justify-between items-center">
+              <div>
+                <h3 className="text-[#1A1A1A] text-base font-bold">Add Attendance Record</h3>
+              </div>
               <button
                 type="button"
                 onClick={() => setAddModalOpen(false)}
-                className="text-[#999999] hover:text-[#1A1A1A]"
+                className="text-[#999999] hover:text-[#1A1A1A] p-1 rounded-full hover:bg-[#F2F2F2]"
               >
                 <X size={20} />
               </button>
             </div>
 
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Select Staff</label>
-                <select
-                  value={addStaffId}
-                  onChange={(e) => setAddStaffId(e.target.value)}
-                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
-                >
-                  <option value="">-- Choose Staff member --</option>
-                  {staff.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.name} — {s.department}
-                    </option>
-                  ))}
-                </select>
-              </div>
+            {/* Scrollable Content */}
+            <div className="p-5 pt-3 overflow-y-auto flex-1 space-y-4">
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Select Staff</label>
+                  <select
+                    value={addStaffId}
+                    onChange={(e) => setAddStaffId(e.target.value)}
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
+                  >
+                    <option value="">-- Choose Staff member --</option>
+                    {staff.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} — {s.department}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-              <div>
-                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Date</label>
-                <input
-                  type="date"
-                  max={new Date().toISOString().split('T')[0]}
-                  value={addDate}
-                  onChange={(e) => setAddDate(e.target.value)}
-                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
-                />
-              </div>
+                <div>
+                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Date</label>
+                  <input
+                    type="date"
+                    max={new Date().toISOString().split('T')[0]}
+                    value={addDate}
+                    onChange={(e) => setAddDate(e.target.value)}
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Check-in Time</label>
-                <input
-                  type="time"
-                  value={addCheckIn}
-                  onChange={(e) => setAddCheckIn(e.target.value)}
-                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
-                />
-              </div>
+                <div>
+                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Check-in Time</label>
+                  <input
+                    type="time"
+                    value={addCheckIn}
+                    onChange={(e) => setAddCheckIn(e.target.value)}
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Check-out Time</label>
-                <input
-                  type="time"
-                  value={addCheckOut}
-                  onChange={(e) => setAddCheckOut(e.target.value)}
-                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
-                />
-              </div>
+                <div>
+                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Check-out Time</label>
+                  <input
+                    type="time"
+                    value={addCheckOut}
+                    onChange={(e) => setAddCheckOut(e.target.value)}
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
+                  />
+                </div>
 
-              <div>
-                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Status</label>
-                <select
-                  value={addStatus}
-                  onChange={(e) => setAddStatus(e.target.value as any)}
-                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
-                >
-                  <option value="present">Present</option>
-                  <option value="late">Late</option>
-                  <option value="absent">Absent</option>
-                </select>
-              </div>
+                <div>
+                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Status</label>
+                  <select
+                    value={addStatus}
+                    onChange={(e) => setAddStatus(e.target.value as any)}
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
+                  >
+                    <option value="present">Present</option>
+                    <option value="late">Late</option>
+                    <option value="absent">Absent</option>
+                  </select>
+                </div>
 
-              <div>
-                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Reason (optional)</label>
-                <input
-                  type="text"
-                  placeholder="e.g. Manual entry"
-                  value={addReason}
-                  onChange={(e) => setAddReason(e.target.value)}
-                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
-                />
+                <div>
+                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">Reason (optional)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Manual entry"
+                    value={addReason}
+                    onChange={(e) => setAddReason(e.target.value)}
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
+                  />
+                </div>
               </div>
+            </div>
 
-              <div className="flex gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setAddModalOpen(false)}
-                  className="flex-1 min-h-[44px] bg-white border border-[#E8E8E8] hover:bg-[#F8F8F8] text-[#555555] font-bold text-xs rounded-[12px] active:scale-95 transition-all cursor-pointer flex items-center justify-center"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSaveAdd}
-                  className="flex-1 min-h-[44px] bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold text-xs rounded-[12px] active:scale-95 transition-all cursor-pointer flex items-center justify-center shadow-md"
-                >
-                  Save Changes
-                </button>
-              </div>
+            {/* Sticky Action Footer */}
+            <div className="p-5 border-t border-[#E8E8E8] bg-white sticky bottom-0 z-10 flex gap-3">
+              <button
+                type="button"
+                onClick={() => setAddModalOpen(false)}
+                className="flex-1 min-h-[44px] bg-white border border-[#E8E8E8] hover:bg-[#F8F8F8] text-[#555555] font-bold text-xs rounded-[12px] active:scale-95 transition-all cursor-pointer flex items-center justify-center"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveAdd}
+                className="flex-1 min-h-[44px] bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold text-xs rounded-[12px] active:scale-95 transition-all cursor-pointer flex items-center justify-center shadow-md"
+              >
+                Save Changes
+              </button>
             </div>
           </div>
         </div>

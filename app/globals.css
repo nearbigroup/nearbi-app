@@ -80,17 +80,43 @@ body {
   padding-bottom: env(safe-area-inset-bottom, 20px);
 }
 
-@media (min-width: 769px) {
+/* Mobile — full width */
+@media (max-width: 480px) {
+  .app-container {
+    max-width: 100%;
+    padding: 0;
+  }
+}
+
+/* Desktop — centered with frame */
+@media (min-width: 481px) {
   body {
-    background: #EBEBEB;
+    background: #F0F0F0;
   }
   .app-frame {
     max-width: 480px;
     margin: 0 auto;
-    background: var(--bg-secondary);
+    background: #FFFFFF;
     min-height: 100vh;
-    box-shadow: 0 4px 30px rgba(0,0,0,0.06);
+    box-shadow: 0 0 40px rgba(0,0,0,0.12);
+    position: relative;
   }
+}
+
+/* Large desktop — wider frame */
+@media (min-width: 1024px) {
+  .app-frame {
+    max-width: 520px;
+  }
+}
+
+@media (max-width: 479px) {
+  .attendance-actions { display: none; }
+  .attendance-more-btn { display: flex; }
+}
+@media (min-width: 480px) {
+  .attendance-actions { display: flex; }
+  .attendance-more-btn { display: none; }
 }
 
 /* Touch targets and mobile input optimizations */

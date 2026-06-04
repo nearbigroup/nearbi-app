@@ -281,17 +281,25 @@ export default function KioskPage() {
   };
 
   const uploadPhoto = async (blob: Blob, filename: string): Promise<string> => {
-    const filePath = `${staff.id}/${filename}`;
+    try {
+      await supabase.storage.createBucket(
+        'attendance-photos',
+        { public: true }
+      );
+    } catch (e) {
+      // Bucket already exists — fine
+    }
+
     const { error: uploadError } = await supabase.storage
       .from('attendance-photos')
-      .upload(filePath, blob, {
+      .upload(filename, blob, {
         contentType: 'image/jpeg',
         upsert: true,
       });
 
     if (uploadError) throw uploadError;
 
-    const { data } = supabase.storage.from('attendance-photos').getPublicUrl(filePath);
+    const { data } = supabase.storage.from('attendance-photos').getPublicUrl(filename);
     return data.publicUrl;
   };
 
@@ -308,7 +316,8 @@ export default function KioskPage() {
         let photoUrl: string | null = null;
         let photoUploadFailed = false;
         try {
-          photoUrl = await uploadPhoto(blob, `${todayStr}_checkin.jpg`);
+          const fileName = `${staff.id}/${todayStr}_checkin_${Date.now()}.jpg`;
+          photoUrl = await uploadPhoto(blob, fileName);
         } catch (uploadErr) {
           console.error('Check-in photo upload failed:', uploadErr);
           photoUploadFailed = true;
@@ -399,13 +408,10 @@ export default function KioskPage() {
           staff_id: staff.id,
           date: todayStr,
           check_in_time: checkInTimeStr,
+          check_in_photo: photoUrl || null,
           status,
           marked_by: 'kiosk'
         };
-
-        if (photoUrl) {
-          attendanceRecord.check_in_photo = photoUrl;
-        }
 
         if (earlyInMinutes > 0) {
           attendanceRecord.early_in_minutes = earlyInMinutes;
@@ -560,7 +566,8 @@ export default function KioskPage() {
         let photoUrl: string | null = null;
         let photoUploadFailed = false;
         try {
-          photoUrl = await uploadPhoto(blob, `${todayStr}_checkout.jpg`);
+          const fileName = `${staff.id}/${todayStr}_checkout_${Date.now()}.jpg`;
+          photoUrl = await uploadPhoto(blob, fileName);
         } catch (uploadErr) {
           console.error('Check-out photo upload failed:', uploadErr);
           photoUploadFailed = true;
@@ -598,14 +605,11 @@ export default function KioskPage() {
           ot_minutes: otMins,
           actual_hours_worked: actualHrs,
           early_leave_minutes: earlyLeaveMins,
+          check_out_photo: photoUrl || null,
         };
 
         if (otMins > 0) {
           checkoutRecord.ot_approved = false; // pending approval
-        }
-
-        if (photoUrl) {
-          checkoutRecord.check_out_photo = photoUrl;
         }
 
         const { error: checkoutErr } = await supabase

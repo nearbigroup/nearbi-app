@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
-import { Search, Plus, Trash2, Eye, EyeOff, Lock, X, AlertTriangle, Users, AlertCircle, RefreshCw, Cake, Download, Upload, Check, Phone } from 'lucide-react';
+import { Search, Plus, Trash2, Edit2, Eye, EyeOff, Lock, X, AlertTriangle, Users, AlertCircle, RefreshCw, Cake, Download, Upload, Check, Phone } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import * as XLSX from 'xlsx';
 import { DEPARTMENTS } from '@/lib/data';
@@ -112,6 +112,349 @@ export default function StaffPage() {
     } catch (e: any) {
       console.error(e);
       showToast('Failed to update DOB');
+    }
+  };
+
+  // Edit Staff Modal State
+  const [editStaffModalOpen, setEditStaffModalOpen] = useState(false);
+  const [editStaffForm, setEditStaffForm] = useState({
+    id: '',
+    name: '',
+    pin: '',
+    branch_id: '',
+    department: '',
+    shift_id: '',
+    off_days_per_month: 4,
+    monthly_salary: '',
+    join_date: '',
+    date_of_birth: '',
+    mobile_number: '',
+  });
+  const [originalShiftId, setOriginalShiftId] = useState('');
+  const [originalPin, setOriginalPin] = useState('');
+  const [showShiftConfirm, setShowShiftConfirm] = useState(false);
+  const [editIsCustomShift, setEditIsCustomShift] = useState(false);
+  const [editCustomShift, setEditCustomShift] = useState({
+    label: '',
+    start_time: '',
+    end_time: '',
+  });
+  const [editCustomShiftError, setEditCustomShiftError] = useState('');
+  const [editCustomShiftLoading, setEditCustomShiftLoading] = useState(false);
+
+  const recalculateMonthFines = async (staffId: string, newShiftId: string) => {
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = today.getMonth() + 1;
+    const currentMonthStr = `${year}-${String(month).padStart(2, '0')}`;
+    const firstDay = `${currentMonthStr}-01`;
+    const lastDay = new Date(year, month, 0).toISOString().split('T')[0];
+
+    // Fetch new shift details
+    const { data: newShift, error: shiftErr } = await supabase
+      .from('shifts')
+      .select('*')
+      .eq('id', newShiftId)
+      .single();
+
+    if (shiftErr || !newShift) throw shiftErr || new Error('New shift not found');
+
+    // Fetch all attendance for this month
+    const { data: attRecords, error: attErr } = await supabase
+      .from('attendance')
+      .select('*')
+      .eq('staff_id', staffId)
+      .gte('date', firstDay)
+      .lte('date', lastDay);
+
+    if (attErr) throw attErr;
+
+    // Fetch fine settings
+    const { data: fineSettings } = await supabase
+      .from('fine_settings')
+      .select('*')
+      .limit(1)
+      .maybeSingle();
+
+    const settings = fineSettings || {
+      yellow_fine: 50,
+      orange_fine: 100,
+      red_fine: 200,
+      yellow_free_passes: 4
+    };
+
+    // Keep track of yellow passes
+    let yellowPassCount = 0;
+
+    // Sort attendance records by date to process chronologically for free passes
+    const sortedRecords = [...(attRecords || [])].sort((a, b) => a.date.localeCompare(b.date));
+
+    for (const r of sortedRecords) {
+      if (!r.check_in_time) continue;
+
+      const [sh, sm] = newShift.start_time.split(':').map(Number);
+      const [ch, cm] = r.check_in_time.split(':').map(Number);
+      const shiftStartMins = sh * 60 + sm;
+      const checkInMins = ch * 60 + cm;
+
+      const minutesLate = Math.max(0, checkInMins - shiftStartMins);
+      let status: 'present' | 'late' = 'present';
+      let colorCode: 'green' | 'yellow' | 'orange' | 'red' = 'green';
+
+      if (minutesLate > 0) {
+        if (minutesLate > 5) {
+          status = 'late';
+        }
+        if (minutesLate <= 15) {
+          colorCode = 'yellow';
+        } else if (minutesLate <= 30) {
+          colorCode = 'orange';
+        } else {
+          colorCode = 'red';
+        }
+      }
+
+      // Update attendance record color_code, minutes_late, status
+      const { error: attUpdateErr } = await supabase
+        .from('attendance')
+        .update({
+          minutes_late: minutesLate,
+          color_code: colorCode,
+          status: status
+        })
+        .eq('id', r.id);
+
+      if (attUpdateErr) throw attUpdateErr;
+
+      // Check fine exemptions
+      const { data: exemption } = await supabase
+        .from('staff_fine_exemptions')
+        .select('id')
+        .eq('staff_id', staffId)
+        .maybeSingle();
+
+      if (exemption) {
+        // Exempt staff: delete any existing fine for this date
+        await supabase
+          .from('late_fines')
+          .delete()
+          .eq('staff_id', staffId)
+          .eq('date', r.date);
+        continue;
+      }
+
+      if (colorCode === 'green') {
+        // Delete fine
+        await supabase
+          .from('late_fines')
+          .delete()
+          .eq('staff_id', staffId)
+          .eq('date', r.date);
+      } else {
+        let fineAmount = 0;
+        if (colorCode === 'yellow') {
+          if (yellowPassCount >= settings.yellow_free_passes) {
+            fineAmount = Number(settings.yellow_fine);
+          }
+          yellowPassCount++;
+        } else if (colorCode === 'orange') {
+          fineAmount = Number(settings.orange_fine);
+        } else if (colorCode === 'red') {
+          fineAmount = Number(settings.red_fine);
+        }
+
+        if (fineAmount > 0) {
+          const { error: fineUpsertErr } = await supabase
+            .from('late_fines')
+            .upsert({
+              staff_id: staffId,
+              date: r.date,
+              late_minutes: minutesLate,
+              color_code: colorCode,
+              fine_amount: fineAmount,
+              waived: false,
+              month: currentMonthStr
+            }, { onConflict: 'staff_id,date' });
+
+          if (fineUpsertErr) throw fineUpsertErr;
+        } else {
+          await supabase
+            .from('late_fines')
+            .delete()
+            .eq('staff_id', staffId)
+            .eq('date', r.date);
+        }
+      }
+    }
+  };
+
+  const handleOpenEditStaff = (s: StaffMember) => {
+    setEditStaffForm({
+      id: s.id,
+      name: s.name,
+      pin: s.pin,
+      branch_id: s.branch_id || '',
+      department: s.department,
+      shift_id: s.shift_id || '',
+      off_days_per_month: s.off_days_per_month as any,
+      monthly_salary: s.monthly_salary ? String(s.monthly_salary) : '',
+      join_date: s.join_date ? s.join_date.substring(0, 10) : '',
+      date_of_birth: s.date_of_birth ? s.date_of_birth.substring(0, 10) : '',
+      mobile_number: s.mobile_number || '',
+    });
+    setOriginalShiftId(s.shift_id || '');
+    setOriginalPin(s.pin);
+    setEditIsCustomShift(false);
+    setEditStaffModalOpen(true);
+  };
+
+  const handleEditAddCustomShift = async () => {
+    setEditCustomShiftError('');
+    if (!editCustomShift.label || !editCustomShift.start_time || !editCustomShift.end_time) {
+      setEditCustomShiftError('All custom shift fields are required');
+      return;
+    }
+
+    const [sh, sm] = editCustomShift.start_time.split(':').map(Number);
+    const [eh, em] = editCustomShift.end_time.split(':').map(Number);
+    const startMins = sh * 60 + sm;
+    const endMins = eh * 60 + em;
+
+    if (endMins <= startMins) {
+      setEditCustomShiftError('End time must be after start time');
+      return;
+    }
+
+    const durationHours = parseFloat(((endMins - startMins) / 60).toFixed(2));
+    setEditCustomShiftLoading(true);
+
+    try {
+      const shiftId = 'shift_' + Date.now();
+      const payload = {
+        id: shiftId,
+        label: editCustomShift.label,
+        start_time: editCustomShift.start_time,
+        end_time: editCustomShift.end_time,
+        hours: durationHours,
+      };
+
+      const { error } = await supabase.from('shifts').insert(payload);
+      if (error) throw error;
+
+      await fetchShifts();
+      setEditStaffForm((prev) => ({ ...prev, shift_id: shiftId }));
+      setEditIsCustomShift(false);
+      setEditCustomShift({ label: '', start_time: '', end_time: '' });
+    } catch (err: any) {
+      console.error(err);
+      setEditCustomShiftError(err.message || 'Failed to create shift');
+    } finally {
+      setEditCustomShiftLoading(false);
+    }
+  };
+
+  const handleSaveEditStaff = async (recalculateFines = false) => {
+    setFormLoading(true);
+    setFormError('');
+    try {
+      const {
+        id,
+        name,
+        pin,
+        branch_id,
+        department,
+        shift_id,
+        off_days_per_month,
+        monthly_salary,
+        join_date,
+        date_of_birth,
+        mobile_number,
+      } = editStaffForm;
+
+      if (!name || !pin || !branch_id || !department || !join_date) {
+        setFormError('Name, PIN, Branch, Department, and Join Date are required');
+        setFormLoading(false);
+        return;
+      }
+
+      if (!/^\d{4}$/.test(pin)) {
+        setFormError('PIN must be exactly 4 digits');
+        setFormLoading(false);
+        return;
+      }
+
+      if (pin !== originalPin) {
+        const { data: existingPin } = await supabase
+          .from('staff')
+          .select('id')
+          .eq('pin', pin)
+          .eq('active', true)
+          .maybeSingle();
+        if (existingPin) {
+          setFormError('This PIN is already in use by another active staff member');
+          setFormLoading(false);
+          return;
+        }
+      }
+
+      const updatePayload: any = {
+        name,
+        pin,
+        branch_id,
+        department,
+        shift_id,
+        off_days_per_month,
+        monthly_salary: Number(monthly_salary),
+        join_date,
+        date_of_birth: date_of_birth || null,
+        mobile_number: mobile_number || null,
+      };
+
+      const { error: updateErr } = await supabase
+        .from('staff')
+        .update(updatePayload)
+        .eq('id', id);
+
+      if (updateErr) throw updateErr;
+
+      if (pin !== originalPin) {
+        const { data: account } = await supabase
+          .from('staff_accounts')
+          .select('id')
+          .eq('staff_id', id)
+          .maybeSingle();
+
+        if (account) {
+          await supabase
+            .from('staff_accounts')
+            .update({ password: pin })
+            .eq('id', account.id);
+        }
+      }
+
+      if (recalculateFines) {
+        await recalculateMonthFines(id, shift_id);
+        showToast('Fines recalculated ✓');
+      }
+
+      showToast('Staff updated ✓');
+      setEditStaffModalOpen(false);
+      setShowShiftConfirm(false);
+      fetchStaff();
+    } catch (err: any) {
+      console.error(err);
+      setFormError(err.message || 'Failed to update staff');
+    } finally {
+      setFormLoading(false);
+    }
+  };
+
+  const handleEditStaffSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (editStaffForm.shift_id !== originalShiftId) {
+      setShowShiftConfirm(true);
+    } else {
+      await handleSaveEditStaff(false);
     }
   };
 
@@ -1391,6 +1734,30 @@ export default function StaffPage() {
                   isDeleteMode ? 'border-[#C0392B] ring-1 ring-[#C0392B]/30' : 'border-[#E8E8E8] shadow-sm'
                 }`}
               >
+                {/* Top Right Action Icons */}
+                <div className="absolute top-3 right-3 flex items-center space-x-1" onClick={(e) => e.stopPropagation()}>
+                  {(user?.role === 'admin' || user?.role === 'ops_manager') && (
+                    <button
+                      onClick={() => handleOpenEditStaff(s)}
+                      className="p-1.5 text-[#555555] hover:text-[#1A1A1A] hover:bg-[#F2F2F2] rounded-lg transition-all cursor-pointer"
+                      title="Edit Staff"
+                    >
+                      <Edit2 size={14} strokeWidth={1.5} />
+                    </button>
+                  )}
+                  {user?.role === 'admin' && (
+                    <button
+                      onClick={() => {
+                        setStaffToDelete(s);
+                      }}
+                      className="p-1.5 text-[#C0392B] hover:bg-[#FDECEA] rounded-lg transition-all cursor-pointer"
+                      title="Delete Staff"
+                    >
+                      <Trash2 size={14} strokeWidth={1.5} />
+                    </button>
+                  )}
+                </div>
+
                 <div className="flex items-start space-x-3.5">
                   {/* Avatar or Delete Mode Trigger */}
                   {user?.role === 'admin' || user?.role === 'ops_manager' ? (
@@ -1619,286 +1986,679 @@ export default function StaffPage() {
             onClick={() => setShowAddPanel(false)}
           />
           <div
-            className="bg-white rounded-t-[20px] shadow-lg relative z-10 p-6 flex flex-col max-h-[85vh] overflow-y-auto w-full max-w-md mx-auto border-t border-[#E8E8E8]"
-            style={{ paddingBottom: 'calc(24px + env(safe-area-inset-bottom, 16px))' }}
+            className="bg-white relative z-10 w-full max-w-md mx-auto"
+            style={{
+              position: 'fixed',
+              bottom: 0,
+              left: 0,
+              right: 0,
+              maxHeight: '90vh',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              borderRadius: '24px 24px 0 0',
+            }}
           >
-            {/* Grabber bar */}
-            <div className="w-12 h-1 bg-[#E8E8E8] rounded-full mx-auto mb-4 flex-shrink-0" />
-
-            <div className="flex justify-between items-center mb-4 flex-shrink-0">
-              <h2 className="text-lg font-bold text-[#1A1A1A]">New Staff Member</h2>
-              <button
-                onClick={() => setShowAddPanel(false)}
-                className="text-[#999999] hover:text-[#1A1A1A] flex items-center justify-center p-1"
-              >
-                <X size={16} strokeWidth={1.5} style={{ color: 'currentColor' }} />
-              </button>
+            {/* Header */}
+            <div className="p-5 border-b border-[#E8E8E8] flex-shrink-0">
+              <div className="w-12 h-1 bg-[#E8E8E8] rounded-full mx-auto mb-4" />
+              <div className="flex justify-between items-center">
+                <h2 className="text-base font-bold text-[#1A1A1A]">New Staff Member</h2>
+                <button
+                  onClick={() => setShowAddPanel(false)}
+                  className="text-[#999999] hover:text-[#1A1A1A] p-1"
+                >
+                  <X size={18} strokeWidth={1.5} />
+                </button>
+              </div>
             </div>
 
-            {formError && (
-              <div className="bg-[#FDECEA] border border-[#C0392B]/30 text-[#C0392B] text-xs font-bold px-3 py-2 rounded-[12px] mb-4 flex-shrink-0">
-                {formError}
-              </div>
-            )}
-
-            <form onSubmit={handleAddStaff} className="space-y-4 flex-1">
-              <div>
-                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
-                  Full Name
-                </label>
-                <input
-                  type="text"
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  placeholder="e.g. John Doe"
-                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
-                  required
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
-                    4-Digit PIN
-                  </label>
-                  <input
-                    type="text"
-                    pattern="\d*"
-                    maxLength={4}
-                    value={formData.pin}
-                    onChange={(e) => setFormData({ ...formData, pin: e.target.value.replace(/\D/g, '').substring(0, 4) })}
-                    placeholder="e.g. 1234"
-                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-mono text-center"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
-                    Join Date
-                  </label>
-                  <input
-                    type="date"
-                    value={formData.join_date}
-                    onChange={(e) => setFormData({ ...formData, join_date: e.target.value })}
-                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
-                    required
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
-                  Date of Birth (optional)
-                </label>
-                <input
-                  type="date"
-                  value={formData.date_of_birth || ''}
-                  onChange={(e) => setFormData({ ...formData, date_of_birth: e.target.value })}
-                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
-                  Mobile Number (for staff login)
-                </label>
-                <input
-                  type="tel"
-                  pattern="[0-9]{10}"
-                  maxLength={10}
-                  value={formData.mobile_number}
-                  onChange={(e) => setFormData({ ...formData, mobile_number: e.target.value.replace(/\D/g, '').substring(0, 10) })}
-                  placeholder="e.g. 9876543210 (10 digit mobile number)"
-                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-mono"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
-                    Branch
-                  </label>
-                  <select
-                    value={formData.branch_id}
-                    onChange={(e) => setFormData({ ...formData, branch_id: e.target.value })}
-                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
-                    disabled={!!userBranch}
-                    required
-                  >
-                    <option value="">Select branch...</option>
-                    <option value="daily">Nearbi Daily</option>
-                    <option value="hypermarket">Nearbi Hypermarket</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
-                    Department
-                  </label>
-                  <select
-                    value={formData.department}
-                    onChange={(e) => setFormData({ ...formData, department: e.target.value })}
-                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
-                    required
-                  >
-                    <option value="">Select...</option>
-                    {DEPARTMENTS.map((dept) => (
-                      <option key={dept} value={dept}>
-                        {dept}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              {/* Shift selector & custom creator inline */}
-              <div>
-                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
-                  Shift Profile
-                </label>
-                <select
-                  value={isCustomShift ? 'custom' : formData.shift_id}
-                  onChange={(e) => {
-                    if (e.target.value === 'custom') {
-                      setIsCustomShift(true);
-                    } else {
-                      setIsCustomShift(false);
-                      setFormData({ ...formData, shift_id: e.target.value });
-                    }
-                  }}
-                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] mb-2"
-                  required={!isCustomShift}
-                >
-                  {shifts.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.label} ({s.start_time} - {s.end_time})
-                    </option>
-                  ))}
-                  <option value="custom">+ Create custom shift...</option>
-                </select>
-
-                {isCustomShift && (
-                  <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-4 space-y-3 mt-2">
-                    <h4 className="text-xs font-bold text-[#1A1A1A]">New Custom Shift</h4>
-                    {customShiftError && (
-                      <div className="bg-[#FDECEA] border border-[#C0392B]/20 text-[#C0392B] text-[10px] font-bold p-2 rounded-[12px]">
-                        {customShiftError}
-                      </div>
-                    )}
-                    <div>
-                      <label className="block text-[10px] font-bold text-[var(--text-muted)] mb-0.5">
-                        Shift Label (e.g. Evening shift)
-                      </label>
-                      <input
-                        type="text"
-                        value={customShift.label}
-                        onChange={(e) => setCustomShift({ ...customShift, label: e.target.value })}
-                        placeholder="e.g. General Shift"
-                        className="w-full bg-white border border-[#E8E8E8] rounded-[12px] p-2 text-xs focus:outline-none text-[#1A1A1A] focus:border-[#1A1A1A]"
-                      />
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <label className="block text-[10px] font-bold text-[var(--text-muted)] mb-0.5">
-                          Start Time
-                        </label>
-                        <input
-                          type="time"
-                          value={customShift.start_time}
-                          onChange={(e) => setCustomShift({ ...customShift, start_time: e.target.value })}
-                          className="w-full bg-white border border-[#E8E8E8] rounded-[12px] p-2 text-xs focus:outline-none text-[#1A1A1A] focus:border-[#1A1A1A]"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] font-bold text-[var(--text-muted)] mb-0.5">
-                          End Time
-                        </label>
-                        <input
-                          type="time"
-                          value={customShift.end_time}
-                          onChange={(e) => setCustomShift({ ...customShift, end_time: e.target.value })}
-                          className="w-full bg-white border border-[#E8E8E8] rounded-[12px] p-2 text-xs focus:outline-none text-[#1A1A1A] focus:border-[#1A1A1A]"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between pt-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsCustomShift(false);
-                          if (shifts.length > 0) {
-                            setFormData((prev) => ({ ...prev, shift_id: shifts[0].id }));
-                          }
-                        }}
-                        className="text-xs text-[#555555] font-bold hover:underline"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleAddCustomShift}
-                        disabled={customShiftLoading}
-                        className="bg-[#1A1A1A] text-white hover:bg-[#333333] font-bold text-xs px-3.5 py-1.5 rounded-[12px] active:scale-95 transition-all shadow-md"
-                      >
-                        {customShiftLoading ? 'Creating...' : 'Create Shift'}
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Off Days Choice */}
-              <div>
-                <label className="block text-xs font-bold text-[var(--text-muted)] mb-1.5">
-                  Monthly Off Days
-                </label>
-                <div className="flex gap-2">
-                  {[0, 2, 4].map((num) => {
-                    const isSelected = formData.off_days_per_month === num;
-                    return (
-                      <button
-                        key={num}
-                        type="button"
-                        onClick={() => setFormData({ ...formData, off_days_per_month: num })}
-                        className={`flex-1 py-2.5 rounded-[12px] border text-xs font-bold transition-all ${
-                          isSelected
-                            ? 'bg-[#1A1A1A] text-white border-[#1A1A1A]'
-                            : 'bg-white text-[#555555] border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-95'
-                        }`}
-                      >
-                        {num} Days
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Monthly Salary Input (Admin/Ops only) */}
-              {canSeeSalaryBreakdown && (
-                <div>
-                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
-                    Monthly Salary (₹)
-                  </label>
-                  <input
-                    type="number"
-                    value={formData.monthly_salary}
-                    onChange={(e) => setFormData({ ...formData, monthly_salary: e.target.value })}
-                    placeholder="e.g. 15000"
-                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
-                    required
-                  />
+            {/* Scrollable content area */}
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              {formError && (
+                <div className="bg-[#FDECEA] border border-[#C0392B]/30 text-[#C0392B] text-xs font-bold px-3 py-2 rounded-[12px]">
+                  {formError}
                 </div>
               )}
 
+              <form id="add-staff-form" onSubmit={handleAddStaff} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
+                    Full Name
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    placeholder="e.g. John Doe"
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
+                    required
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
+                      4-Digit PIN
+                    </label>
+                    <input
+                      type="text"
+                      pattern="\d*"
+                      maxLength={4}
+                      value={formData.pin}
+                      onChange={(e) => setFormData({ ...formData, pin: e.target.value.replace(/\D/g, '').substring(0, 4) })}
+                      placeholder="e.g. 1234"
+                      className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-mono text-center"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
+                      Join Date
+                    </label>
+                    <input
+                      type="date"
+                      value={formData.join_date}
+                      onChange={(e) => setFormData({ ...formData, join_date: e.target.value })}
+                      className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
+                    Date of Birth (optional)
+                  </label>
+                  <input
+                    type="date"
+                    value={formData.date_of_birth || ''}
+                    onChange={(e) => setFormData({ ...formData, date_of_birth: e.target.value })}
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
+                    Mobile Number (for staff login)
+                  </label>
+                  <input
+                    type="tel"
+                    pattern="[0-9]{10}"
+                    maxLength={10}
+                    value={formData.mobile_number}
+                    onChange={(e) => setFormData({ ...formData, mobile_number: e.target.value.replace(/\D/g, '').substring(0, 10) })}
+                    placeholder="e.g. 9876543210"
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-mono"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
+                      Branch
+                    </label>
+                    <select
+                      value={formData.branch_id}
+                      onChange={(e) => setFormData({ ...formData, branch_id: e.target.value })}
+                      className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
+                      disabled={!!userBranch}
+                      required
+                    >
+                      <option value="">Select branch...</option>
+                      <option value="daily">Nearbi Daily</option>
+                      <option value="hypermarket">Nearbi Hypermarket</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
+                      Department
+                    </label>
+                    <select
+                      value={formData.department}
+                      onChange={(e) => setFormData({ ...formData, department: e.target.value })}
+                      className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
+                      required
+                    >
+                      <option value="">Select...</option>
+                      {DEPARTMENTS.map((dept) => (
+                        <option key={dept} value={dept}>
+                          {dept}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Shift Profile */}
+                <div>
+                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
+                    Shift Profile
+                  </label>
+                  <select
+                    value={isCustomShift ? 'custom' : formData.shift_id}
+                    onChange={(e) => {
+                      if (e.target.value === 'custom') {
+                        setIsCustomShift(true);
+                      } else {
+                        setIsCustomShift(false);
+                        setFormData({ ...formData, shift_id: e.target.value });
+                      }
+                    }}
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] mb-2"
+                    required={!isCustomShift}
+                  >
+                    {shifts.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.label} ({s.start_time} - {s.end_time})
+                      </option>
+                    ))}
+                    <option value="custom">+ Create custom shift...</option>
+                  </select>
+
+                  {isCustomShift && (
+                    <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-4 space-y-3 mt-2">
+                      <h4 className="text-xs font-bold text-[#1A1A1A]">New Custom Shift</h4>
+                      {customShiftError && (
+                        <div className="bg-[#FDECEA] border border-[#C0392B]/20 text-[#C0392B] text-[10px] font-bold p-2 rounded-[12px]">
+                          {customShiftError}
+                        </div>
+                      )}
+                      <div>
+                        <label className="block text-[10px] font-bold text-[var(--text-muted)] mb-0.5">
+                          Shift Label
+                        </label>
+                        <input
+                          type="text"
+                          value={customShift.label}
+                          onChange={(e) => setCustomShift({ ...customShift, label: e.target.value })}
+                          placeholder="e.g. General Shift"
+                          className="w-full bg-white border border-[#E8E8E8] rounded-[12px] p-2 text-xs focus:outline-none text-[#1A1A1A] focus:border-[#1A1A1A]"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[10px] font-bold text-[var(--text-muted)] mb-0.5">
+                            Start Time
+                          </label>
+                          <input
+                            type="time"
+                            value={customShift.start_time}
+                            onChange={(e) => setCustomShift({ ...customShift, start_time: e.target.value })}
+                            className="w-full bg-white border border-[#E8E8E8] rounded-[12px] p-2 text-xs focus:outline-none text-[#1A1A1A] focus:border-[#1A1A1A]"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-[var(--text-muted)] mb-0.5">
+                            End Time
+                          </label>
+                          <input
+                            type="time"
+                            value={customShift.end_time}
+                            onChange={(e) => setCustomShift({ ...customShift, end_time: e.target.value })}
+                            className="w-full bg-white border border-[#E8E8E8] rounded-[12px] p-2 text-xs focus:outline-none text-[#1A1A1A] focus:border-[#1A1A1A]"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsCustomShift(false);
+                            if (shifts.length > 0) {
+                              setFormData((prev) => ({ ...prev, shift_id: shifts[0].id }));
+                            }
+                          }}
+                          className="text-xs text-[#555555] font-bold hover:underline"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleAddCustomShift}
+                          disabled={customShiftLoading}
+                          className="bg-[#1A1A1A] text-white hover:bg-[#333333] font-bold text-xs px-3.5 py-1.5 rounded-[12px] active:scale-95 transition-all shadow-md"
+                        >
+                          {customShiftLoading ? 'Creating...' : 'Create Shift'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Off Days Choice */}
+                <div>
+                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1.5">
+                    Monthly Off Days
+                  </label>
+                  <div className="flex gap-2">
+                    {[0, 2, 4].map((num) => {
+                      const isSelected = formData.off_days_per_month === num;
+                      return (
+                        <button
+                          key={num}
+                          type="button"
+                          onClick={() => setFormData({ ...formData, off_days_per_month: num as any })}
+                          className={`flex-1 py-2.5 rounded-[12px] border text-xs font-bold transition-all cursor-pointer ${
+                            isSelected
+                              ? 'bg-[#1A1A1A] text-white border-[#1A1A1A]'
+                              : 'bg-white text-[#555555] border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-95'
+                          }`}
+                        >
+                          {num} Days
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Monthly Salary Input (Admin/Ops only) */}
+                {canSeeSalaryBreakdown && (
+                  <div>
+                    <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
+                      Monthly Salary (₹)
+                    </label>
+                    <input
+                      type="number"
+                      value={formData.monthly_salary}
+                      onChange={(e) => setFormData({ ...formData, monthly_salary: e.target.value })}
+                      placeholder="e.g. 15000"
+                      className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
+                      required
+                    />
+                  </div>
+                )}
+              </form>
+            </div>
+
+            {/* Sticky footer with actions */}
+            <div
+              style={{
+                position: 'sticky' as const,
+                bottom: 0,
+                background: '#FFFFFF',
+                padding: '12px 16px',
+                paddingBottom: 'max(12px, env(safe-area-inset-bottom))',
+                borderTop: '1px solid #E8E8E8',
+                zIndex: 100,
+                marginTop: 'auto',
+                flexShrink: 0,
+              }}
+            >
               <button
                 type="submit"
+                form="add-staff-form"
                 disabled={formLoading}
-                className="w-full min-h-[44px] bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold text-sm rounded-[12px] active:scale-95 transition-all mt-4 shadow-md"
+                className="w-full min-h-[44px] bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold text-sm rounded-[12px] active:scale-95 transition-all shadow-md cursor-pointer flex items-center justify-center"
               >
                 {formLoading ? 'Saving...' : 'Save Staff Member'}
               </button>
-            </form>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Staff Slide-Up Panel */}
+      {editStaffModalOpen && (
+        <div className="fixed inset-0 z-[11000] flex flex-col justify-end">
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setEditStaffModalOpen(false)}
+          />
+          <div
+            className="bg-white relative z-10 w-full max-w-md mx-auto"
+            style={{
+              position: 'fixed',
+              bottom: 0,
+              left: 0,
+              right: 0,
+              maxHeight: '90vh',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              borderRadius: '24px 24px 0 0',
+            }}
+          >
+            {/* Header section (fixed at top of sheet) */}
+            <div className="p-5 border-b border-[#E8E8E8] flex-shrink-0">
+              <div className="w-12 h-1 bg-[#E8E8E8] rounded-full mx-auto mb-4" />
+              <div className="flex justify-between items-center">
+                <h2 className="text-base font-bold text-[#1A1A1A]">Edit Staff — {editStaffForm.name}</h2>
+                <button
+                  onClick={() => setEditStaffModalOpen(false)}
+                  className="text-[#999999] hover:text-[#1A1A1A] p-1"
+                >
+                  <X size={18} strokeWidth={1.5} />
+                </button>
+              </div>
+            </div>
+
+            {/* Scrollable content area */}
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              {formError && (
+                <div className="bg-[#FDECEA] border border-[#C0392B]/30 text-[#C0392B] text-xs font-bold px-3 py-2 rounded-[12px]">
+                  {formError}
+                </div>
+              )}
+
+              <form id="edit-staff-form" onSubmit={handleEditStaffSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
+                    Full Name
+                  </label>
+                  <input
+                    type="text"
+                    value={editStaffForm.name}
+                    onChange={(e) => setEditStaffForm({ ...editStaffForm, name: e.target.value })}
+                    placeholder="e.g. John Doe"
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
+                    required
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
+                      4-Digit PIN
+                    </label>
+                    <input
+                      type="text"
+                      pattern="\d*"
+                      maxLength={4}
+                      value={editStaffForm.pin}
+                      onChange={(e) => setEditStaffForm({ ...editStaffForm, pin: e.target.value.replace(/\D/g, '').substring(0, 4) })}
+                      placeholder="e.g. 1234"
+                      className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-mono text-center"
+                      required
+                    />
+                    {editStaffForm.pin !== originalPin && (
+                      <p className="text-[10px] text-[#E07000] font-bold mt-1">
+                        ⚠️ Changing PIN will update kiosk access
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
+                      Join Date
+                    </label>
+                    <input
+                      type="date"
+                      value={editStaffForm.join_date}
+                      onChange={(e) => setEditStaffForm({ ...editStaffForm, join_date: e.target.value })}
+                      className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
+                    Date of Birth
+                  </label>
+                  <input
+                    type="date"
+                    value={editStaffForm.date_of_birth || ''}
+                    onChange={(e) => setEditStaffForm({ ...editStaffForm, date_of_birth: e.target.value })}
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
+                    Mobile Number (for staff login)
+                  </label>
+                  <input
+                    type="tel"
+                    pattern="[0-9]{10}"
+                    maxLength={10}
+                    value={editStaffForm.mobile_number || ''}
+                    onChange={(e) => setEditStaffForm({ ...editStaffForm, mobile_number: e.target.value.replace(/\D/g, '').substring(0, 10) })}
+                    placeholder="e.g. 9876543210"
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-mono"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
+                      Branch
+                    </label>
+                    <select
+                      value={editStaffForm.branch_id}
+                      onChange={(e) => setEditStaffForm({ ...editStaffForm, branch_id: e.target.value })}
+                      className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
+                      disabled={!!userBranch}
+                      required
+                    >
+                      <option value="">Select branch...</option>
+                      <option value="daily">Nearbi Daily</option>
+                      <option value="hypermarket">Nearbi Hypermarket</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
+                      Department
+                    </label>
+                    <select
+                      value={editStaffForm.department}
+                      onChange={(e) => setEditStaffForm({ ...editStaffForm, department: e.target.value })}
+                      className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
+                      required
+                    >
+                      <option value="">Select...</option>
+                      {DEPARTMENTS.map((dept) => (
+                        <option key={dept} value={dept}>
+                          {dept}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
+                    Shift Profile
+                  </label>
+                  <select
+                    value={editIsCustomShift ? 'custom' : editStaffForm.shift_id}
+                    onChange={(e) => {
+                      if (e.target.value === 'custom') {
+                        setEditIsCustomShift(true);
+                      } else {
+                        setEditIsCustomShift(false);
+                        setEditStaffForm({ ...editStaffForm, shift_id: e.target.value });
+                      }
+                    }}
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] mb-2 font-bold"
+                    required={!editIsCustomShift}
+                  >
+                    {shifts.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.label} ({s.start_time} - {s.end_time})
+                      </option>
+                    ))}
+                    <option value="custom">+ Create custom shift...</option>
+                  </select>
+
+                  {editIsCustomShift && (
+                    <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-4 space-y-3 mt-2">
+                      <h4 className="text-xs font-bold text-[#1A1A1A]">New Custom Shift</h4>
+                      {editCustomShiftError && (
+                        <div className="bg-[#FDECEA] border border-[#C0392B]/20 text-[#C0392B] text-[10px] font-bold p-2 rounded-[12px]">
+                          {editCustomShiftError}
+                        </div>
+                      )}
+                      <div>
+                        <label className="block text-[10px] font-bold text-[var(--text-muted)] mb-0.5">
+                          Shift Label
+                        </label>
+                        <input
+                          type="text"
+                          value={editCustomShift.label}
+                          onChange={(e) => setEditCustomShift({ ...editCustomShift, label: e.target.value })}
+                          placeholder="e.g. General Shift"
+                          className="w-full bg-white border border-[#E8E8E8] rounded-[12px] p-2 text-xs focus:outline-none text-[#1A1A1A] focus:border-[#1A1A1A]"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[10px] font-bold text-[var(--text-muted)] mb-0.5">
+                            Start Time
+                          </label>
+                          <input
+                            type="time"
+                            value={editCustomShift.start_time}
+                            onChange={(e) => setEditCustomShift({ ...editCustomShift, start_time: e.target.value })}
+                            className="w-full bg-white border border-[#E8E8E8] rounded-[12px] p-2 text-xs focus:outline-none text-[#1A1A1A] focus:border-[#1A1A1A]"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-[var(--text-muted)] mb-0.5">
+                            End Time
+                          </label>
+                          <input
+                            type="time"
+                            value={editCustomShift.end_time}
+                            onChange={(e) => setEditCustomShift({ ...editCustomShift, end_time: e.target.value })}
+                            className="w-full bg-white border border-[#E8E8E8] rounded-[12px] p-2 text-xs focus:outline-none text-[#1A1A1A] focus:border-[#1A1A1A]"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditIsCustomShift(false);
+                            if (shifts.length > 0) {
+                              setEditStaffForm((prev) => ({ ...prev, shift_id: shifts[0].id }));
+                            }
+                          }}
+                          className="text-xs text-[#555555] font-bold hover:underline"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleEditAddCustomShift}
+                          disabled={editCustomShiftLoading}
+                          className="bg-[#1A1A1A] text-white hover:bg-[#333333] font-bold text-xs px-3.5 py-1.5 rounded-[12px] active:scale-95 transition-all shadow-md"
+                        >
+                          {editCustomShiftLoading ? 'Creating...' : 'Create Shift'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Off Days Choice */}
+                <div>
+                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1.5">
+                    Monthly Off Days
+                  </label>
+                  <div className="flex gap-2">
+                    {[0, 2, 4].map((num) => {
+                      const isSelected = editStaffForm.off_days_per_month === num;
+                      return (
+                        <button
+                          key={num}
+                          type="button"
+                          onClick={() => setEditStaffForm({ ...editStaffForm, off_days_per_month: num as any })}
+                          className={`flex-1 py-2.5 rounded-[12px] border text-xs font-bold transition-all cursor-pointer ${
+                            isSelected
+                              ? 'bg-[#1A1A1A] text-white border-[#1A1A1A]'
+                              : 'bg-white text-[#555555] border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-95'
+                          }`}
+                        >
+                          {num} Days
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Monthly Salary Input (Admin/Ops only) */}
+                {canSeeSalaryBreakdown && (
+                  <div>
+                    <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
+                      Monthly Salary (₹)
+                    </label>
+                    <input
+                      type="number"
+                      value={editStaffForm.monthly_salary}
+                      onChange={(e) => setEditStaffForm({ ...editStaffForm, monthly_salary: e.target.value })}
+                      placeholder="e.g. 15000"
+                      className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
+                      required
+                    />
+                  </div>
+                )}
+              </form>
+            </div>
+
+            {/* Sticky footer with actions */}
+            <div
+              style={{
+                position: 'sticky' as const,
+                bottom: 0,
+                background: '#FFFFFF',
+                padding: '12px 16px',
+                paddingBottom: 'max(12px, env(safe-area-inset-bottom))',
+                borderTop: '1px solid #E8E8E8',
+                zIndex: 100,
+                marginTop: 'auto',
+                flexShrink: 0,
+              }}
+            >
+              <button
+                type="submit"
+                form="edit-staff-form"
+                disabled={formLoading}
+                className="w-full min-h-[44px] bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold text-sm rounded-[12px] active:scale-95 transition-all shadow-md cursor-pointer flex items-center justify-center"
+              >
+                {formLoading ? 'Saving...' : 'Save Changes'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Shift Change Recalculation Confirmation modal */}
+      {showShiftConfirm && (
+        <div className="fixed inset-0 z-[12000] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setShowShiftConfirm(false)}
+          />
+          <div className="bg-white rounded-[16px] shadow-2xl relative z-10 p-6 w-full max-w-xs text-center border border-[#E8E8E8] flex flex-col items-center">
+            <AlertCircle size={36} strokeWidth={1.5} style={{ color: '#FBBF24' }} className="mb-3" />
+            <h3 className="text-base font-bold text-[#1A1A1A] mb-1">
+              Recalculate Fines?
+            </h3>
+            <p className="text-xs text-[#555555] leading-relaxed mb-6">
+              Shift changed to {shifts.find(s => s.id === editStaffForm.shift_id)?.label || 'new shift'}.
+              Recalculate this month's late fines based on new shift time?
+            </p>
+
+            <div className="flex gap-3 w-full">
+              <button
+                type="button"
+                onClick={() => handleSaveEditStaff(false)}
+                className="flex-1 bg-[#F2F2F2] hover:bg-[#EBEBEB] text-[#555555] font-bold text-xs py-2.5 rounded-[10px] active:scale-95 cursor-pointer"
+              >
+                Skip
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSaveEditStaff(true)}
+                className="flex-1 bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold text-xs py-2.5 rounded-[10px] active:scale-95 transition-all shadow cursor-pointer"
+              >
+                Recalculate
+              </button>
+            </div>
           </div>
         </div>
       )}

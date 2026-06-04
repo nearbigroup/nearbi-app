@@ -6,9 +6,9 @@ import BulkConfirmTab from '@/components/salary/BulkConfirmTab';
 import PayslipTab from '@/components/salary/PayslipTab';
 import PaymentTrackerTab from '@/components/salary/PaymentTrackerTab';
 import MonthlyReportTab from '@/components/salary/MonthlyReportTab';
-import { Lock, Calculator, User, Calendar } from 'lucide-react';
+import { Lock, Calculator, User, Calendar, RefreshCw } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import { calculateSalary } from '@/lib/salary';
+import { calculateSalary, getDaysInMonth } from '@/lib/salary';
 import { formatCurrency, getPastMonths, formatMonthDisplay } from '@/components/salary/utils';
 
 type Tab = 'bulk_confirm' | 'payslip' | 'payments' | 'report' | 'calculator';
@@ -23,6 +23,96 @@ export default function SalaryPage() {
   const [selectedMonth, setSelectedMonth] = useState(getPastMonths(3)[0]);
   const [calcResult, setCalcResult] = useState<any>(null);
   const [calcLoading, setCalcLoading] = useState(false);
+
+  const [liveSalary, setLiveSalary] = useState<any>(null);
+  const [liveLoading, setLiveLoading] = useState(false);
+
+  const fetchLiveSalary = async (staffId: string) => {
+    if (!staffId) {
+      setLiveSalary(null);
+      return;
+    }
+    setLiveLoading(true);
+    try {
+      const staff = staffList.find((s) => s.id === staffId);
+      if (!staff) return;
+
+      const d = new Date();
+      const currentYear = d.getFullYear();
+      const currentMonth = d.getMonth() + 1;
+      const monthStr = String(currentMonth).padStart(2, '0');
+      const currentMonthKey = `${currentYear}-${monthStr}`;
+
+      const calendarDays = getDaysInMonth(currentYear, currentMonth);
+      const firstDay = `${currentMonthKey}-01`;
+      const lastDay = `${currentMonthKey}-${String(calendarDays).padStart(2, '0')}`;
+
+      const { data: attRecords } = await supabase
+        .from('attendance')
+        .select('check_in_time, ot_minutes, ot_approved, early_in_minutes, early_in_approved, early_leave_minutes')
+        .eq('staff_id', staffId)
+        .gte('date', firstDay)
+        .lte('date', lastDay);
+
+      const daysWorked = attRecords?.filter(r => r.check_in_time !== null).length || 0;
+      const approvedOT = attRecords?.filter(r => r.ot_approved).reduce((sum, r) => sum + (r.ot_minutes || 0), 0) || 0;
+      const approvedEarlyIn = attRecords?.filter(r => r.early_in_approved).reduce((sum, r) => sum + (r.early_in_minutes || 0), 0) || 0;
+      const earlyLeave = attRecords?.reduce((sum, r) => sum + (r.early_leave_minutes || 0), 0) || 0;
+
+      const { data: lateFines } = await supabase
+        .from('late_fines')
+        .select('fine_amount')
+        .eq('staff_id', staffId)
+        .eq('month', currentMonthKey)
+        .eq('confirmed', true)
+        .eq('waived', false);
+
+      const lateFinesSum = lateFines?.reduce((sum, f) => sum + Number(f.fine_amount), 0) || 0;
+
+      const { data: specialFines } = await supabase
+        .from('special_fines')
+        .select('amount, edited_amount')
+        .eq('staff_id', staffId)
+        .eq('month', currentMonthKey)
+        .eq('confirmed', true)
+        .eq('waived', false);
+
+      const specialFinesSum = specialFines?.reduce((sum, f) => sum + Number(f.edited_amount ?? f.amount), 0) || 0;
+
+      const dailyRate = staff.monthly_salary / calendarDays;
+      const shiftHours = staff.shift?.hours || staff.shifts?.hours || 9;
+      const hourlyRate = dailyRate / shiftHours;
+
+      const daysRemaining = calendarDays - daysWorked;
+      const grossPay = daysWorked * dailyRate;
+      const otEarned = (approvedOT / 60) * hourlyRate;
+      const earlyInEarned = (approvedEarlyIn / 60) * hourlyRate;
+      const earlyLeaveDeduction = (earlyLeave / 60) * hourlyRate;
+      const finesSoFar = lateFinesSum + specialFinesSum;
+
+      const netSalary = grossPay + otEarned + earlyInEarned - earlyLeaveDeduction - finesSoFar;
+
+      setLiveSalary({
+        daysWorked,
+        daysRemaining,
+        calendarDays,
+        grossPay: Math.round(grossPay),
+        otEarned: Math.round(otEarned),
+        finesSoFar: Math.round(finesSoFar),
+        netSalary: Math.round(netSalary),
+        hourlyRate,
+        dailyRate
+      });
+    } catch (err) {
+      console.error('Error fetching live salary:', err);
+    } finally {
+      setLiveLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchLiveSalary(selectedStaffId);
+  }, [selectedStaffId, staffList]);
 
   useEffect(() => {
     async function loadStaff() {
@@ -223,6 +313,9 @@ export default function SalaryPage() {
             setSelectedMonth={setSelectedMonth}
             calcResult={calcResult}
             calcLoading={calcLoading}
+            liveSalary={liveSalary}
+            liveLoading={liveLoading}
+            fetchLiveSalary={fetchLiveSalary}
           />
         )}
       </div>
@@ -238,6 +331,9 @@ function SalaryCalculatorTab({
   setSelectedMonth,
   calcResult,
   calcLoading,
+  liveSalary,
+  liveLoading,
+  fetchLiveSalary,
 }: any) {
   const months = getPastMonths(3);
 
@@ -289,6 +385,65 @@ function SalaryCalculatorTab({
           </div>
         </div>
       </div>
+
+      {/* Live Salary Card */}
+      {selectedStaffId && (
+        <div className="bg-[#1A1A1A] border border-transparent text-white rounded-[14px] p-5 shadow-lg relative overflow-hidden flex flex-col space-y-4">
+          <div className="flex justify-between items-center">
+            <div>
+              <p className="text-[10px] text-white/50 font-bold uppercase tracking-wider">Featured Metrics</p>
+              <h3 className="text-sm font-extrabold text-white mt-0.5">Current Month Live Salary</h3>
+            </div>
+            <button
+              onClick={() => fetchLiveSalary(selectedStaffId)}
+              disabled={liveLoading}
+              className="text-white/60 hover:text-white p-1.5 rounded-full hover:bg-white/10 transition-colors cursor-pointer"
+            >
+              <RefreshCw size={16} className={`${liveLoading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+
+          {liveLoading && !liveSalary ? (
+            <div className="py-6 flex justify-center items-center">
+              <RefreshCw size={24} className="animate-spin text-white/60" />
+            </div>
+          ) : liveSalary ? (
+            <div className="space-y-4 pt-1">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <span className="text-[10px] font-bold text-white/40 uppercase tracking-wider block">Net Current Salary</span>
+                  <span className="text-2xl font-black text-white block mt-1 leading-none">{formatCurrency(liveSalary.netSalary)}</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] font-bold text-white/40 uppercase tracking-wider block">Days Worked</span>
+                  <span className="text-base font-extrabold text-white block mt-1 leading-none">{liveSalary.daysWorked} / {liveSalary.calendarDays}</span>
+                </div>
+              </div>
+              <div className="grid grid-cols-4 gap-2 border-t border-white/10 pt-3.5 text-xs text-white/70">
+                <div>
+                  <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Remaining</span>
+                  <span className="font-extrabold text-white block mt-0.5">{liveSalary.daysRemaining} days</span>
+                </div>
+                <div>
+                  <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Gross Pay</span>
+                  <span className="font-extrabold text-white block mt-0.5">{formatCurrency(liveSalary.grossPay)}</span>
+                </div>
+                <div>
+                  <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">OT Earned</span>
+                  <span className="font-extrabold text-white block mt-0.5">{formatCurrency(liveSalary.otEarned)}</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Fines So Far</span>
+                  <span className="font-extrabold text-white block mt-0.5">{formatCurrency(liveSalary.finesSoFar)}</span>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <p className="text-xs text-white/50 italic py-2">Select staff to load live salary.</p>
+          )}
+        </div>
+      )}
+
 
       {calcLoading && (
         <div className="space-y-3">
