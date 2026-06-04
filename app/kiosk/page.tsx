@@ -180,6 +180,15 @@ export default function KioskPage() {
         throw new Error('PIN not found for this branch');
       }
 
+      // Normalize shift object if it comes as an array or from alternate keys
+      let normalizedShift = null;
+      if (data.shift) {
+        normalizedShift = Array.isArray(data.shift) ? data.shift[0] : data.shift;
+      } else if (data.shifts) {
+        normalizedShift = Array.isArray(data.shifts) ? data.shifts[0] : data.shifts;
+      }
+      data.shift = normalizedShift;
+
       setStaff(data);
       setKioskState('STAFF_FOUND');
     } catch (err: any) {
@@ -326,7 +335,7 @@ export default function KioskPage() {
         const now = new Date();
         const checkInTimeStr = now.toTimeString().split(' ')[0].substring(0, 5); // "HH:MM"
 
-        const shiftStartStr = staff.shift.start_time; // "HH:MM"
+        const shiftStartStr = staff.shift?.start_time || '09:00'; // "HH:MM"
         const [sh, sm] = shiftStartStr.split(':').map(Number);
         const shiftMins = sh * 60 + sm;
         const currentMins = now.getHours() * 60 + now.getMinutes();

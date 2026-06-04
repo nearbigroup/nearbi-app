@@ -212,6 +212,16 @@ export default function AttendancePage() {
     }
   }, [liveColorCode, editStatus, detailRecord, fineSettings]);
 
+  const calculateOTFromImport = (checkOut: string | null, shiftEnd: string | null): number => {
+    if (!checkOut || !shiftEnd) return 0;
+    const [eh, em] = shiftEnd.split(':').map(Number);
+    const [ah, am] = checkOut.split(':').map(Number);
+    const endMins = eh * 60 + em;
+    const outMins = ah * 60 + am;
+    const extra = outMins - endMins;
+    return extra >= 30 ? extra : 0;
+  };
+
   const calculateDerivedFields = (
     checkIn: string | null,
     checkOut: string | null,
@@ -1128,8 +1138,20 @@ export default function AttendancePage() {
 
         if (staffErr) throw staffErr;
 
+        const normalizedStaffList = staffList?.map(s => {
+          let normalizedShift = null;
+          const shiftData = (s as any).shift ?? (s as any).shifts ?? null;
+          if (shiftData) {
+            normalizedShift = Array.isArray(shiftData) ? shiftData[0] : shiftData;
+          }
+          return {
+            ...s,
+            shift: normalizedShift
+          };
+        }) || [];
+
         const pinToStaff = new Map(
-          staffList?.map(s => [s.pin, s]) || []
+          normalizedStaffList.map(s => [s.pin, s])
         );
 
         // Fetch existing attendance records
@@ -1315,7 +1337,7 @@ export default function AttendancePage() {
 
         if (row.outTime) {
           const shiftEnd = row.shift?.end_time || '18:00';
-          otMinutes = calculateOTMinutes(shiftEnd, row.outTime);
+          otMinutes = calculateOTFromImport(row.outTime, shiftEnd);
           actualHoursWorked = calculateActualHours(row.inTime, row.outTime);
         }
 
@@ -1508,7 +1530,19 @@ export default function AttendancePage() {
           setStaff([]);
         } else {
           console.log('Staff count:', sData?.length);
-          setStaff((sData || []) as unknown as StaffMember[]);
+          const normalizedStaff = (sData || []).map((s: any) => {
+            let normalizedShift = null;
+            if (s.shift) {
+              normalizedShift = Array.isArray(s.shift) ? s.shift[0] : s.shift;
+            } else if (s.shifts) {
+              normalizedShift = Array.isArray(s.shifts) ? s.shifts[0] : s.shifts;
+            }
+            return {
+              ...s,
+              shift: normalizedShift
+            };
+          });
+          setStaff(normalizedStaff as unknown as StaffMember[]);
           setErrorMsg('');
         }
       } catch (err: any) {

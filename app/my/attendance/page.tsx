@@ -25,7 +25,17 @@ interface FineItem {
   type: 'late' | 'special';
   fine_amount: number;
   waived: boolean;
+  confirmed: boolean;
+  late_minutes?: number;
   reason?: string;
+}
+
+interface AttendanceAdjustment {
+  id: string;
+  date: string;
+  type: 'ot' | 'early_in';
+  minutes: number;
+  status: 'pending' | 'approved' | 'rejected';
 }
 
 export default function StaffAttendancePage() {
@@ -40,6 +50,7 @@ export default function StaffAttendancePage() {
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [leaves, setLeaves] = useState<any[]>([]);
   const [fines, setFines] = useState<FineItem[]>([]);
+  const [adjustments, setAdjustments] = useState<AttendanceAdjustment[]>([]);
   const [staff, setStaff] = useState<any>(null);
   const [selectedDayDetail, setSelectedDayDetail] = useState<any | null>(null);
 
@@ -59,6 +70,16 @@ export default function StaffAttendancePage() {
         .select('*, shift:shifts(*)')
         .eq('id', user.staffId)
         .single();
+      
+      if (sData) {
+        let normalizedShift = null;
+        if (sData.shift) {
+          normalizedShift = Array.isArray(sData.shift) ? sData.shift[0] : sData.shift;
+        } else if (sData.shifts) {
+          normalizedShift = Array.isArray(sData.shifts) ? sData.shifts[0] : sData.shifts;
+        }
+        sData.shift = normalizedShift;
+      }
       setStaff(sData);
 
       // 2. Fetch Attendance for Month
@@ -79,6 +100,15 @@ export default function StaffAttendancePage() {
         .gte('date', startOfMonth)
         .lte('date', endOfMonth);
       setLeaves(leaveData || []);
+
+      // Fetch Attendance Adjustments for Month (for OT status)
+      const { data: adjData } = await supabase
+        .from('attendance_adjustments')
+        .select('*')
+        .eq('staff_id', user.staffId)
+        .gte('date', startOfMonth)
+        .lte('date', endOfMonth);
+      setAdjustments(adjData || []);
 
       // 4. Fetch Fines for Month (both late and special)
       const { data: lfData } = await supabase
@@ -101,20 +131,21 @@ export default function StaffAttendancePage() {
           type: 'late',
           fine_amount: Number(f.fine_amount || 0),
           waived: !!f.waived,
+          confirmed: !!f.confirmed,
+          late_minutes: f.late_minutes,
           reason: `Arrived ${f.late_minutes} mins late`
         });
       });
       (sfData || []).forEach(f => {
-        if (f.confirmed || f.waived) {
-          combinedFines.push({
-            id: f.id,
-            date: f.date,
-            type: 'special',
-            fine_amount: f.edited_amount !== null && f.edited_amount !== undefined ? Number(f.edited_amount) : Number(f.amount),
-            waived: !!f.waived,
-            reason: f.reason || 'Uniform or operational issue'
-          });
-        }
+        combinedFines.push({
+          id: f.id,
+          date: f.date,
+          type: 'special',
+          fine_amount: f.edited_amount !== null && f.edited_amount !== undefined ? Number(f.edited_amount) : Number(f.amount),
+          waived: !!f.waived,
+          confirmed: !!f.confirmed,
+          reason: f.reason || 'Uniform or operational issue'
+        });
       });
       setFines(combinedFines);
 
@@ -529,40 +560,92 @@ export default function StaffAttendancePage() {
                       <span className="font-mono font-black">{selectedDayDetail.record.minutes_late} mins</span>
                     </div>
                   )}
-                  {selectedDayDetail.record.ot_minutes > 0 && (
-                    <div className="flex justify-between text-emerald-700">
-                      <span>OT (Hours/Minutes only):</span>
-                      <span className="font-mono font-black">
-                        {(() => {
-                          const hrs = Math.floor(selectedDayDetail.record.ot_minutes / 60);
-                          const mins = selectedDayDetail.record.ot_minutes % 60;
-                          const hrsStr = hrs > 0 ? `${hrs} hrs ` : '';
-                          const minsStr = mins > 0 ? `${mins} mins` : '';
-                          return `OT: ${hrsStr}${minsStr} ${selectedDayDetail.record.ot_approved ? '✓' : '(Pending)'}`;
-                        })()}
-                      </span>
-                    </div>
-                  )}
+                  <div className="flex justify-between items-center">
+                    <span>Overtime:</span>
+                    {(() => {
+                      const otMinutes = selectedDayDetail.record ? selectedDayDetail.record.ot_minutes || 0 : 0;
+                      const checkOutTime = selectedDayDetail.record ? selectedDayDetail.record.check_out_time : null;
+                      
+                      let shiftEnd = '18:00';
+                      if (staff?.shift) {
+                        const s = Array.isArray(staff.shift) ? staff.shift[0] : staff.shift;
+                        shiftEnd = s?.end_time || '18:00';
+                      } else if (staff?.shifts) {
+                        const s = Array.isArray(staff.shifts) ? staff.shifts[0] : staff.shifts;
+                        shiftEnd = s?.end_time || '18:00';
+                      }
+
+                      if (otMinutes > 0) {
+                        const otAdj = adjustments.find(adj => adj.date === selectedDayDetail.dateStr && adj.type === 'ot');
+                        const status = otAdj ? otAdj.status : (selectedDayDetail.record?.ot_approved ? 'approved' : 'pending');
+                        
+                        const hrs = Math.floor(otMinutes / 60);
+                        const mins = otMinutes % 60;
+                        const timeStr = `${hrs > 0 ? `${hrs}h ` : ''}${mins}m`;
+                        
+                        if (status === 'approved') {
+                          return <span className="text-emerald-600 font-bold font-mono">{timeStr} (Approved ✓)</span>;
+                        } else if (status === 'rejected') {
+                          return <span className="text-gray-500 font-bold font-mono">{timeStr} (Not approved)</span>;
+                        } else {
+                          return <span className="text-amber-600 font-bold font-mono">{timeStr} (Pending approval)</span>;
+                        }
+                      } else {
+                        if (!checkOutTime) {
+                          return <span className="text-gray-400 font-mono">No OT recorded</span>;
+                        } else {
+                          const [eh, em] = shiftEnd.split(':').map(Number);
+                          const [oh, om] = checkOutTime.split(':').map(Number);
+                          const shiftEndMins = eh * 60 + em;
+                          const checkoutMins = oh * 60 + om;
+                          const diff = checkoutMins - shiftEndMins;
+                          if (diff > 0 && diff < 30) {
+                            return <span className="text-gray-400 font-mono">No OT (left before 30m threshold)</span>;
+                          } else {
+                            return <span className="text-gray-400 font-mono">No OT recorded</span>;
+                          }
+                        }
+                      }
+                    })()}
+                  </div>
                 </>
               )}
 
-              {/* Fines info with exact ₹ and reasons */}
-              {selectedDayDetail.fines && selectedDayDetail.fines.length > 0 ? (
+              {/* Fines info with exact ₹ and status badges */}
+              {selectedDayDetail.fines && selectedDayDetail.fines.length > 0 && (
                 <div className="border-t border-gray-100 pt-3 mt-3 space-y-2">
                   <span className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-wider">Logged Deductions</span>
-                  {selectedDayDetail.fines.map((f: any) => (
-                    <div key={f.id} className="bg-red-50/50 border border-red-100/50 rounded-xl p-2.5 flex flex-col space-y-1">
-                      <div className="flex justify-between text-xs">
-                        <span className="capitalize text-red-900 font-bold">{f.type} Fine</span>
-                        <span className={`font-mono font-black ${f.waived ? 'text-gray-400 line-through' : 'text-red-750'}`}>
-                          ₹{f.fine_amount}
-                        </span>
+                  {selectedDayDetail.fines.map((f: any) => {
+                    let badgeText = 'Pending';
+                    let badgeClass = 'text-amber-700 bg-amber-50 border-amber-100';
+                    if (f.waived) {
+                      badgeText = 'Waived';
+                      badgeClass = 'text-gray-500 bg-gray-50 border-gray-150';
+                    } else if (f.confirmed) {
+                      badgeText = 'Confirmed';
+                      badgeClass = 'text-emerald-700 bg-emerald-50 border-emerald-100';
+                    }
+
+                    return (
+                      <div key={f.id} className="bg-red-50/50 border border-red-100/50 rounded-xl p-2.5 flex flex-col space-y-1.5">
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="capitalize text-red-900 font-bold">{f.type} Fine</span>
+                          <span className={`font-mono font-black ${f.waived ? 'text-gray-400 line-through' : 'text-red-750'}`}>
+                            ₹{f.fine_amount}
+                          </span>
+                        </div>
+                        <div className="flex justify-between items-center gap-2">
+                          <p className="text-[10px] text-red-800 font-medium leading-tight flex-1">{f.reason}</p>
+                          <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded border ${badgeClass}`}>
+                            {badgeText}
+                          </span>
+                        </div>
                       </div>
-                      <p className="text-[10px] text-red-800 font-medium">{f.reason} {f.waived && '(Waived)'}</p>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
-              ) : selectedDayDetail.record?.status === 'late' && (
+              )}
+              {selectedDayDetail.record?.status === 'late' && (!selectedDayDetail.fines || selectedDayDetail.fines.length === 0) && (
                 <p className="text-[10px] text-gray-400 italic text-center pt-2">Fine details not computed yet</p>
               )}
             </div>
