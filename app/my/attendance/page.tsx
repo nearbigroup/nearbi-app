@@ -3,7 +3,8 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
-import { ChevronLeft, ChevronRight, X, Clock, AlertTriangle, AlertCircle, CheckCircle } from 'lucide-react';
+import { ChevronLeft, ChevronRight, X, Clock, AlertTriangle, AlertCircle, CheckCircle, Calendar, Sparkles } from 'lucide-react';
+import { HOLIDAYS } from '@/lib/data';
 
 interface AttendanceRecord {
   id: string;
@@ -24,6 +25,7 @@ interface FineItem {
   type: 'late' | 'special';
   fine_amount: number;
   waived: boolean;
+  reason?: string;
 }
 
 export default function StaffAttendancePage() {
@@ -45,8 +47,11 @@ export default function StaffAttendancePage() {
     if (!user || !user.staffId) return;
     setLoading(true);
     try {
+      const year = parseInt(selectedMonth.split('-')[0]);
+      const monthNum = parseInt(selectedMonth.split('-')[1]);
+      const lastDay = new Date(year, monthNum, 0).getDate();
       const startOfMonth = `${selectedMonth}-01`;
-      const endOfMonth = `${selectedMonth}-31`;
+      const endOfMonth = `${selectedMonth}-${lastDay}`;
 
       // 1. Fetch Staff info for shift
       const { data: sData } = await supabase
@@ -95,17 +100,19 @@ export default function StaffAttendancePage() {
           date: f.date,
           type: 'late',
           fine_amount: Number(f.fine_amount || 0),
-          waived: !!f.waived
+          waived: !!f.waived,
+          reason: `Arrived ${f.late_minutes} mins late`
         });
       });
       (sfData || []).forEach(f => {
-        if (f.confirmed) {
+        if (f.confirmed || f.waived) {
           combinedFines.push({
             id: f.id,
             date: f.date,
             type: 'special',
             fine_amount: f.edited_amount !== null && f.edited_amount !== undefined ? Number(f.edited_amount) : Number(f.amount),
-            waived: !!f.waived
+            waived: !!f.waived,
+            reason: f.reason || 'Uniform or operational issue'
           });
         }
       });
@@ -151,9 +158,7 @@ export default function StaffAttendancePage() {
     const present = attendance.filter(a => a.status === 'present' || a.status === 'late').length;
     const late = attendance.filter(a => a.status === 'late').length;
     const absent = attendance.filter(a => a.status === 'absent').length;
-    const otMins = attendance.reduce((sum, a) => sum + (a.ot_approved ? a.ot_minutes : 0), 0);
-    const otHours = Math.round((otMins / 60) * 10) / 10;
-    return { present, late, absent, otHours };
+    return { present, late, absent };
   }, [attendance]);
 
   const calendarDays = useMemo(() => {
@@ -177,6 +182,74 @@ export default function StaffAttendancePage() {
     return days;
   }, [selectedMonth]);
 
+  // Next 7 days schedule
+  const next7DaysSchedule = useMemo(() => {
+    if (!staff || !staff.shift) return [];
+    const schedule = [];
+    const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const today = new Date();
+    
+    for (let i = 1; i <= 7; i++) {
+      const futureDate = new Date(today);
+      futureDate.setDate(today.getDate() + i);
+      const dateStr = futureDate.toISOString().split('T')[0];
+      const isSunday = futureDate.getDay() === 0;
+      
+      const holiday = HOLIDAYS.find(h => h.date === dateStr);
+      let label = staff.shift.label;
+      let note = 'Standard Shift';
+      
+      if (isSunday && staff.off_days_per_month > 0) {
+        label = 'WEEKLY OFF';
+        note = 'Off day';
+      } else if (holiday) {
+        label = `HOLIDAY (${holiday.name})`;
+        note = 'Public Holiday';
+      }
+      
+      schedule.push({
+        dateStr: futureDate.toLocaleDateString('en-US', { day: 'numeric', month: 'short' }),
+        dayName: daysOfWeek[futureDate.getDay()],
+        shiftLabel: label,
+        note
+      });
+    }
+    return schedule;
+  }, [staff]);
+
+  // Missed clocks (past dates where check-in exists but checkout is missing, or vice versa)
+  const missedClocks = useMemo(() => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const missedOut: string[] = [];
+    const missedIn: string[] = [];
+    
+    attendance.forEach(a => {
+      if (a.date < todayStr) {
+        if (a.check_in_time && !a.check_out_time) {
+          missedOut.push(a.date);
+        }
+        if (!a.check_in_time && a.check_out_time) {
+          missedIn.push(a.date);
+        }
+      }
+    });
+    
+    return { missedIn, missedOut };
+  }, [attendance]);
+
+  const getBranchLabel = (branchId: string) => {
+    return branchId === 'daily' ? 'Nearbi Daily' : 'Nearbi Hypermarket';
+  };
+
+  const formatDate = (dateStr: string) => {
+    return new Date(dateStr).toLocaleDateString('en-US', {
+      weekday: 'short',
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+    });
+  };
+
   if (loading && attendance.length === 0) {
     return (
       <div className="space-y-4">
@@ -189,9 +262,38 @@ export default function StaffAttendancePage() {
 
   return (
     <div className="space-y-5">
-      {/* Month Selector header */}
+      
+      {/* 1. Shift Schedule banner at top */}
+      {staff?.shift && (
+        <div className="bg-white border border-[#E8E8E8] rounded-2xl p-4 shadow-sm flex flex-col space-y-3">
+          <div className="flex items-center space-x-2.5">
+            <div className="w-8 h-8 rounded-lg bg-gray-50 flex items-center justify-center text-[#1a1a1a]">
+              <Clock size={16} />
+            </div>
+            <div>
+              <span className="text-[10px] font-black uppercase text-[var(--text-muted)] tracking-wider">Current Shift Schedule</span>
+              <h4 className="text-xs font-black text-[#1A1A1A] mt-0.5">Your shift: {staff.shift.label}</h4>
+            </div>
+          </div>
+          
+          {/* Next 7 Days Collapsible/List */}
+          <div className="bg-gray-50/50 border border-gray-100 rounded-xl p-3 space-y-2 text-[11px] font-semibold text-gray-600">
+            <span className="text-[9px] font-black text-[var(--text-muted)] uppercase tracking-wider block border-b border-gray-200/50 pb-1 mb-1.5">Next 7 Days Schedule</span>
+            {next7DaysSchedule.map((day, idx) => (
+              <div key={idx} className="flex justify-between items-center">
+                <span>{day.dateStr} ({day.dayName}):</span>
+                <span className={`font-black ${day.shiftLabel.includes('OFF') || day.shiftLabel.includes('HOLIDAY') ? 'text-gray-400 font-bold' : 'text-[#1A1A1A]'}`}>
+                  {day.shiftLabel}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 2. Month Selector header */}
       <div className="flex items-center justify-between bg-white border border-[#E8E8E8] rounded-[14px] p-3 shadow-sm">
-        <span className="text-xs font-extrabold text-[#1A1A1A] uppercase tracking-wider">Attendance Register</span>
+        <span className="text-xs font-extrabold text-[#1A1A1A] uppercase tracking-wider">Attendance Calendar</span>
         <div className="flex items-center space-x-1 bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg px-2.5 py-1">
           <button onClick={handlePrevMonth} className="p-1 text-[var(--text-secondary)] hover:text-[#1A1A1A] transition-colors">
             <ChevronLeft size={16} />
@@ -205,8 +307,8 @@ export default function StaffAttendancePage() {
         </div>
       </div>
 
-      {/* Summary stats bar */}
-      <div className="grid grid-cols-4 gap-2">
+      {/* 3. Summary stats bar */}
+      <div className="grid grid-cols-3 gap-2">
         <div className="bg-white border border-[#E8E8E8] rounded-xl p-2.5 text-center flex flex-col items-center shadow-sm">
           <span className="text-base font-extrabold text-[var(--success)] font-mono leading-none">{stats.present}</span>
           <span className="text-[8px] text-[var(--text-muted)] font-bold uppercase tracking-wider mt-1.5 leading-none">Present</span>
@@ -219,13 +321,9 @@ export default function StaffAttendancePage() {
           <span className="text-base font-extrabold text-[var(--danger)] font-mono leading-none">{stats.absent}</span>
           <span className="text-[8px] text-[var(--text-muted)] font-bold uppercase tracking-wider mt-1.5 leading-none">Absent</span>
         </div>
-        <div className="bg-white border border-[#E8E8E8] rounded-xl p-2.5 text-center flex flex-col items-center shadow-sm">
-          <span className="text-base font-extrabold text-[var(--info)] font-mono leading-none">{stats.otHours}h</span>
-          <span className="text-[8px] text-[var(--text-muted)] font-bold uppercase tracking-wider mt-1.5 leading-none">OT Hours</span>
-        </div>
       </div>
 
-      {/* Calendar Grid */}
+      {/* 4. Calendar Grid */}
       <div className="bg-white border border-[#E8E8E8] rounded-[18px] p-4 shadow-sm">
         <div className="grid grid-cols-7 gap-1.5 text-center mb-3">
           {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((h, i) => (
@@ -244,42 +342,45 @@ export default function StaffAttendancePage() {
             const dateStr = `${selectedMonth}-${String(day).padStart(2, '0')}`;
             const record = attendance.find(a => a.date === dateStr);
             const isFuture = new Date(dateStr + 'T00:00:00') > new Date();
+            const holiday = HOLIDAYS.find(h => h.date === dateStr);
+            const isSunday = new Date(dateStr + 'T00:00:00').getDay() === 0;
 
             let cellClass = "aspect-square rounded-xl flex items-center justify-center text-xs font-extrabold transition-all border ";
             let dotColor = null;
 
             if (isFuture) {
-              cellClass += "bg-transparent border-[var(--border)] text-[var(--text-muted)] opacity-30 cursor-not-allowed";
+              cellClass += "bg-gray-50/50 border-gray-100 text-gray-300 opacity-50 cursor-not-allowed";
             } else if (record) {
               if (record.status === 'present' || record.status === 'late') {
                 if (record.color_code === 'green') {
                   cellClass += "bg-[var(--success-bg)] border-[var(--success)]/20 text-[var(--success)] hover:bg-[var(--success-bg)]/80";
                   dotColor = "bg-[var(--success)]";
                 } else if (record.color_code === 'yellow') {
-                  cellClass += "bg-[var(--warning-bg)] border-[var(--warning)]/20 text-[var(--warning)] hover:bg-[var(--warning-bg)]/80";
-                  dotColor = "bg-[var(--warning)]";
+                  cellClass += "bg-yellow-50 border-yellow-200/50 text-yellow-700 hover:bg-yellow-100/50";
+                  dotColor = "bg-yellow-500";
                 } else if (record.color_code === 'orange') {
-                  cellClass += "bg-[#FFF3E0] border-[#FFE0B2] text-[#E65100] hover:bg-[#FFE0B2]/50";
-                  dotColor = "bg-[#E65100]";
+                  cellClass += "bg-orange-50 border-orange-200/50 text-orange-700 hover:bg-orange-100/50";
+                  dotColor = "bg-orange-500";
                 } else if (record.color_code === 'red') {
-                  cellClass += "bg-[var(--danger-bg)] border-[var(--danger)]/20 text-[var(--danger)] hover:bg-[var(--danger-bg)]/80";
-                  dotColor = "bg-[var(--danger)]";
+                  cellClass += "bg-red-50 border-red-200/50 text-red-700 hover:bg-red-100/50";
+                  dotColor = "bg-red-500";
                 }
               } else {
-                cellClass += "bg-[var(--danger-bg)]/30 border-[var(--danger)]/10 text-[var(--text-muted)] hover:bg-[var(--danger-bg)]/50";
-                dotColor = "bg-[var(--danger)]";
+                cellClass += "bg-gray-100 border-gray-200 text-gray-500 hover:bg-gray-200";
+                dotColor = "bg-gray-600";
               }
             } else {
               const isLeaveApproved = leaves.some(l => l.date === dateStr);
-              const isSunday = new Date(dateStr + 'T00:00:00').getDay() === 0;
 
               if (isLeaveApproved) {
                 cellClass += "bg-[var(--info-bg)] border-[var(--info)]/20 text-[var(--info)] hover:bg-[var(--info-bg)]/80";
-              } else if (isSunday && staff?.off_days_per_month > 0) {
-                cellClass += "bg-transparent border-dashed border-[var(--border-strong)] text-[var(--text-muted)] hover:border-[#1A1A1A]/10";
+              } else if (holiday || (isSunday && staff?.off_days_per_month > 0)) {
+                // Weekly off / Holiday is White with dotted outline or dashed marker
+                cellClass += "bg-white border-dashed border-gray-300 text-gray-400 hover:border-gray-500";
               } else {
-                cellClass += "bg-[var(--danger-bg)]/30 border-[var(--danger)]/10 text-[var(--text-muted)] hover:bg-[var(--danger-bg)]/50";
-                dotColor = "bg-[var(--danger)]";
+                // Unmarked past date = Absent
+                cellClass += "bg-gray-100 border-gray-200 text-gray-500 hover:bg-gray-200";
+                dotColor = "bg-gray-600";
               }
             }
 
@@ -291,7 +392,8 @@ export default function StaffAttendancePage() {
                 dateStr,
                 record: record || null,
                 isLeaveApproved: leaves.some(l => l.date === dateStr),
-                isSunday: new Date(dateStr + 'T00:00:00').getDay() === 0,
+                isOffDay: isSunday && staff?.off_days_per_month > 0,
+                holiday: holiday || null,
                 fines: dayFines
               });
             };
@@ -305,7 +407,11 @@ export default function StaffAttendancePage() {
               >
                 <div className="flex flex-col items-center justify-between py-1 h-full w-full">
                   <span>{day}</span>
-                  {dotColor && <span className={`w-1 h-1 rounded-full ${dotColor}`} />}
+                  {dotColor ? (
+                    <span className={`w-1 h-1 rounded-full ${dotColor}`} />
+                  ) : holiday ? (
+                    <span className="w-1.5 h-1.5 bg-blue-500 rounded-full" title={holiday.name} />
+                  ) : null}
                 </div>
               </button>
             );
@@ -313,74 +419,100 @@ export default function StaffAttendancePage() {
         </div>
       </div>
 
-      {/* Calendar Legend */}
-      <div className="flex flex-wrap gap-2.5 items-center justify-center text-[9px] font-bold text-[var(--text-secondary)]">
-        <div className="flex items-center space-x-1">
+      {/* 5. Calendar Legend */}
+      <div className="bg-white border border-[#E8E8E8] rounded-xl p-3.5 flex flex-wrap gap-x-4 gap-y-2 items-center justify-center text-[10px] font-extrabold text-[var(--text-secondary)] shadow-sm">
+        <div className="flex items-center space-x-1.5">
           <span className="w-2 h-2 rounded bg-[var(--success-bg)] border border-[var(--success)]/20 inline-block" />
-          <span>Present</span>
+          <span>Present (Green)</span>
         </div>
-        <div className="flex items-center space-x-1">
-          <span className="w-2 h-2 rounded bg-[var(--warning-bg)] border border-[var(--warning)]/20 inline-block" />
-          <span>Late</span>
+        <div className="flex items-center space-x-1.5">
+          <span className="w-2.5 h-2.5 rounded bg-yellow-50 border border-yellow-200 inline-block" />
+          <span>Late 1-15m</span>
         </div>
-        <div className="flex items-center space-x-1">
-          <span className="w-2 h-2 rounded bg-[var(--danger-bg)] border border-[var(--danger)]/20 inline-block" />
+        <div className="flex items-center space-x-1.5">
+          <span className="w-2.5 h-2.5 rounded bg-orange-50 border border-orange-200 inline-block" />
+          <span>Late 16-30m</span>
+        </div>
+        <div className="flex items-center space-x-1.5">
+          <span className="w-2.5 h-2.5 rounded bg-red-50 border border-red-200 inline-block" />
+          <span>Late 30m+</span>
+        </div>
+        <div className="flex items-center space-x-1.5">
+          <span className="w-2 h-2 rounded bg-gray-100 border border-gray-200 inline-block" />
           <span>Absent</span>
         </div>
-        <div className="flex items-center space-x-1">
-          <span className="w-2 h-2 rounded border border-dashed border-[var(--border-strong)] inline-block" />
-          <span>OFF Day</span>
-        </div>
-        <div className="flex items-center space-x-1">
-          <span className="w-2 h-2 rounded bg-[var(--info-bg)] border border-[var(--info)]/20 inline-block" />
-          <span>Leave</span>
+        <div className="flex items-center space-x-1.5">
+          <span className="w-2 h-2 rounded border border-dashed border-gray-300 inline-block" />
+          <span>Weekly Off / Holiday</span>
         </div>
       </div>
 
-      {/* Day Details Modal */}
+      {/* 6. Missed Clock Logs Section */}
+      {(missedClocks.missedIn.length > 0 || missedClocks.missedOut.length > 0) && (
+        <div className="bg-amber-50 border border-amber-200/50 rounded-2xl p-4 shadow-sm space-y-2.5">
+          <div className="flex items-center space-x-2 text-amber-800">
+            <AlertTriangle size={15} />
+            <span className="text-[11px] font-black uppercase tracking-wider">Unrecorded Logs Flagged</span>
+          </div>
+          <div className="space-y-1.5 text-xs text-amber-850 font-bold">
+            {missedClocks.missedOut.map(date => (
+              <p key={date} className="flex justify-between">
+                <span>Check-out not recorded:</span>
+                <span>{formatDate(date)}</span>
+              </p>
+            ))}
+            {missedClocks.missedIn.map(date => (
+              <p key={date} className="flex justify-between">
+                <span>Check-in not recorded:</span>
+                <span>{formatDate(date)}</span>
+              </p>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Day Details Modal Popup */}
       {selectedDayDetail && (
-        <div className="fixed inset-0 z-[12000] flex items-center justify-center p-4">
-          <div
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            onClick={() => setSelectedDayDetail(null)}
-          />
-          <div className="bg-white rounded-[16px] shadow-2xl relative z-10 p-5 w-full max-w-xs border border-[#E8E8E8]">
-            <div className="flex justify-between items-center border-b border-[var(--border)] pb-2.5 mb-4">
+        <div className="fixed inset-0 z-[12000] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl relative z-10 p-5 w-full max-w-xs border border-[#E8E8E8] space-y-4 animate-in scale-in-95 duration-200">
+            
+            <div className="flex justify-between items-center border-b border-gray-100 pb-2.5">
               <h3 className="font-extrabold text-sm text-[#1A1A1A]">
-                {new Date(selectedDayDetail.dateStr).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric', weekday: 'long' })}
+                {formatDate(selectedDayDetail.dateStr)}
               </h3>
               <button
                 type="button"
                 onClick={() => setSelectedDayDetail(null)}
-                className="text-[var(--text-secondary)] hover:text-[#1A1A1A]"
+                className="p-1 rounded-full hover:bg-gray-150 text-gray-400 hover:text-gray-600 transition-colors"
               >
-                <X size={18} />
+                <X size={16} />
               </button>
             </div>
 
-            <div className="space-y-3.5 text-xs font-semibold text-[var(--text-secondary)]">
+            <div className="space-y-3 text-xs font-semibold text-[var(--text-secondary)]">
               {/* Status Display */}
               <div className="flex justify-between items-center">
                 <span>Status:</span>
                 {(() => {
                   if (selectedDayDetail.record) {
-                    if (selectedDayDetail.record.status === 'late') return <span className="text-[var(--warning)] font-bold uppercase text-[10px]">Late (Code {selectedDayDetail.record.color_code.toUpperCase()})</span>;
-                    return <span className="text-[var(--success)] font-bold uppercase text-[10px]">Present</span>;
+                    if (selectedDayDetail.record.status === 'late') return <span className="text-amber-600 font-black uppercase text-[10px] bg-amber-50 px-2 py-0.5 rounded border border-amber-100">Late</span>;
+                    return <span className="text-emerald-700 font-black uppercase text-[10px] bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">Present</span>;
                   }
-                  if (selectedDayDetail.isLeaveApproved) return <span className="text-[var(--info)] font-bold uppercase text-[10px]">Approved Leave</span>;
-                  if (selectedDayDetail.isSunday && staff?.off_days_per_month > 0) return <span className="text-[var(--text-muted)] font-bold uppercase text-[10px]">OFF Day</span>;
-                  return <span className="text-[var(--danger)] font-bold uppercase text-[10px]">Absent</span>;
+                  if (selectedDayDetail.isLeaveApproved) return <span className="text-[var(--info)] font-black uppercase text-[10px] bg-[var(--info-bg)] px-2 py-0.5 rounded border border-[var(--info)]/20">Leave Approved</span>;
+                  if (selectedDayDetail.holiday) return <span className="text-blue-700 font-black uppercase text-[10px] bg-blue-50 px-2 py-0.5 rounded border border-blue-100">Holiday ({selectedDayDetail.holiday.name})</span>;
+                  if (selectedDayDetail.isOffDay) return <span className="text-gray-500 font-black uppercase text-[10px] bg-gray-50 px-2 py-0.5 rounded border border-gray-150">Weekly Off</span>;
+                  return <span className="text-red-700 font-black uppercase text-[10px] bg-red-50 px-2 py-0.5 rounded border border-red-100">Absent</span>;
                 })()}
               </div>
 
               {selectedDayDetail.record && (
                 <>
                   <div className="flex justify-between">
-                    <span>Clock In:</span>
+                    <span>Check-In:</span>
                     <span className="text-[#1A1A1A] font-mono font-bold">{selectedDayDetail.record.check_in_time || '—'}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span>Clock Out:</span>
+                    <span>Check-Out:</span>
                     <span className="text-[#1A1A1A] font-mono font-bold">{selectedDayDetail.record.check_out_time || '—'}</span>
                   </div>
                   <div className="flex justify-between">
@@ -392,39 +524,55 @@ export default function StaffAttendancePage() {
                     </span>
                   </div>
                   {selectedDayDetail.record.status === 'late' && selectedDayDetail.record.minutes_late > 0 && (
-                    <div className="flex justify-between text-[var(--warning)]">
-                      <span>Minutes Late:</span>
-                      <span className="font-mono font-bold">{selectedDayDetail.record.minutes_late} mins</span>
+                    <div className="flex justify-between text-amber-700">
+                      <span>Late by:</span>
+                      <span className="font-mono font-black">{selectedDayDetail.record.minutes_late} mins</span>
                     </div>
                   )}
                   {selectedDayDetail.record.ot_minutes > 0 && (
-                    <div className="flex justify-between text-[var(--info)]">
-                      <span>Overtime minutes:</span>
-                      <span className="font-mono font-bold">
-                        {selectedDayDetail.record.ot_minutes} mins {selectedDayDetail.record.ot_approved ? '(Approved)' : '(Pending)'}
+                    <div className="flex justify-between text-emerald-700">
+                      <span>OT (Hours/Minutes only):</span>
+                      <span className="font-mono font-black">
+                        {(() => {
+                          const hrs = Math.floor(selectedDayDetail.record.ot_minutes / 60);
+                          const mins = selectedDayDetail.record.ot_minutes % 60;
+                          const hrsStr = hrs > 0 ? `${hrs} hrs ` : '';
+                          const minsStr = mins > 0 ? `${mins} mins` : '';
+                          return `OT: ${hrsStr}${minsStr} ${selectedDayDetail.record.ot_approved ? '✓' : '(Pending)'}`;
+                        })()}
                       </span>
                     </div>
                   )}
                 </>
               )}
 
-              {/* Fines info */}
-              {selectedDayDetail.fines && selectedDayDetail.fines.length > 0 && (
-                <div className="border-t border-[var(--border)] pt-3 mt-3">
-                  <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Fines logged on this day</span>
-                  <div className="space-y-2 mt-1.5">
-                    {selectedDayDetail.fines.map((f: any) => (
-                      <div key={f.id} className="flex justify-between items-center text-[11px]">
-                        <span className="capitalize text-[#1A1A1A] font-bold">{f.type} Fine</span>
-                        <span className={`font-mono font-black ${f.waived ? 'text-gray-400 line-through' : 'text-[var(--danger)]'}`}>
-                          ₹{f.fine_amount} {f.waived && '(Waived)'}
+              {/* Fines info with exact ₹ and reasons */}
+              {selectedDayDetail.fines && selectedDayDetail.fines.length > 0 ? (
+                <div className="border-t border-gray-100 pt-3 mt-3 space-y-2">
+                  <span className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-wider">Logged Deductions</span>
+                  {selectedDayDetail.fines.map((f: any) => (
+                    <div key={f.id} className="bg-red-50/50 border border-red-100/50 rounded-xl p-2.5 flex flex-col space-y-1">
+                      <div className="flex justify-between text-xs">
+                        <span className="capitalize text-red-900 font-bold">{f.type} Fine</span>
+                        <span className={`font-mono font-black ${f.waived ? 'text-gray-400 line-through' : 'text-red-750'}`}>
+                          ₹{f.fine_amount}
                         </span>
                       </div>
-                    ))}
-                  </div>
+                      <p className="text-[10px] text-red-800 font-medium">{f.reason} {f.waived && '(Waived)'}</p>
+                    </div>
+                  ))}
                 </div>
+              ) : selectedDayDetail.record?.status === 'late' && (
+                <p className="text-[10px] text-gray-400 italic text-center pt-2">Fine details not computed yet</p>
               )}
             </div>
+
+            <button
+              onClick={() => setSelectedDayDetail(null)}
+              className="w-full min-h-[38px] bg-[#1a1a1a] text-white font-black text-xs rounded-xl active:scale-95 transition-all shadow-sm"
+            >
+              Okay
+            </button>
           </div>
         </div>
       )}

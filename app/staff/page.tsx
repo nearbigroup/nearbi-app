@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
+import { createAuditLog } from '@/lib/audit';
 import { Search, Plus, Trash2, Edit2, Eye, EyeOff, Lock, X, AlertTriangle, Users, AlertCircle, RefreshCw, Cake, Download, Upload, Check, Phone } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import * as XLSX from 'xlsx';
@@ -397,6 +398,8 @@ export default function StaffPage() {
         }
       }
 
+      const oldStaff = staff.find(s => s.id === id);
+
       const updatePayload: any = {
         name,
         pin,
@@ -417,6 +420,54 @@ export default function StaffPage() {
 
       if (updateErr) throw updateErr;
 
+      if (oldStaff) {
+        if (oldStaff.shift_id !== shift_id) {
+          await createAuditLog({
+            action: 'shift_change',
+            table_name: 'staff',
+            record_id: id,
+            old_value: { shift_id: oldStaff.shift_id },
+            new_value: { shift_id: shift_id },
+            performed_by: user?.email || 'admin',
+            performed_by_role: user?.role || 'admin',
+            reason: 'Staff shift updated'
+          });
+        }
+        if (Number(oldStaff.monthly_salary) !== Number(monthly_salary)) {
+          await createAuditLog({
+            action: 'salary_change',
+            table_name: 'staff',
+            record_id: id,
+            old_value: { monthly_salary: oldStaff.monthly_salary },
+            new_value: { monthly_salary: Number(monthly_salary) },
+            performed_by: user?.email || 'admin',
+            performed_by_role: user?.role || 'admin',
+            reason: 'Staff salary updated'
+          });
+        }
+        await createAuditLog({
+          action: 'update_staff',
+          table_name: 'staff',
+          record_id: id,
+          old_value: {
+            name: oldStaff.name,
+            pin: oldStaff.pin,
+            branch_id: oldStaff.branch_id,
+            department: oldStaff.department,
+            shift_id: oldStaff.shift_id,
+            off_days_per_month: oldStaff.off_days_per_month,
+            monthly_salary: oldStaff.monthly_salary,
+            join_date: oldStaff.join_date,
+            date_of_birth: oldStaff.date_of_birth,
+            mobile_number: oldStaff.mobile_number,
+          },
+          new_value: updatePayload,
+          performed_by: user?.email || 'admin',
+          performed_by_role: user?.role || 'admin',
+          reason: 'Staff details updated'
+        });
+      }
+
       if (pin !== originalPin) {
         const { data: account } = await supabase
           .from('staff_accounts')
@@ -427,7 +478,7 @@ export default function StaffPage() {
         if (account) {
           await supabase
             .from('staff_accounts')
-            .update({ password: pin })
+            .update({ password: pin, must_change_password: true })
             .eq('id', account.id);
         }
       }
@@ -790,9 +841,31 @@ export default function StaffPage() {
             staff_id: insertedStaffId,
             mobile_number: row.mobile_number,
             password: row.pin, // PIN is default password
+            must_change_password: true
           });
           if (accErr) throw accErr;
         }
+
+        await createAuditLog({
+          action: 'create_staff',
+          table_name: 'staff',
+          record_id: insertedStaffId,
+          new_value: {
+            name: row.name,
+            pin: row.pin,
+            branch_id: row.branchId,
+            department: row.department,
+            shift_id: shiftId,
+            off_days_per_month: row.off_days_per_month,
+            monthly_salary: row.monthly_salary,
+            join_date: row.join_date,
+            date_of_birth: row.date_of_birth,
+            mobile_number: row.mobile_number,
+          },
+          performed_by: user?.email || 'admin',
+          performed_by_role: user?.role || 'admin',
+          reason: 'Bulk staff import'
+        });
         
         // Log to wall
         try {
@@ -999,10 +1072,21 @@ export default function StaffPage() {
 
       const { error: resetErr } = await supabase
         .from('staff_accounts')
-        .update({ password: pin })
+        .update({ password: pin, must_change_password: true })
         .eq('id', account.id);
 
       if (resetErr) throw resetErr;
+
+      await createAuditLog({
+        action: 'reset_password',
+        table_name: 'staff_accounts',
+        record_id: account.id,
+        new_value: { must_change_password: true },
+        performed_by: user?.email || 'admin',
+        performed_by_role: user?.role || 'admin',
+        reason: 'Reset password to PIN'
+      });
+
       showToast('Password reset to PIN successfully!');
     } catch (e: any) {
       console.error(e);
@@ -1407,9 +1491,20 @@ export default function StaffPage() {
           staff_id: newId,
           mobile_number: formData.mobile_number.trim(),
           password: formData.pin,
+          must_change_password: true
         });
         if (accError) throw accError;
       }
+
+      await createAuditLog({
+        action: 'create_staff',
+        table_name: 'staff',
+        record_id: newId,
+        new_value: payload,
+        performed_by: user?.email || 'admin',
+        performed_by_role: user?.role || 'admin',
+        reason: 'Manual staff addition'
+      });
 
       try {
         await supabase.from('wall_events').insert({
@@ -1582,6 +1677,16 @@ export default function StaffPage() {
 
       if (error) throw error;
 
+      await createAuditLog({
+        action: 'delete_staff',
+        table_name: 'staff',
+        record_id: staffId,
+        old_value: staffToDelete,
+        performed_by: user?.email || 'admin',
+        performed_by_role: user?.role || 'admin',
+        reason: 'Staff deleted along with all historical data'
+      });
+
       // Step 3 — remove from local state
       setStaff(prev => 
         prev.filter(s => s.id !== staffId)
@@ -1608,6 +1713,7 @@ export default function StaffPage() {
     return (
       s.name.toLowerCase().includes(terms) ||
       s.department.toLowerCase().includes(terms) ||
+      (s.pin || '').toLowerCase().includes(terms) ||
       (s.shift?.label || '').toLowerCase().includes(terms)
     );
   });
@@ -1898,7 +2004,7 @@ export default function StaffPage() {
                                 </>
                               )}
                             </div>
-                            {account && (user?.role === 'admin' || user?.role === 'ops_manager') && (
+                            {account && (user?.role === 'admin' || user?.role === 'ops_manager' || user?.role === 'staff_executive') && (
                               <button
                                 type="button"
                                 onClick={() => handleResetPassword(s.id, s.pin)}

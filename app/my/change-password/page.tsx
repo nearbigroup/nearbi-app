@@ -74,20 +74,37 @@ export default function StaffChangePasswordPage() {
     }
   };
 
+  const isForcedReset = user?.mustChangePassword === true;
+
   return (
     <div className="space-y-5">
-      {/* Title */}
+      {/* Title Header */}
       <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-3 shadow-sm flex items-center justify-between">
-        <button
-          onClick={() => router.push('/my')}
-          className="p-1 text-[var(--text-secondary)] hover:text-[#1A1A1A] transition-all active:scale-95 flex items-center space-x-1 text-xs font-bold"
-        >
-          <ArrowLeft size={16} />
-          <span>Back</span>
-        </button>
+        {!isForcedReset ? (
+          <button
+            onClick={() => router.push('/my/profile')}
+            className="p-1 text-[var(--text-secondary)] hover:text-[#1A1A1A] transition-all active:scale-95 flex items-center space-x-1 text-xs font-bold"
+          >
+            <ArrowLeft size={16} />
+            <span>Back</span>
+          </button>
+        ) : (
+          <div className="w-[60px]" /> // placeholder to align title
+        )}
         <span className="text-xs font-extrabold text-[#1A1A1A] uppercase tracking-wider">Change Password</span>
         <Lock size={16} className="text-[var(--text-secondary)]" />
       </div>
+
+      {/* Force Change warning */}
+      {isForcedReset && (
+        <div className="bg-amber-50 border border-amber-200/50 text-amber-900 rounded-[14px] p-4 text-xs font-bold flex items-start space-x-2.5 shadow-sm leading-normal">
+          <AlertCircle size={18} className="text-amber-600 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="font-extrabold">First Time Login Check</p>
+            <p className="text-amber-800 font-semibold mt-1">Please set a new secure password for your account to proceed. (Minimum 6 characters)</p>
+          </div>
+        </div>
+      )}
 
       {/* Change Password Form */}
       <div className="bg-white border border-[#E8E8E8] rounded-[16px] p-5 shadow-sm space-y-4">
@@ -111,7 +128,7 @@ export default function StaffChangePasswordPage() {
           {/* Current Password */}
           <div>
             <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
-              Current Password (PIN)
+              {isForcedReset ? 'Default Password (Your 4-digit PIN)' : 'Current Password (PIN)'}
             </label>
             <div className="relative">
               <input

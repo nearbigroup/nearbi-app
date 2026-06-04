@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { createNotification } from '@/lib/notifications';
+import { createAuditLog } from '@/lib/audit';
 import Link from 'next/link';
 import {
   Clock,
@@ -21,7 +22,8 @@ import {
   ChevronRight,
   Activity,
   Cake,
-  PartyPopper
+  PartyPopper,
+  X
 } from 'lucide-react';
 
 interface StaffMember {
@@ -59,6 +61,21 @@ export default function DashboardPage() {
   const [pendingApprovalsCount, setPendingApprovalsCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
+
+  // Month-end checklist counts
+  const [checklistIssues, setChecklistIssues] = useState(0);
+  const [checklistOT, setChecklistOT] = useState(0);
+  const [checklistFines, setChecklistFines] = useState(0);
+  const [checklistUnconfirmed, setChecklistUnconfirmed] = useState(0);
+  const [checklistUnpaid, setChecklistUnpaid] = useState(0);
+
+  // Announcement modal state
+  const [isAnnModalOpen, setIsAnnModalOpen] = useState(false);
+  const [annTitle, setAnnTitle] = useState('');
+  const [annMessage, setAnnMessage] = useState('');
+  const [annTarget, setAnnTarget] = useState<'all' | 'daily' | 'hypermarket'>('all');
+  const [annSubmitting, setAnnSubmitting] = useState(false);
+  const [toastMsg, setToastMsg] = useState('');
 
   // Enforce branch HR to only see their branch
   useEffect(() => {
@@ -115,9 +132,75 @@ export default function DashboardPage() {
       if (aErr) throw aErr;
       setPendingApprovalsCount(aCount || 0);
 
-      // 5. Run automatic absent alerts check
+      // 5. Month-End Checklist calculations
+      const now = new Date();
+      const currentMonthStr = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}`;
+      const startDate = `${currentMonthStr}-01`;
+      const endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+
+      // A. Attendance issues this month
+      let monthAttQuery = supabase
+        .from('attendance')
+        .select('check_in_time, check_out_time, status, minutes_late, staff_id')
+        .gte('date', startDate)
+        .lte('date', endDate);
+      const { data: monthAttData } = await monthAttQuery;
+
+      const activeStaffIds = new Set(verifiedStaff.map((s) => s.id));
+      const branchMonthAtt = (monthAttData || []).filter((r) => activeStaffIds.has(r.staff_id));
+      const issuesCount = branchMonthAtt.filter(
+        (r) => (r.check_in_time && !r.check_out_time) || r.status === 'late' || r.minutes_late > 0
+      ).length;
+      setChecklistIssues(issuesCount);
+
+      // B. Pending OT adjustments count
+      let otQuery = supabase
+        .from('attendance_adjustments')
+        .select('id, staff!inner(branch_id, active)', { count: 'exact' })
+        .eq('status', 'pending')
+        .eq('type', 'ot')
+        .eq('staff.active', true);
+      if (userBranch) {
+        otQuery = otQuery.eq('staff.branch_id', userBranch);
+      }
+      const { count: otCount } = await otQuery;
+      setChecklistOT(otCount || 0);
+
+      // C. Confirm fines count
+      let finesQuery = supabase
+        .from('late_fines')
+        .select('id, staff!inner(branch_id, active)', { count: 'exact' })
+        .eq('waived', false)
+        .eq('confirmed', false)
+        .eq('staff.active', true)
+        .eq('month', currentMonthStr);
+      if (userBranch) {
+        finesQuery = finesQuery.eq('staff.branch_id', userBranch);
+      }
+      const { count: fineCount } = await finesQuery;
+      setChecklistFines(fineCount || 0);
+
+      // D. Bulk confirm salaries count (active staff not confirmed this month)
+      const { data: confirmationsData } = await supabase
+        .from('salary_confirmations')
+        .select('staff_id')
+        .eq('month', currentMonthStr);
+      const confirmedStaffIds = new Set((confirmationsData || []).map((c) => c.staff_id));
+      const unconfirmedCount = verifiedStaff.filter((s) => !confirmedStaffIds.has(s.id)).length;
+      setChecklistUnconfirmed(unconfirmedCount);
+
+      // E. Mark salaries as paid count (confirmed salaries that are unpaid)
+      const { data: paymentsData } = await supabase
+        .from('salary_payments')
+        .select('staff_id')
+        .eq('month', currentMonthStr);
+      const paidStaffIds = new Set((paymentsData || []).map((p) => p.staff_id));
+      const unpaidCount = (confirmationsData || []).filter((c) => !paidStaffIds.has(c.staff_id)).length;
+      setChecklistUnpaid(unpaidCount);
+
+      // 6. Run automatic absent alerts check
       checkAndCreateAbsentAlerts(verifiedStaff, attData || []);
-      // 6. Run automatic birthday check
+      // 7. Run automatic birthday check
       checkAndCreateBirthdayNotifications(verifiedStaff);
     } catch (err: any) {
       console.error(err);
@@ -366,6 +449,50 @@ export default function DashboardPage() {
     return !att || !att.check_in_time;
   });
 
+  const handleCreateAnnouncement = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !annTitle.trim() || !annMessage.trim()) return;
+
+    setAnnSubmitting(true);
+    try {
+      const { data: newAnn, error } = await supabase
+        .from('staff_announcements')
+        .insert({
+          title: annTitle.trim(),
+          message: annMessage.trim(),
+          target: annTarget,
+          created_by: user.name || user.email || 'Operations Manager'
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      await createAuditLog({
+        action: 'create',
+        table_name: 'staff_announcements',
+        record_id: newAnn.id,
+        new_value: { title: annTitle.trim(), message: annMessage.trim(), target: annTarget },
+        performed_by: user.email,
+        performed_by_role: user.role,
+        reason: `Created staff announcement: "${annTitle.trim()}" targeting ${annTarget}`
+      });
+
+      setToastMsg('Announcement sent successfully ✓');
+      setTimeout(() => setToastMsg(''), 3000);
+
+      setAnnTitle('');
+      setAnnMessage('');
+      setAnnTarget('all');
+      setIsAnnModalOpen(false);
+    } catch (err) {
+      console.error('Error creating announcement:', err);
+      alert('Failed to send announcement. Please try again.');
+    } finally {
+      setAnnSubmitting(false);
+    }
+  };
+
   if (errorMsg) {
     return (
       <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-6 text-center max-w-sm mx-auto my-8 flex flex-col items-center justify-center shadow-sm">
@@ -393,11 +520,21 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6">
       {/* Header Info */}
-      <div>
-        <p className="text-[#999999] text-xs font-semibold mb-0.5">
-          {getFormattedDate()}
-        </p>
-        <h1 className="text-[#1A1A1A] text-2xl font-bold">{getGreeting()} 👋</h1>
+      <div className="flex justify-between items-center">
+        <div>
+          <p className="text-[#999999] text-xs font-semibold mb-0.5">
+            {getFormattedDate()}
+          </p>
+          <h1 className="text-[#1A1A1A] text-2xl font-bold">{getGreeting()} 👋</h1>
+        </div>
+        {user?.role === 'ops_manager' && (
+          <button
+            onClick={() => setIsAnnModalOpen(true)}
+            className="bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold px-4 py-2 rounded-xl text-xs active:scale-95 transition-all shadow cursor-pointer text-center"
+          >
+            New Announcement
+          </button>
+        )}
       </div>
 
       {loading ? (
@@ -466,6 +603,156 @@ export default function DashboardPage() {
               Total: <span className="text-white font-bold">{activeStats.total}</span> active staff
             </p>
           </div>
+
+          {/* Month-End Checklist */}
+          {new Date().getDate() >= 25 && (user?.role === 'admin' || user?.role === 'ops_manager') && (
+            <div className="space-y-3">
+              <h4 className="text-[#999999] text-[11px] font-black uppercase tracking-wider">
+                Month-End Checklist
+              </h4>
+              <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 space-y-3 shadow-sm">
+                
+                {/* 1. Review Attendance Issues */}
+                <Link
+                  href="/attendance"
+                  className="flex items-center justify-between p-2.5 rounded-xl hover:bg-[#F8F8F8] transition-colors"
+                >
+                  <div className="flex items-center space-x-2.5">
+                    {checklistIssues === 0 ? (
+                      <CircleCheck size={18} className="text-[#2D7A3A]" />
+                    ) : (
+                      <AlertTriangle size={18} className="text-[#B8860B]" />
+                    )}
+                    <span className="text-xs font-bold text-[#1A1A1A]">Review attendance issues</span>
+                  </div>
+                  <div className="flex items-center space-x-1.5">
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                      checklistIssues === 0 ? 'bg-[#EDF7EF] text-[#2D7A3A]' : 'bg-[#FDF6E2] text-[#B8860B]'
+                    }`}>
+                      {checklistIssues} issues
+                    </span>
+                    <ChevronRight size={14} className="text-[#999999]" />
+                  </div>
+                </Link>
+
+                {/* 2. Approve Pending OT */}
+                <Link
+                  href="/approvals"
+                  className="flex items-center justify-between p-2.5 rounded-xl hover:bg-[#F8F8F8] transition-colors"
+                >
+                  <div className="flex items-center space-x-2.5">
+                    {checklistOT === 0 ? (
+                      <CircleCheck size={18} className="text-[#2D7A3A]" />
+                    ) : (
+                      <AlertTriangle size={18} className="text-[#B8860B]" />
+                    )}
+                    <span className="text-xs font-bold text-[#1A1A1A]">Approve pending OT</span>
+                  </div>
+                  <div className="flex items-center space-x-1.5">
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                      checklistOT === 0 ? 'bg-[#EDF7EF] text-[#2D7A3A]' : 'bg-[#FDF6E2] text-[#B8860B]'
+                    }`}>
+                      {checklistOT} pending
+                    </span>
+                    <ChevronRight size={14} className="text-[#999999]" />
+                  </div>
+                </Link>
+
+                {/* 3. Confirm Fines */}
+                <Link
+                  href="/approvals"
+                  className="flex items-center justify-between p-2.5 rounded-xl hover:bg-[#F8F8F8] transition-colors"
+                >
+                  <div className="flex items-center space-x-2.5">
+                    {checklistFines === 0 ? (
+                      <CircleCheck size={18} className="text-[#2D7A3A]" />
+                    ) : (
+                      <AlertTriangle size={18} className="text-[#B8860B]" />
+                    )}
+                    <span className="text-xs font-bold text-[#1A1A1A]">Confirm late fines</span>
+                  </div>
+                  <div className="flex items-center space-x-1.5">
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                      checklistFines === 0 ? 'bg-[#EDF7EF] text-[#2D7A3A]' : 'bg-[#FDF6E2] text-[#B8860B]'
+                    }`}>
+                      {checklistFines} pending
+                    </span>
+                    <ChevronRight size={14} className="text-[#999999]" />
+                  </div>
+                </Link>
+
+                {/* 4. Process Leave Deductions */}
+                <Link
+                  href="/leave"
+                  className="flex items-center justify-between p-2.5 rounded-xl hover:bg-[#F8F8F8] transition-colors"
+                >
+                  <div className="flex items-center space-x-2.5">
+                    {pendingLeavesCount === 0 ? (
+                      <CircleCheck size={18} className="text-[#2D7A3A]" />
+                    ) : (
+                      <AlertTriangle size={18} className="text-[#B8860B]" />
+                    )}
+                    <span className="text-xs font-bold text-[#1A1A1A]">Process leave requests</span>
+                  </div>
+                  <div className="flex items-center space-x-1.5">
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                      pendingLeavesCount === 0 ? 'bg-[#EDF7EF] text-[#2D7A3A]' : 'bg-[#FDF6E2] text-[#B8860B]'
+                    }`}>
+                      {pendingLeavesCount} pending
+                    </span>
+                    <ChevronRight size={14} className="text-[#999999]" />
+                  </div>
+                </Link>
+
+                {/* 5. Bulk Confirm Salaries */}
+                <Link
+                  href="/salary"
+                  className="flex items-center justify-between p-2.5 rounded-xl hover:bg-[#F8F8F8] transition-colors"
+                >
+                  <div className="flex items-center space-x-2.5">
+                    {checklistUnconfirmed === 0 ? (
+                      <CircleCheck size={18} className="text-[#2D7A3A]" />
+                    ) : (
+                      <AlertTriangle size={18} className="text-[#B8860B]" />
+                    )}
+                    <span className="text-xs font-bold text-[#1A1A1A]">Bulk confirm salaries</span>
+                  </div>
+                  <div className="flex items-center space-x-1.5">
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                      checklistUnconfirmed === 0 ? 'bg-[#EDF7EF] text-[#2D7A3A]' : 'bg-[#FDF6E2] text-[#B8860B]'
+                    }`}>
+                      {checklistUnconfirmed} staff left
+                    </span>
+                    <ChevronRight size={14} className="text-[#999999]" />
+                  </div>
+                </Link>
+
+                {/* 6. Mark Salaries as Paid */}
+                <Link
+                  href="/salary"
+                  className="flex items-center justify-between p-2.5 rounded-xl hover:bg-[#F8F8F8] transition-colors"
+                >
+                  <div className="flex items-center space-x-2.5">
+                    {checklistUnpaid === 0 ? (
+                      <CircleCheck size={18} className="text-[#2D7A3A]" />
+                    ) : (
+                      <AlertTriangle size={18} className="text-[#B8860B]" />
+                    )}
+                    <span className="text-xs font-bold text-[#1A1A1A]">Mark salaries as paid</span>
+                  </div>
+                  <div className="flex items-center space-x-1.5">
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                      checklistUnpaid === 0 ? 'bg-[#EDF7EF] text-[#2D7A3A]' : 'bg-[#FDF6E2] text-[#B8860B]'
+                    }`}>
+                      {checklistUnpaid} unpaid
+                    </span>
+                    <ChevronRight size={14} className="text-[#999999]" />
+                  </div>
+                </Link>
+
+              </div>
+            </div>
+          )}
 
           {/* Alerts section */}
           {(absentStaffAlerts.length > 0 || lateArrivalsAlerts.length > 0 || pendingLeavesCount > 0 || pendingApprovalsCount > 0) && (

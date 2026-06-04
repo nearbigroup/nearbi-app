@@ -6,7 +6,8 @@ import { useAuth } from '@/lib/auth-context';
 import { calculateSalary } from '@/lib/salary';
 import { Staff, SalaryConfirmation } from './types';
 import { formatCurrency, getCurrentMonthStr, formatMonthDisplay } from './utils';
-import { Check } from 'lucide-react';
+import { Check, Search, AlertCircle } from 'lucide-react';
+import { createAuditLog } from '@/lib/audit';
 import SpecialFinesSection from './SpecialFinesSection';
 
 export default function BulkConfirmTab() {
@@ -24,6 +25,8 @@ export default function BulkConfirmTab() {
   const [salaryData, setSalaryData] = useState<Record<string, any>>({});
   const [extraLeaves, setExtraLeaves] = useState<Record<string, number>>({});
   const [filterBranch, setFilterBranch] = useState<'all' | 'daily' | 'hypermarket'>('all');
+  const [confirmingFines, setConfirmingFines] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   
   const month = getCurrentMonthStr();
 
@@ -239,6 +242,7 @@ export default function BulkConfirmTab() {
           confirmed_fines: bd.confirmed_fines || 0,
           confirmed_special_fines: bd.confirmed_special_fines || 0,
           confirmed_by: user.email || 'Admin',
+          is_locked: true
         };
       });
 
@@ -246,6 +250,15 @@ export default function BulkConfirmTab() {
         const { error } = await supabase.from('salary_confirmations').insert(payload);
         if (error) throw error;
         
+        await createAuditLog({
+          action: 'bulk_confirm_salaries',
+          table_name: 'salary_confirmations',
+          new_value: payload,
+          performed_by: user.email,
+          performed_by_role: user.role || 'admin',
+          reason: `Bulk confirmed salary for ${payload.length} staff members`
+        });
+
         // Silent wall event logging
         try {
           const events = unconfirmed.map(s => {
@@ -274,9 +287,56 @@ export default function BulkConfirmTab() {
     }
   };
 
-  const filteredStaff = staffList.filter(
-    (s) => filterBranch === 'all' || s.branch_id === filterBranch
-  );
+  const handleConfirmAllFines = async () => {
+    if (!user) return;
+    const pendingFines = lateFines.filter(lf => !lf.confirmed && !lf.waived);
+    if (pendingFines.length === 0) {
+      alert("No pending late fines to confirm for this month.");
+      return;
+    }
+    
+    setConfirmingFines(true);
+    try {
+      const count = pendingFines.length;
+      const total = pendingFines.reduce((sum, lf) => sum + Number(lf.fine_amount), 0);
+      
+      const { error } = await supabase
+        .from('late_fines')
+        .update({ confirmed: true })
+        .eq('month', month)
+        .eq('confirmed', false)
+        .eq('waived', false);
+        
+      if (error) throw error;
+      
+      await createAuditLog({
+        action: 'bulk_confirm_fines',
+        table_name: 'late_fines',
+        new_value: { confirmed: true, month },
+        performed_by: user.email,
+        performed_by_role: user.role || 'admin',
+        reason: `Bulk confirmed ${count} late fines totaling ₹${total}`
+      });
+      
+      alert(`${count} fines confirmed — ₹${total.toLocaleString()} total`);
+      await fetchData();
+    } catch (e: any) {
+      console.error(e);
+      alert("Failed to confirm fines: " + e.message);
+    } finally {
+      setConfirmingFines(false);
+    }
+  };
+
+  const filteredStaff = staffList.filter((s) => {
+    const branchMatch = filterBranch === 'all' || s.branch_id === filterBranch;
+    if (!branchMatch) return false;
+    
+    if (searchQuery.trim()) {
+      return s.name.toLowerCase().includes(searchQuery.toLowerCase().trim());
+    }
+    return true;
+  });
 
   const unconfirmedCount = filteredStaff.filter(
     (s) => !confirmations.find((c) => c.staff_id === s.id)
@@ -303,6 +363,42 @@ export default function BulkConfirmTab() {
           Verify and lock monthly payroll rates.
         </p>
       </div>
+
+      {/* Search Input Box */}
+      <div className="relative print:hidden">
+        <input
+          type="text"
+          placeholder="Search staff by name..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="w-full bg-white border border-[#E8E8E8] rounded-xl p-3 pl-10 text-xs focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-medium shadow-sm"
+        />
+        <Search className="absolute left-3.5 top-3.5 h-4 w-4 text-[#999999]" />
+      </div>
+
+      {(() => {
+        const pendingFinesList = lateFines.filter(lf => !lf.confirmed && !lf.waived);
+        const count = pendingFinesList.length;
+        const total = pendingFinesList.reduce((sum, lf) => sum + Number(lf.fine_amount), 0);
+        
+        if (count === 0) return null;
+        
+        return (
+          <div className="bg-[#FFF8E7] border border-[#FFEBAA] rounded-xl p-3 flex items-center justify-between text-xs print:hidden shadow-sm">
+            <div className="flex items-center space-x-2 text-[#B8860B] font-semibold">
+              <AlertCircle size={16} />
+              <span>There are {count} pending late fines totaling {formatCurrency(total)}.</span>
+            </div>
+            <button
+              onClick={handleConfirmAllFines}
+              disabled={confirmingFines}
+              className="bg-[#B8860B] hover:bg-[#9E720A] text-white text-[10px] font-black uppercase px-3 py-1.5 rounded-lg active:scale-95 transition-all cursor-pointer"
+            >
+              {confirmingFines ? 'Confirming...' : 'Confirm All Fines'}
+            </button>
+          </div>
+        );
+      })()}
 
       {errorMsg && (
         <div className="bg-[var(--danger-bg)] border border-[var(--danger)]/30 text-[var(--danger)] text-xs font-bold px-4 py-3 rounded-[12px] flex items-center justify-between shadow-sm">

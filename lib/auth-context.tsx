@@ -12,6 +12,7 @@ export interface AuthUser {
   branch: string | null;
   name: string;
   staffId?: string;
+  mustChangePassword?: boolean;
 }
 
 export const VALID_USERS: Record<string, AuthUser & { password: string }> = {
@@ -114,8 +115,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     if (user.role === 'staff') {
-      if (!pathname.startsWith('/my')) {
-        router.replace('/my');
+      if (user.mustChangePassword) {
+        if (pathname !== '/my/change-password') {
+          router.replace('/my/change-password');
+        }
+      } else {
+        if (!pathname.startsWith('/my')) {
+          router.replace('/my');
+        } else if (pathname === '/my/change-password') {
+          // Allow accessing change-password, but if they came from profile they can be here.
+        }
       }
     } else {
       if (pathname.startsWith('/my')) {
@@ -184,6 +193,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       staffId: account.staff_id,
       name: account.staff?.name,
       branch: account.staff?.branch_id,
+      mustChangePassword: account.must_change_password,
     };
     setUser(u);
     localStorage.setItem('nearbi_user', JSON.stringify(u));
@@ -211,8 +221,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (error || !data || data.password !== oldPassword) return false;
     await supabase
       .from('staff_accounts')
-      .update({ password: newPassword })
+      .update({ password: newPassword, must_change_password: false })
       .eq('id', data.id);
+      
+    // Also update local state
+    if (user && user.role === 'staff') {
+      const updatedUser = { ...user, mustChangePassword: false };
+      setUser(updatedUser);
+      localStorage.setItem('nearbi_user', JSON.stringify(updatedUser));
+    }
     return true;
   };
 

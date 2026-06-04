@@ -3,7 +3,26 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
+import { createAuditLog } from '@/lib/audit';
 import { Check, X, RefreshCw, CheckSquare } from 'lucide-react';
+
+const isCheckoutValidForOT = (checkoutTime: string | null | undefined, shiftEndTime: string | null | undefined) => {
+  if (!checkoutTime || !shiftEndTime) return false;
+  
+  const parseMins = (str: string) => {
+    const [h, m] = str.split(':').map(Number);
+    return h * 60 + m;
+  };
+  
+  const outMins = parseMins(checkoutTime);
+  const endMins = parseMins(shiftEndTime);
+  
+  let diff = outMins - endMins;
+  if (diff < -720) diff += 1440;
+  if (diff > 720) diff -= 1440;
+  
+  return diff >= 30;
+};
 
 type ApprovalTab = 'ot' | 'early_in' | 'fines';
 
@@ -157,6 +176,18 @@ export default function ApprovalsPage() {
 
   // Adjustments actions handlers
   const handleAdjustmentAction = async (adj: Adjustment, action: 'approved' | 'rejected') => {
+    if (adj.type === 'ot' && action === 'approved') {
+      const attRecord = attendanceMap[`${adj.staff_id}_${adj.date}`];
+      if (!attRecord || !attRecord.check_out_time) {
+        alert("Cannot approve Overtime: checkout time is not recorded.");
+        return;
+      }
+      if (!isCheckoutValidForOT(attRecord.check_out_time, adj.staff?.shift?.end_time)) {
+        alert(`Cannot approve Overtime: Checkout time (${attRecord.check_out_time}) must be at least 30 minutes past shift end (${adj.staff?.shift?.end_time || 'N/A'}).`);
+        return;
+      }
+    }
+
     try {
       // 1. Update adjustment row
       const { error: adjErr } = await supabase
@@ -194,6 +225,16 @@ export default function ApprovalsPage() {
         }
       }
 
+      await createAuditLog({
+        action: action === 'approved' ? 'approve_adjustment' : 'reject_adjustment',
+        table_name: 'attendance_adjustments',
+        record_id: adj.id,
+        new_value: { status: action, approved_by: user?.email || 'HR' },
+        performed_by: user?.email || 'admin',
+        performed_by_role: user?.role || 'admin',
+        reason: `${action === 'approved' ? 'Approved' : 'Rejected'} ${adj.type === 'ot' ? 'Overtime' : 'Early check-in'} (${adj.minutes} mins)`
+      });
+
       showToast(`${adj.type === 'ot' ? 'Overtime' : 'Early check-in'} ${action}!`);
       fetchApprovals();
     } catch (err) {
@@ -202,8 +243,87 @@ export default function ApprovalsPage() {
     }
   };
 
+  const handleApproveAllOT = async () => {
+    const validOTToApprove = otPending.filter((adj) => {
+      const att = attendanceMap[`${adj.staff_id}_${adj.date}`];
+      return att && isCheckoutValidForOT(att.check_out_time, adj.staff?.shift?.end_time);
+    });
+
+    if (validOTToApprove.length === 0) {
+      alert("No pending OT records meet the 30+ minute checkout criteria.");
+      return;
+    }
+
+    if (!confirm(`Are you sure you want to approve all ${validOTToApprove.length} eligible OT claims? (Skipping ${otPending.length - validOTToApprove.length} claims that do not meet the 30+ min checkout criteria).`)) {
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const approverName = user?.email || 'HR';
+      const approvedIds = validOTToApprove.map(a => a.id);
+
+      for (const adj of validOTToApprove) {
+        await supabase
+          .from('attendance_adjustments')
+          .update({
+            status: 'approved',
+            approved_by: approverName,
+            approved_at: new Date().toISOString(),
+          })
+          .eq('id', adj.id);
+
+        await supabase
+          .from('attendance')
+          .update({ ot_approved: true })
+          .eq('staff_id', adj.staff_id)
+          .eq('date', adj.date);
+
+        try {
+          await supabase.from('wall_events').insert({
+            event_type: 'ot_approved',
+            staff_id: adj.staff_id,
+            staff_name: adj.staff?.name,
+            branch_id: adj.staff?.branch_id,
+            description: `Bulk approved overtime (${adj.minutes} mins) for ${adj.staff?.name} on ${new Date(adj.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}`
+          });
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      await createAuditLog({
+        action: 'bulk_approve_ot',
+        table_name: 'attendance_adjustments',
+        record_id: approvedIds.join(','),
+        new_value: { status: 'approved', count: validOTToApprove.length },
+        performed_by: user?.email || 'admin',
+        performed_by_role: user?.role || 'admin',
+        reason: `Bulk approved ${validOTToApprove.length} OT claims (skipped ${otPending.length - validOTToApprove.length} ineligible claims)`
+      });
+
+      showToast(`Successfully bulk approved ${validOTToApprove.length} OT claims!`);
+      fetchApprovals();
+    } catch (err) {
+      console.error(err);
+      showToast("Failed to bulk approve OT.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Late fines actions handlers
   const handleFineAction = async (fine: LateFine, action: 'waived' | 'confirmed') => {
+    let waiverReason = '';
+    if (action === 'waived') {
+      const reason = window.prompt(`Please enter a reason for waiving this fine of ₹${fine.fine_amount} for ${fine.staff?.name}:`);
+      if (!reason || !reason.trim()) {
+        alert("A reason is required to waive a late fine.");
+        return;
+      }
+      waiverReason = reason.trim();
+    }
+
     try {
       const updateField = action === 'waived' ? { waived: true } : { confirmed: true };
       
@@ -220,11 +340,21 @@ export default function ApprovalsPage() {
           staff_id: fine.staff_id,
           staff_name: fine.staff?.name,
           branch_id: fine.staff?.branch_id,
-          description: `Late fine ₹${fine.fine_amount} for ${fine.staff?.name} on ${new Date(fine.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} was ${action} by ${user?.email || 'HR'}`
+          description: `Late fine ₹${fine.fine_amount} for ${fine.staff?.name} on ${new Date(fine.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} was ${action} by ${user?.email || 'HR'}${action === 'waived' ? ` (Reason: ${waiverReason})` : ''}`
         });
       } catch (e) {
         console.error('Silent insert wall event failed:', e);
       }
+
+      await createAuditLog({
+        action: action === 'waived' ? 'waive_fine' : 'confirm_fine',
+        table_name: 'late_fines',
+        record_id: fine.id,
+        new_value: updateField,
+        performed_by: user?.email || 'admin',
+        performed_by_role: user?.role || 'admin',
+        reason: action === 'waived' ? waiverReason : 'Confirmed late fine'
+      });
 
       showToast(`Fine ${action === 'waived' ? 'waived' : 'confirmed'} successfully!`);
       fetchApprovals();
@@ -327,59 +457,69 @@ export default function ApprovalsPage() {
                 <p className="text-xs text-[var(--text-muted)] mt-1">All overtime claims are approved or processed.</p>
               </div>
             ) : (
-              otPending.map((adj) => {
-                const att = attendanceMap[`${adj.staff_id}_${adj.date}`];
-                const shiftHours = Number(adj.staff?.shift?.hours || 8);
-                const actualHours = att ? Number(att.actual_hours_worked || 0) : 0;
-                
-                return (
-                  <div key={adj.id} className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col shadow-sm">
-                    <div className="flex items-start justify-between mb-3">
-                      <div>
-                        <h3 className="font-bold text-sm text-[#1A1A1A]">{adj.staff?.name}</h3>
-                        <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-0.5">
-                          {adj.staff?.department} • <span className="capitalize">{getBranchLabel(adj.staff?.branch_id)}</span>
-                        </p>
+              <>
+                <button
+                  type="button"
+                  onClick={handleApproveAllOT}
+                  className="w-full min-h-[44px] bg-[#2D7A3A] hover:bg-[#256330] text-white text-xs font-bold rounded-xl active:scale-95 transition-all shadow flex items-center justify-center space-x-1.5 cursor-pointer mb-3 animate-pulse-subtle"
+                >
+                  <CheckSquare size={16} />
+                  <span>Approve all OT ({otPending.length} pending)</span>
+                </button>
+                {otPending.map((adj) => {
+                  const att = attendanceMap[`${adj.staff_id}_${adj.date}`];
+                  const shiftHours = Number(adj.staff?.shift?.hours || 8);
+                  const actualHours = att ? Number(att.actual_hours_worked || 0) : 0;
+                  
+                  return (
+                    <div key={adj.id} className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col shadow-sm">
+                      <div className="flex items-start justify-between mb-3">
+                        <div>
+                          <h3 className="font-bold text-sm text-[#1A1A1A]">{adj.staff?.name}</h3>
+                          <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-0.5">
+                            {adj.staff?.department} • <span className="capitalize">{getBranchLabel(adj.staff?.branch_id)}</span>
+                          </p>
+                        </div>
+                        <span className="text-[9px] font-bold text-[var(--info)] bg-[var(--info-bg)] border border-[var(--info)]/20 px-2 py-0.5 rounded-[20px]">
+                          {formatDate(adj.date)}
+                        </span>
                       </div>
-                      <span className="text-[9px] font-bold text-[var(--info)] bg-[var(--info-bg)] border border-[var(--info)]/20 px-2 py-0.5 rounded-[20px]">
-                        {formatDate(adj.date)}
-                      </span>
-                    </div>
 
-                    <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-2.5 mb-4 text-xs font-semibold text-[#555555] grid grid-cols-3 gap-2 text-center">
-                      <div>
-                        <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Shift Hrs</div>
-                        <div className="text-[#1A1A1A] font-bold mt-0.5">{shiftHours} hrs</div>
+                      <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-2.5 mb-4 text-xs font-semibold text-[#555555] grid grid-cols-3 gap-2 text-center">
+                        <div>
+                          <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Shift Hrs</div>
+                          <div className="text-[#1A1A1A] font-bold mt-0.5">{shiftHours} hrs</div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Actual Hrs</div>
+                          <div className="text-[#1A1A1A] font-bold mt-0.5">{actualHours} hrs</div>
+                        </div>
+                        <div>
+                          <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">OT Claim</div>
+                          <div className="text-[var(--info)] font-bold mt-0.5">{adj.minutes} mins</div>
+                        </div>
                       </div>
-                      <div>
-                        <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Actual Hrs</div>
-                        <div className="text-[#1A1A1A] font-bold mt-0.5">{actualHours} hrs</div>
-                      </div>
-                      <div>
-                        <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">OT Claim</div>
-                        <div className="text-[var(--info)] font-bold mt-0.5">{adj.minutes} mins</div>
-                      </div>
-                    </div>
 
-                    <div className="flex gap-3">
-                      <button
-                        onClick={() => handleAdjustmentAction(adj, 'rejected')}
-                        className="flex-1 min-h-[40px] bg-[var(--danger-bg)] border border-[var(--danger)]/20 text-[var(--danger)] hover:bg-[var(--danger-bg)]/80 text-xs font-bold rounded-[12px] active:scale-95 transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
-                      >
-                        <X size={14} strokeWidth={1.5} />
-                        <span>Reject</span>
-                      </button>
-                      <button
-                        onClick={() => handleAdjustmentAction(adj, 'approved')}
-                        className="flex-1 min-h-[40px] bg-[#1A1A1A] text-white hover:bg-[#333333] text-xs font-bold rounded-[12px] active:scale-[0.97] transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
-                      >
-                        <Check size={14} strokeWidth={1.5} />
-                        <span>Approve</span>
-                      </button>
+                      <div className="flex gap-3">
+                        <button
+                          onClick={() => handleAdjustmentAction(adj, 'rejected')}
+                          className="flex-1 min-h-[40px] bg-[var(--danger-bg)] border border-[var(--danger)]/20 text-[var(--danger)] hover:bg-[var(--danger-bg)]/80 text-xs font-bold rounded-[12px] active:scale-95 transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
+                        >
+                          <X size={14} strokeWidth={1.5} />
+                          <span>Reject</span>
+                        </button>
+                        <button
+                          onClick={() => handleAdjustmentAction(adj, 'approved')}
+                          className="flex-1 min-h-[40px] bg-[#1A1A1A] text-white hover:bg-[#333333] text-xs font-bold rounded-[12px] active:scale-[0.97] transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
+                        >
+                          <Check size={14} strokeWidth={1.5} />
+                          <span>Approve</span>
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                );
-              })
+                  );
+                })}
+              </>
             )
           )}
 

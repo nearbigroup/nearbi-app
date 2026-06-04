@@ -3,13 +3,14 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
-import { Calendar, ClipboardList, CheckCircle, XCircle, AlertCircle, Clock, Plus, ArrowRight } from 'lucide-react';
+import { Calendar, ClipboardList, CheckCircle, XCircle, AlertCircle, Clock, ArrowRight } from 'lucide-react';
 
 interface LeaveRequest {
   id: string;
   date: string;
   reason: string | null;
   status: 'pending' | 'approved' | 'rejected';
+  is_quota_leave?: boolean;
   requested_at: string;
 }
 
@@ -20,6 +21,7 @@ export default function StaffLeavePage() {
   const [submitting, setSubmitting] = useState(false);
   const [staffInfo, setStaffInfo] = useState<any>(null);
   const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
+  const [daysWorkedThisMonth, setDaysWorkedThisMonth] = useState(0);
   const [activeTab, setActiveTab] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
   
   // Form states
@@ -28,7 +30,12 @@ export default function StaffLeavePage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  // Future dates only: calculate tomorrow's date string
+  const tomorrowStr = React.useMemo(() => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return tomorrow.toISOString().split('T')[0];
+  }, []);
 
   const fetchData = async () => {
     if (!user || !user.staffId) return;
@@ -42,7 +49,19 @@ export default function StaffLeavePage() {
       if (sErr) throw sErr;
       setStaffInfo(sData);
 
-      // 2. Fetch All Leave Requests
+      // 2. Fetch Attendance for current month to compute earned leaves
+      const currentMonth = new Date().toISOString().slice(0, 7);
+      const { data: attData } = await supabase
+        .from('attendance')
+        .select('check_in_time, status')
+        .eq('staff_id', user.staffId)
+        .gte('date', `${currentMonth}-01`)
+        .lte('date', `${currentMonth}-31`);
+      
+      const worked = attData?.filter(a => a.check_in_time && a.status !== 'absent').length || 0;
+      setDaysWorkedThisMonth(worked);
+
+      // 3. Fetch All Leave Requests
       const { data: lData, error: lErr } = await supabase
         .from('leave_requests')
         .select('*')
@@ -100,7 +119,7 @@ export default function StaffLeavePage() {
       }
 
       // Format date for notification message
-      const formattedDate = new Date(date).toLocaleDateString('en-US', {
+      const formattedDate = new Date(date).toLocaleDateString('en-IN', {
         day: 'numeric',
         month: 'short',
         year: 'numeric'
@@ -149,12 +168,24 @@ export default function StaffLeavePage() {
     }
   };
 
-  // Quota Metrics
+  // Dynamic Quota Metrics based on Section 1
   const quota = React.useMemo(() => {
     if (!staffInfo) return { earned: 0, used: 0, remaining: 0 };
     const currentMonth = new Date().toISOString().slice(0, 7); // "YYYY-MM"
     
-    const earned = staffInfo.off_days_per_month || 0;
+    // 4-off staff: 1 day per 6 days worked
+    // 2-off staff: 1 day per 12 days worked
+    const offDays = staffInfo.off_days_per_month || 0;
+    let earned = 0;
+    if (offDays === 4) {
+      earned = Math.floor(daysWorkedThisMonth / 6);
+    } else if (offDays === 2) {
+      earned = Math.floor(daysWorkedThisMonth / 12);
+    }
+    
+    // Earned quota cannot exceed total possible off days
+    earned = Math.min(earned, offDays);
+    
     const used = leaves.filter(l => 
       l.status === 'approved' && 
       l.date.startsWith(currentMonth)
@@ -165,7 +196,7 @@ export default function StaffLeavePage() {
       used,
       remaining: Math.max(0, earned - used)
     };
-  }, [staffInfo, leaves]);
+  }, [staffInfo, leaves, daysWorkedThisMonth]);
 
   const filteredLeaves = React.useMemo(() => {
     if (activeTab === 'all') return leaves;
@@ -220,13 +251,16 @@ export default function StaffLeavePage() {
     <div className="space-y-5">
       {/* Page Title */}
       <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-3 shadow-sm flex items-center justify-between">
-        <span className="text-xs font-extrabold text-[#1A1A1A] uppercase tracking-wider">Leave Portal</span>
+        <span className="text-xs font-extrabold text-[#1A1A1A] uppercase tracking-wider">Leave Register</span>
         <ClipboardList size={18} className="text-[var(--text-secondary)]" />
       </div>
 
       {/* Quota Info Bar */}
       <div className="bg-white border border-[#E8E8E8] rounded-[16px] p-4 shadow-sm">
-        <h3 className="text-xs font-extrabold text-[#1A1A1A] uppercase tracking-wider mb-3">Leave Balance (This Month)</h3>
+        <h3 className="text-xs font-extrabold text-[#1A1A1A] uppercase tracking-wider mb-2">Leave Quota (This Month)</h3>
+        <p className="text-[10px] text-[var(--text-muted)] font-semibold mb-3 leading-tight">
+          Earned based on worked days: {daysWorkedThisMonth} worked this month.
+        </p>
         <div className="grid grid-cols-3 gap-3">
           <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-3 text-center">
             <div className="text-lg font-black text-[#1A1A1A]">{quota.earned}</div>
@@ -234,7 +268,7 @@ export default function StaffLeavePage() {
           </div>
           <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-3 text-center">
             <div className="text-lg font-black text-[var(--warning)]">{quota.used}</div>
-            <div className="text-[9px] text-[var(--text-secondary)] font-bold uppercase tracking-wider mt-1">Approved</div>
+            <div className="text-[9px] text-[var(--text-secondary)] font-bold uppercase tracking-wider mt-1">Used</div>
           </div>
           <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-3 text-center">
             <div className="text-lg font-black text-[var(--success)]">{quota.remaining}</div>
@@ -243,7 +277,7 @@ export default function StaffLeavePage() {
         </div>
       </div>
 
-      {/* Apply Leave Form */}
+      {/* Apply Leave Section */}
       <div className="bg-white border border-[#E8E8E8] rounded-[16px] p-4 shadow-sm space-y-4">
         <h3 className="text-xs font-extrabold text-[#1A1A1A] uppercase tracking-wider border-b border-[var(--border)] pb-2">Apply for Leave</h3>
         
@@ -268,7 +302,7 @@ export default function StaffLeavePage() {
             </label>
             <input
               type="date"
-              min={todayStr}
+              min={tomorrowStr}
               value={date}
               onChange={(e) => setDate(e.target.value)}
               className="w-full text-[#1A1A1A] font-bold [color-scheme:light]"
@@ -307,7 +341,7 @@ export default function StaffLeavePage() {
         </form>
       </div>
 
-      {/* History Feed */}
+      {/* Leave History Tabs */}
       <div className="bg-white border border-[#E8E8E8] rounded-[16px] p-4 shadow-sm flex flex-col">
         <h3 className="text-xs font-extrabold text-[#1A1A1A] uppercase tracking-wider mb-3">Leave History</h3>
         
@@ -351,7 +385,23 @@ export default function StaffLeavePage() {
                     {l.reason}
                   </p>
                 )}
-                <div className="text-[9px] text-[var(--text-muted)] font-bold text-right">
+                
+                {/* Quota Impact Notes */}
+                {l.status === 'approved' && (
+                  <div className="mt-0.5 text-[9.5px] font-bold">
+                    {l.is_quota_leave ? (
+                      <span className="text-emerald-700 bg-emerald-50 border border-emerald-100/50 px-2 py-0.5 rounded">
+                        Within quota — no deduction
+                      </span>
+                    ) : (
+                      <span className="text-amber-700 bg-amber-50 border border-amber-100/50 px-2 py-0.5 rounded">
+                        Approved — 1 day salary impact
+                      </span>
+                    )}
+                  </div>
+                )}
+                
+                <div className="text-[9px] text-[var(--text-muted)] font-bold text-right pt-1">
                   Applied: {new Date(l.requested_at).toLocaleDateString('en-US', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
                 </div>
               </div>

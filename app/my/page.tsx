@@ -3,17 +3,17 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
-import { Calendar, User, Clock, AlertTriangle, CheckCircle, ChevronRight, Award } from 'lucide-react';
+import { Calendar, User, Clock, AlertTriangle, CheckCircle, ChevronRight, Award, Megaphone, Bell, Sparkles, X, Info, Coins } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
-interface FineItem {
+interface Announcement {
   id: string;
-  date: string;
-  type: 'late' | 'special';
-  amount: number;
-  reason?: string;
-  status: 'confirmed' | 'pending' | 'waived';
-  colorCode: 'green' | 'yellow' | 'orange' | 'red';
+  title: string;
+  message: string;
+  created_by: string;
+  branch_id: string | null;
+  target: 'all' | 'daily' | 'hypermarket';
+  created_at: string;
 }
 
 export default function StaffHomePage() {
@@ -22,18 +22,23 @@ export default function StaffHomePage() {
   
   const [loading, setLoading] = useState(true);
   const [staffInfo, setStaffInfo] = useState<any>(null);
-  const [stats, setStats] = useState({ present: 0, late: 0, absent: 0 });
+  const [stats, setStats] = useState({ present: 0, late: 0, absent: 0, weeklyOffs: 0, lateCount: 0, earlyExits: 0, requiredDays: 0, percentage: 0 });
   const [score, setScore] = useState<number | null>(null);
-  const [fines, setFines] = useState<FineItem[]>([]);
-  const [totalFines, setTotalFines] = useState(0);
-  const [recentAttendance, setRecentAttendance] = useState<any[]>([]);
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [featuredAnnouncement, setFeaturedAnnouncement] = useState<Announcement | null>(null);
+  const [selectedAnnouncement, setSelectedAnnouncement] = useState<Announcement | null>(null);
+  const [tomorrowShift, setTomorrowShift] = useState<string>('');
 
   useEffect(() => {
     if (!user || !user.staffId) return;
 
     const fetchData = async () => {
       try {
-        const currentMonth = new Date().toISOString().slice(0, 7);
+        const currentMonth = new Date().toISOString().slice(0, 7); // e.g. "2026-06"
+        const year = parseInt(currentMonth.split('-')[0]);
+        const monthNum = parseInt(currentMonth.split('-')[1]);
+        const calendarDays = new Date(year, monthNum, 0).getDate();
 
         // 1. Fetch Staff Info
         const { data: sData, error: sErr } = await supabase
@@ -50,13 +55,30 @@ export default function StaffHomePage() {
           .select('*')
           .eq('staff_id', user.staffId)
           .gte('date', `${currentMonth}-01`)
-          .lte('date', `${currentMonth}-31`);
+          .lte('date', `${currentMonth}-${calendarDays}`);
         if (attErr) throw attErr;
 
         const daysPresent = attData?.filter(a => a.check_in_time && a.status !== 'absent').length || 0;
         const daysLate = attData?.filter(a => a.status === 'late').length || 0;
         const daysAbsent = attData?.filter(a => a.status === 'absent').length || 0;
-        setStats({ present: daysPresent, late: daysLate, absent: daysAbsent });
+        const earlyExitsCount = attData?.filter(a => (a.early_leave_minutes || 0) > 0).length || 0;
+
+        const offDaysCount = sData.off_days_per_month || 4;
+        const requiredWorkingDays = Math.max(0, calendarDays - offDaysCount);
+        const attendancePercentage = requiredWorkingDays > 0 
+          ? Math.round((daysPresent / requiredWorkingDays) * 100) 
+          : 100;
+
+        setStats({
+          present: daysPresent,
+          late: daysLate,
+          absent: daysAbsent,
+          weeklyOffs: offDaysCount,
+          lateCount: daysLate,
+          earlyExits: earlyExitsCount,
+          requiredDays: requiredWorkingDays,
+          percentage: attendancePercentage
+        });
 
         // 3. Fetch Performance Score
         const { data: pScore, error: pErr } = await supabase
@@ -71,79 +93,41 @@ export default function StaffHomePage() {
           setScore(null);
         }
 
-        // 4. Fetch Fines
-        const { data: lateFinesData, error: lfErr } = await supabase
-          .from('late_fines')
+        // 4. Fetch Announcements
+        const { data: annData } = await supabase
+          .from('staff_announcements')
           .select('*')
-          .eq('staff_id', user.staffId)
-          .eq('month', currentMonth);
-        if (lfErr) throw lfErr;
+          .or(`target.eq.all,target.eq.${sData.branch_id}`)
+          .order('created_at', { ascending: false });
 
-        const { data: specialFinesData, error: sfErr } = await supabase
-          .from('special_fines')
-          .select('*')
-          .eq('staff_id', user.staffId)
-          .eq('month', currentMonth);
-        if (sfErr) throw sfErr;
-
-        const combinedFines: FineItem[] = [];
-        let totalFinesAmt = 0;
-
-        (lateFinesData || []).forEach(f => {
-          const waived = !!f.waived;
-          const amt = Number(f.fine_amount || 0);
-          if (!waived) {
-            totalFinesAmt += amt;
-          }
-          combinedFines.push({
-            id: f.id,
-            date: f.date,
-            type: 'late',
-            amount: amt,
-            reason: `Late Clock-In (${f.late_minutes} mins)`,
-            status: waived ? 'waived' : 'confirmed',
-            colorCode: f.color_code || 'yellow'
-          });
-        });
-
-        (specialFinesData || []).forEach(f => {
-          const waived = !!f.waived;
-          const confirmed = !!f.confirmed;
-          const amt = f.edited_amount !== null && f.edited_amount !== undefined ? Number(f.edited_amount) : Number(f.amount);
+        if (annData) {
+          setAnnouncements(annData);
           
-          if (confirmed && !waived) {
-            totalFinesAmt += amt;
+          // Check read status in localStorage
+          const readIds = JSON.parse(localStorage.getItem('read_announcements') || '[]');
+          const unread = annData.filter((a: any) => !readIds.includes(a.id));
+          setUnreadCount(unread.length);
+          
+          if (unread.length > 0) {
+            setFeaturedAnnouncement(unread[0]);
+          } else if (annData.length > 0) {
+            // fallback to most recent if none unread
+            setFeaturedAnnouncement(null);
           }
+        }
 
-          let status: 'confirmed' | 'pending' | 'waived' = 'pending';
-          if (waived) status = 'waived';
-          else if (confirmed) status = 'confirmed';
-
-          combinedFines.push({
-            id: f.id,
-            date: f.date,
-            type: 'special',
-            amount: amt,
-            reason: f.reason,
-            status,
-            colorCode: 'red'
-          });
-        });
-
-        // Sort fines by date descending
-        combinedFines.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-        setFines(combinedFines);
-        setTotalFines(totalFinesAmt);
-
-        // 5. Fetch Recent Attendance (Last 5 days)
-        const { data: recAtt, error: recErr } = await supabase
-          .from('attendance')
-          .select('*')
-          .eq('staff_id', user.staffId)
-          .order('date', { ascending: false })
-          .limit(5);
-        if (recErr) throw recErr;
-        setRecentAttendance(recAtt || []);
+        // 5. Calculate Tomorrow's Shift
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const tomorrowDay = tomorrow.getDay(); // 0 is Sunday, etc.
+        
+        // Simple logic: check if tomorrow is standard weekly off (e.g. Sunday for 4-off staff, or based on shift label)
+        // Usually, tomorrow's shift is their regular shift unless it is an off day.
+        if (sData.shift) {
+          setTomorrowShift(`${sData.shift.start_time} - ${sData.shift.end_time} (${sData.shift.label})`);
+        } else {
+          setTomorrowShift('No shift scheduled');
+        }
 
       } catch (err) {
         console.error('Error fetching staff home data:', err);
@@ -155,177 +139,274 @@ export default function StaffHomePage() {
     fetchData();
   }, [user]);
 
-  const getBranchLabel = (branchId: string) => {
-    return branchId === 'daily' ? 'Nearbi Daily' : 'Nearbi Hypermarket';
+  const handleDismissAnnouncement = (annId: string) => {
+    const readIds = JSON.parse(localStorage.getItem('read_announcements') || '[]');
+    if (!readIds.includes(annId)) {
+      readIds.push(annId);
+      localStorage.setItem('read_announcements', JSON.stringify(readIds));
+    }
+    
+    // Recalculate unread count
+    const unread = announcements.filter(a => !readIds.includes(a.id));
+    setUnreadCount(unread.length);
+    setFeaturedAnnouncement(unread.length > 0 ? unread[0] : null);
   };
 
-  const getStatusBadge = (rec: any) => {
-    if (!rec || !rec.check_in_time) {
-      return (
-        <span className="bg-[var(--danger-bg)] text-[var(--danger)] border border-[var(--danger)]/20 text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider">
-          Absent
-        </span>
-      );
-    }
-    if (rec.status === 'late') {
-      return (
-        <span className="bg-[var(--warning-bg)] text-[var(--warning)] border border-[var(--warning)]/20 text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider">
-          Late
-        </span>
-      );
-    }
-    return (
-      <span className="bg-[var(--success-bg)] text-[var(--success)] border border-[var(--success)]/20 text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider">
-        Present
-      </span>
-    );
+  const handleOpenAnnouncement = (ann: Announcement) => {
+    setSelectedAnnouncement(ann);
+    handleDismissAnnouncement(ann.id);
+  };
+
+  const getBranchLabel = (branchId: string) => {
+    return branchId === 'daily' ? 'Nearbi Daily' : 'Nearbi Hypermarket';
   };
 
   if (loading) {
     return (
       <div className="space-y-4">
-        <div className="skeleton h-[120px] w-full" />
-        <div className="skeleton h-[70px] w-full" />
-        <div className="skeleton h-[180px] w-full" />
+        <div className="skeleton h-[120px] w-full rounded-2xl" />
+        <div className="skeleton h-[70px] w-full rounded-xl" />
+        <div className="skeleton h-[180px] w-full rounded-2xl" />
+        <div className="skeleton h-[100px] w-full rounded-xl" />
       </div>
     );
   }
 
   return (
-    <div className="space-y-5 pb-4">
-      {/* Staff Info Card */}
-      {staffInfo && (
-        <div className="bg-white border border-[#E8E8E8] rounded-[16px] p-4 flex items-start space-x-3.5 shadow-sm">
-          <div className="w-12 h-12 rounded-full bg-[var(--bg-dark)] text-white border border-[var(--bg-dark)] font-bold text-lg flex items-center justify-center flex-shrink-0">
-            {staffInfo.name.charAt(0).toUpperCase()}
-          </div>
-          <div className="flex-1 min-w-0">
-            <h2 className="font-extrabold text-base text-[#1A1A1A] leading-tight truncate">
-              {staffInfo.name}
-            </h2>
-            <p className="text-xs text-[var(--text-secondary)] font-bold mt-0.5">
-              {staffInfo.department} • <span className="capitalize">{getBranchLabel(staffInfo.branch_id)}</span>
-            </p>
-            <div className="flex flex-wrap gap-1.5 mt-2.5">
-              <span className="bg-[var(--bg-secondary)] text-[var(--text-secondary)] border border-[var(--border)] text-[10px] font-bold px-2 py-0.5 rounded">
-                Shift: {staffInfo.shift?.label || 'None'} ({staffInfo.shift?.start_time} - {staffInfo.shift?.end_time})
-              </span>
-              {staffInfo.join_date && (
-                <span className="bg-[var(--bg-secondary)] text-[var(--text-secondary)] border border-[var(--border)] text-[10px] font-bold px-2 py-0.5 rounded">
-                  Joined: {new Date(staffInfo.join_date).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}
-                </span>
-              )}
+    <div className="space-y-5 pb-6">
+      
+      {/* 1. Announcement Banner at Top (if unread exists) */}
+      {featuredAnnouncement && (
+        <div className="bg-gradient-to-r from-amber-50 to-amber-100/80 border border-amber-200/60 rounded-2xl p-4 shadow-sm flex items-start justify-between relative overflow-hidden transition-all duration-300 animate-in slide-in-from-top-4">
+          <div className="absolute top-0 right-0 w-24 h-24 bg-amber-200/20 rounded-full blur-xl -mr-8 -mt-8" />
+          
+          <div className="flex items-start space-x-3.5 z-10 flex-1 mr-2">
+            <div className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center flex-shrink-0 shadow-sm animate-bounce">
+              <Megaphone size={16} strokeWidth={2} />
             </div>
+            <div className="flex-1 min-w-0 cursor-pointer" onClick={() => handleOpenAnnouncement(featuredAnnouncement)}>
+              <div className="flex items-center space-x-2">
+                <span className="text-[10px] font-black uppercase tracking-wider text-amber-800 bg-amber-200/50 px-1.5 py-0.5 rounded">Announcement</span>
+                <span className="text-[9px] font-bold text-amber-600">New</span>
+              </div>
+              <h4 className="font-extrabold text-xs text-amber-900 mt-1 truncate">{featuredAnnouncement.title}</h4>
+              <p className="text-[11px] text-amber-800/80 font-semibold mt-0.5 truncate leading-snug">
+                {featuredAnnouncement.message.substring(0, 50)}...
+              </p>
+            </div>
+          </div>
+
+          <button
+            onClick={() => handleDismissAnnouncement(featuredAnnouncement.id)}
+            className="p-1 rounded-full text-amber-700 hover:bg-amber-200/40 transition-colors z-10"
+            title="Dismiss"
+          >
+            <X size={15} />
+          </button>
+        </div>
+      )}
+
+      {/* 2. Staff Info Card (Premium Glassmorphism Style) */}
+      {staffInfo && (
+        <div className="bg-white border border-[#E8E8E8] rounded-2xl p-5 flex flex-col space-y-4 shadow-sm relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-[var(--bg-secondary)] rounded-full blur-3xl -mr-10 -mt-10" />
+          
+          <div className="flex items-start space-x-4 z-10">
+            <div className="w-14 h-14 rounded-2xl bg-[#1a1a1a] text-white border-2 border-white shadow-md font-black text-2xl flex items-center justify-center flex-shrink-0">
+              {staffInfo.name.charAt(0).toUpperCase()}
+            </div>
+            <div className="flex-1 min-w-0">
+              <span className="text-[9px] font-black tracking-widest text-[var(--text-muted)] uppercase">Welcome Back</span>
+              <h2 className="font-black text-lg text-[#1A1A1A] leading-tight truncate">
+                {staffInfo.name}
+              </h2>
+              <p className="text-xs text-[var(--text-secondary)] font-extrabold mt-1 flex items-center">
+                <span className="capitalize">{staffInfo.department}</span>
+                <span className="mx-1.5 text-gray-300">•</span>
+                <span className="capitalize">{getBranchLabel(staffInfo.branch_id)}</span>
+              </p>
+            </div>
+          </div>
+
+          <div className="border-t border-dashed border-gray-100 pt-3 flex flex-wrap gap-2 z-10">
+            <span className="bg-[var(--bg-secondary)] text-[var(--text-secondary)] border border-[var(--border)] text-[10px] font-black px-2.5 py-1 rounded-lg">
+              Shift: {staffInfo.shift?.label || 'None'} ({staffInfo.shift?.start_time} - {staffInfo.shift?.end_time})
+            </span>
+            {staffInfo.join_date && (
+              <span className="bg-[var(--bg-secondary)] text-[var(--text-secondary)] border border-[var(--border)] text-[10px] font-black px-2.5 py-1 rounded-lg">
+                Member Since: {new Date(staffInfo.join_date).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
+              </span>
+            )}
           </div>
         </div>
       )}
 
-      {/* Quick Stats Row */}
-      <div className={`grid ${score !== null ? 'grid-cols-4' : 'grid-cols-3'} gap-2.5`}>
-        <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-3 text-center flex flex-col items-center shadow-sm">
-          <span className="text-[10px] text-[var(--text-muted)] font-extrabold uppercase tracking-wider mb-1">Present</span>
-          <span className="text-xl font-black text-[var(--success)]">{stats.present}</span>
-        </div>
-        <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-3 text-center flex flex-col items-center shadow-sm">
-          <span className="text-[10px] text-[var(--text-muted)] font-extrabold uppercase tracking-wider mb-1">Late</span>
-          <span className="text-xl font-black text-[var(--warning)]">{stats.late}</span>
-        </div>
-        <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-3 text-center flex flex-col items-center shadow-sm">
-          <span className="text-[10px] text-[var(--text-muted)] font-extrabold uppercase tracking-wider mb-1">Absent</span>
-          <span className="text-xl font-black text-[var(--danger)]">{stats.absent}</span>
-        </div>
-        {score !== null && (
-          <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-3 text-center flex flex-col items-center shadow-sm">
-            <span className="text-[10px] text-[var(--text-muted)] font-extrabold uppercase tracking-wider mb-1 flex items-center gap-0.5">
-              <Award size={10} className="text-[#FBBF24]" /> Score
-            </span>
-            <span className="text-xl font-black text-[#1A1A1A]">{score}</span>
+      {/* 3. Outstanding Advance Balance (Conditional Banner) */}
+      {staffInfo && Number(staffInfo.advance_balance || 0) > 0 && (
+        <div className="bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-100 rounded-2xl p-4 shadow-sm flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <div className="w-9 h-9 rounded-xl bg-emerald-500 text-white flex items-center justify-center flex-shrink-0 shadow-sm">
+              <Coins size={16} strokeWidth={2} />
+            </div>
+            <div>
+              <p className="text-[10px] font-black text-emerald-800 uppercase tracking-wider leading-none">Advance Balance</p>
+              <h4 className="text-[14px] font-black text-emerald-900 mt-1">
+                Outstanding: ₹{Number(staffInfo.advance_balance).toLocaleString()}
+              </h4>
+            </div>
           </div>
-        )}
-      </div>
+          <div className="bg-emerald-100/50 text-emerald-700 text-[10px] font-black px-2 py-0.5 rounded border border-emerald-200/50">
+            Deducted at source
+          </div>
+        </div>
+      )}
 
-      {/* Fines Section */}
-      <div className="bg-white border border-[#E8E8E8] rounded-[16px] p-4 flex flex-col shadow-sm">
-        <div className="flex items-center justify-between border-b border-[var(--border)] pb-3 mb-3">
-          <h3 className="font-extrabold text-sm text-[#1A1A1A]">This Month's Fines</h3>
-          <span className={`font-black text-sm ${totalFines > 0 ? 'text-[var(--danger)]' : 'text-[var(--success)]'}`}>
-            ₹{totalFines.toLocaleString()}
+      {/* 4. Quick Stats Section (Rich Layout) */}
+      <div className="grid grid-cols-2 gap-3.5">
+        
+        {/* Attendance Percentage Circle Meter */}
+        <div className="bg-white border border-[#E8E8E8] rounded-2xl p-4 flex flex-col items-center text-center justify-between shadow-sm relative overflow-hidden">
+          <div className="w-full flex items-center justify-between mb-2">
+            <span className="text-[10px] text-[var(--text-muted)] font-black uppercase tracking-wider">Attendance %</span>
+            <Sparkles size={13} className="text-amber-500 animate-pulse" />
+          </div>
+          
+          <div className="my-2.5 relative flex items-center justify-center">
+            <div className="w-20 h-20 rounded-full border-4 border-gray-100 flex items-center justify-center bg-gray-50/30">
+              <div className="text-center">
+                <span className="text-2xl font-black text-[#1A1A1A]">{stats.percentage}%</span>
+                <span className="text-[8px] font-bold text-[var(--text-muted)] block uppercase tracking-tight">Month</span>
+              </div>
+            </div>
+          </div>
+          
+          <span className="text-[10px] text-[var(--text-secondary)] font-extrabold mt-1">
+            {stats.present} / {stats.requiredDays} working days
           </span>
         </div>
 
-        {fines.length === 0 ? (
-          <div className="py-2 text-center text-xs font-bold text-[var(--success)] flex items-center justify-center space-x-1.5">
-            <CheckCircle size={14} />
-            <span>No fines this month</span>
+        {/* Performance Score Display */}
+        <div className="bg-white border border-[#E8E8E8] rounded-2xl p-4 flex flex-col items-center text-center justify-between shadow-sm">
+          <div className="w-full flex items-center justify-between mb-1">
+            <span className="text-[10px] text-[var(--text-muted)] font-black uppercase tracking-wider flex items-center gap-1">
+              <Award size={12} className="text-[#FBBF24]" /> Score
+            </span>
+            <span title="Visible if published by Ops Manager">
+              <Info size={12} className="text-gray-300" />
+            </span>
           </div>
-        ) : (
-          <div className="space-y-2.5 max-h-[180px] overflow-y-auto pr-1">
-            {fines.map((f) => (
-              <div key={f.id} className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg p-2.5 flex items-center justify-between">
-                <div className="flex flex-col">
-                  <span className="text-[10px] text-[var(--text-muted)] font-bold">
-                    {new Date(f.date).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })}
-                  </span>
-                  <span className="text-[11px] text-[#1A1A1A] font-bold leading-tight mt-0.5">
-                    {f.reason}
-                  </span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <span className={`text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded border ${
-                    f.status === 'waived'
-                      ? 'bg-[var(--bg-elevated)] text-[var(--text-muted)] border-[var(--border-strong)]'
-                      : f.status === 'pending'
-                      ? 'bg-[var(--warning-bg)] text-[var(--warning)] border-[var(--warning)]/20'
-                      : 'bg-[var(--danger-bg)] text-[var(--danger)] border-[var(--danger)]/20'
-                  }`}>
-                    {f.status}
-                  </span>
-                  <span className="font-bold text-xs text-[#1A1A1A]">
-                    ₹{f.amount}
-                  </span>
-                </div>
+
+          <div className="my-2 flex flex-col items-center justify-center">
+            {score !== null ? (
+              <>
+                <span className="text-4xl font-black text-amber-500 tracking-tight leading-none">{score}</span>
+                <span className="text-[9px] font-black text-amber-700 bg-amber-50 border border-amber-200/50 rounded px-1.5 py-0.5 uppercase mt-2 tracking-wide">Excellent</span>
+              </>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-2.5">
+                <Clock size={20} className="text-gray-300 animate-spin" />
+                <span className="text-[9.5px] font-bold text-[var(--text-muted)] mt-1.5 uppercase tracking-tight">Review Pending</span>
               </div>
-            ))}
+            )}
           </div>
-        )}
+
+          <span className="text-[9px] text-[var(--text-muted)] font-bold">
+            Updated monthly
+          </span>
+        </div>
       </div>
 
-      {/* Recent Attendance */}
-      <div className="bg-white border border-[#E8E8E8] rounded-[16px] p-4 flex flex-col shadow-sm">
-        <div className="flex items-center justify-between border-b border-[var(--border)] pb-3 mb-3">
-          <h3 className="font-extrabold text-sm text-[#1A1A1A]">Recent Attendance</h3>
-          <button
-            onClick={() => router.push('/my/attendance')}
-            className="text-[10px] text-[var(--text-secondary)] hover:text-[#1A1A1A] font-extrabold flex items-center active:scale-95 transition-all"
-          >
-            <span>View all</span>
-            <ChevronRight size={14} />
-          </button>
+      {/* 5. Detailed Attendance Summary Numbers */}
+      <div className="bg-white border border-[#E8E8E8] rounded-2xl p-4 flex flex-col shadow-sm">
+        <h3 className="font-extrabold text-xs text-[#1A1A1A] uppercase tracking-wider border-b border-[var(--border)] pb-2.5 mb-3 flex items-center justify-between">
+          <span>This Month Summary</span>
+          <span className="text-[9.5px] font-bold text-[var(--text-muted)] bg-[var(--bg-secondary)] px-2 py-0.5 rounded border border-[var(--border)]">{new Date().toLocaleString('en-US', { month: 'long', year: 'numeric' })}</span>
+        </h3>
+
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <div className="bg-[#EDF7EF] border border-[#C3E6CB]/30 rounded-xl p-2.5">
+            <span className="text-[9px] text-[#2D7A3A] font-black uppercase tracking-wider block">Present</span>
+            <span className="text-xl font-black text-[#2D7A3A] block mt-0.5">{stats.present}</span>
+          </div>
+          <div className="bg-[#FDECEA] border border-[#F5C6CB]/30 rounded-xl p-2.5">
+            <span className="text-[9px] text-[#C0392B] font-black uppercase tracking-wider block">Absent</span>
+            <span className="text-xl font-black text-[#C0392B] block mt-0.5">{stats.absent}</span>
+          </div>
+          <div className="bg-gray-50 border border-gray-200/50 rounded-xl p-2.5">
+            <span className="text-[9px] text-gray-500 font-black uppercase tracking-wider block">Off Days</span>
+            <span className="text-xl font-black text-gray-700 block mt-0.5">{stats.weeklyOffs}</span>
+          </div>
         </div>
 
-        {recentAttendance.length === 0 ? (
-          <div className="py-2 text-center text-xs font-semibold text-[var(--text-muted)]">
-            No clock logs found.
+        <div className="grid grid-cols-2 gap-2 mt-2 text-center">
+          <div className="bg-amber-50 border border-amber-200/30 rounded-xl p-2.5 flex items-center justify-between px-3">
+            <span className="text-[10px] text-amber-800 font-extrabold uppercase tracking-wide">Late Arrivals</span>
+            <span className="text-base font-black text-amber-700 bg-white/80 border border-amber-200/50 px-2.5 py-0.5 rounded-lg">{stats.lateCount}</span>
           </div>
-        ) : (
-          <div className="space-y-2.5">
-            {recentAttendance.map((rec) => (
-              <div key={rec.id} className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-lg p-2.5 flex items-center justify-between">
-                <div className="flex flex-col">
-                  <span className="text-[10px] text-[var(--text-muted)] font-bold">
-                    {new Date(rec.date).toLocaleDateString('en-US', { day: 'numeric', month: 'short', weekday: 'short' })}
-                  </span>
-                  <span className="text-[11px] text-[var(--text-secondary)] font-bold mt-0.5">
-                    {rec.check_in_time ? `IN: ${rec.check_in_time}` : '—'} 
-                    {rec.check_out_time ? ` · OUT: ${rec.check_out_time}` : ''}
-                  </span>
-                </div>
-                <div>{getStatusBadge(rec)}</div>
-              </div>
-            ))}
+          <div className="bg-orange-50 border border-orange-200/30 rounded-xl p-2.5 flex items-center justify-between px-3">
+            <span className="text-[10px] text-orange-800 font-extrabold uppercase tracking-wide">Early Exits</span>
+            <span className="text-base font-black text-orange-700 bg-white/80 border border-orange-200/50 px-2.5 py-0.5 rounded-lg">{stats.earlyExits}</span>
           </div>
-        )}
+        </div>
       </div>
+
+      {/* 6. Tomorrow's Upcoming Shift */}
+      <div className="bg-white border border-[#E8E8E8] rounded-2xl p-4 shadow-sm flex items-center justify-between relative overflow-hidden">
+        <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#1a1a1a]" />
+        
+        <div className="flex items-center space-x-3.5 pl-1.5">
+          <div className="w-8 h-8 rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-center text-[#1A1A1A] flex-shrink-0">
+            <Clock size={16} strokeWidth={1.5} />
+          </div>
+          <div>
+            <span className="text-[10px] font-black uppercase text-[var(--text-muted)] tracking-wider block">Upcoming Shift (Tomorrow)</span>
+            <h4 className="text-xs font-black text-[#1A1A1A] mt-1">{tomorrowShift}</h4>
+          </div>
+        </div>
+
+        <div className="text-[9px] font-black text-gray-500 bg-gray-100 px-2 py-0.5 rounded uppercase border border-gray-200/50">
+          Planned
+        </div>
+      </div>
+
+      {/* 7. Announcement Detail Dialog (Popup Modal) */}
+      {selectedAnnouncement && (
+        <div className="fixed inset-0 z-[20000] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white border border-[#E8E8E8] rounded-2xl max-w-sm w-full p-5 flex flex-col space-y-4 shadow-2xl animate-in scale-in-95 duration-200">
+            <div className="flex items-start justify-between border-b border-gray-100 pb-3">
+              <div className="flex items-center space-x-2">
+                <Megaphone className="text-amber-500" size={18} />
+                <h3 className="text-[#1A1A1A] text-sm font-black uppercase tracking-wider">Announcement</h3>
+              </div>
+              <button
+                onClick={() => setSelectedAnnouncement(null)}
+                className="p-1 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            
+            <div className="space-y-2">
+              <h4 className="text-base font-black text-[#1A1A1A] leading-tight">{selectedAnnouncement.title}</h4>
+              <p className="text-xs text-gray-500 font-bold">
+                Posted on {new Date(selectedAnnouncement.created_at).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })} by {selectedAnnouncement.created_by}
+              </p>
+              
+              <div className="bg-gray-50 border border-gray-100 rounded-xl p-3.5 text-xs font-semibold text-gray-700 leading-relaxed max-h-[220px] overflow-y-auto whitespace-pre-wrap">
+                {selectedAnnouncement.message}
+              </div>
+            </div>
+
+            <button
+              onClick={() => setSelectedAnnouncement(null)}
+              className="w-full min-h-[42px] bg-[#1a1a1a] text-white font-black text-xs rounded-xl active:scale-95 transition-all shadow-md"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

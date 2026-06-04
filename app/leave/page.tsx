@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
+import { createAuditLog } from '@/lib/audit';
 import { RefreshCw, Calendar, Check, X } from 'lucide-react';
 
 type TabType = 'pending' | 'approved' | 'rejected';
@@ -35,6 +36,7 @@ export default function LeavePage() {
   const [activeTab, setActiveTab] = useState<TabType>('pending');
   const [toastMsg, setToastMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
   const [quotaWarning, setQuotaWarning] = useState<{
     id: string;
     staffId: string;
@@ -115,6 +117,16 @@ export default function LeavePage() {
         } catch (e) {
           console.error('Silent insert wall event failed:', e);
         }
+
+        await createAuditLog({
+          action: status === 'approved' ? 'approve_leave' : 'reject_leave',
+          table_name: 'leave_requests',
+          record_id: id,
+          new_value: { status, approved_by: approverName },
+          performed_by: user?.email || 'admin',
+          performed_by_role: user?.role || 'admin',
+          reason: status === 'approved' ? 'Approved leave request' : 'Rejected leave request'
+        });
       }
 
       showToast(`Leave request ${status}!`);
@@ -221,6 +233,16 @@ export default function LeavePage() {
         } catch (e) {
           console.error('Silent insert wall event failed:', e);
         }
+
+        await createAuditLog({
+          action: 'approve_leave',
+          table_name: 'leave_requests',
+          record_id: id,
+          new_value: { status: 'approved', approved_by: approverName, is_quota_leave: isWithinQuota },
+          performed_by: user?.email || 'admin',
+          performed_by_role: user?.role || 'admin',
+          reason: isWithinQuota ? 'Approved (within quota)' : 'Approved (salary deduction impact)'
+        });
       }
 
       showToast('Leave request approved!');
@@ -237,12 +259,18 @@ export default function LeavePage() {
   const approvedRequests = requests.filter((r) => r.status === 'approved');
   const rejectedRequests = requests.filter((r) => r.status === 'rejected');
 
-  const visibleData =
+  const visibleData = (
     activeTab === 'pending'
       ? pendingRequests
       : activeTab === 'approved'
       ? approvedRequests
-      : rejectedRequests;
+      : rejectedRequests
+  ).filter((r) => {
+    if (searchQuery.trim()) {
+      return r.staff?.name?.toLowerCase().includes(searchQuery.toLowerCase().trim());
+    }
+    return true;
+  });
 
   const formatDate = (dateStr: string) => {
     return new Date(dateStr).toLocaleDateString('en-US', {
@@ -299,6 +327,30 @@ export default function LeavePage() {
           </button>
         </div>
       )}
+
+      {/* Search Input Box */}
+      <div className="relative">
+        <input
+          type="text"
+          placeholder="Search staff by name..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="w-full bg-white border border-[#E8E8E8] rounded-xl p-3 pl-10 text-xs focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-medium shadow-sm"
+        />
+        <svg
+          className="absolute left-3.5 top-3.5 h-4 w-4 text-[#999999]"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth="2"
+            d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+          />
+        </svg>
+      </div>
 
       {/* Tabs */}
       <div className="flex border-b border-[#E8E8E8]">
