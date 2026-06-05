@@ -6,10 +6,10 @@ import BulkConfirmTab from '@/components/salary/BulkConfirmTab';
 import PayslipTab from '@/components/salary/PayslipTab';
 import PaymentTrackerTab from '@/components/salary/PaymentTrackerTab';
 import MonthlyReportTab from '@/components/salary/MonthlyReportTab';
-import { Lock, Calculator, User, Calendar, RefreshCw } from 'lucide-react';
+import { Lock, Calculator, User, Calendar, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { calculateSalary, getDaysInMonth, calculateEarlyLeaveDeduction } from '@/lib/salary';
-import { formatCurrency, getPastMonths, formatMonthDisplay } from '@/components/salary/utils';
+import { formatCurrency, getPastMonths, formatMonthDisplay, getCurrentMonthStr } from '@/components/salary/utils';
 
 type Tab = 'bulk_confirm' | 'payslip' | 'payments' | 'report' | 'calculator';
 
@@ -20,12 +20,67 @@ export default function SalaryPage() {
   // Calculator states
   const [staffList, setStaffList] = useState<any[]>([]);
   const [selectedStaffId, setSelectedStaffId] = useState('');
-  const [selectedMonth, setSelectedMonth] = useState(getPastMonths(3)[0]);
+  const [selectedMonth, setSelectedMonth] = useState(getCurrentMonthStr());
   const [calcResult, setCalcResult] = useState<any>(null);
   const [calcLoading, setCalcLoading] = useState(false);
 
   const [liveSalary, setLiveSalary] = useState<any>(null);
   const [liveLoading, setLiveLoading] = useState(false);
+
+  const now = new Date();
+  const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const [selectedYear, selectedMonthNum] = selectedMonth.split('-').map(Number);
+  const isCurrentMonth = selectedMonth === currentMonthKey;
+  const isPastMonth = 
+    selectedYear < now.getFullYear() ||
+    (selectedYear === now.getFullYear() && selectedMonthNum < now.getMonth() + 1);
+
+  const [earliestMonth, setEarliestMonth] = useState('');
+
+  useEffect(() => {
+    async function fetchEarliest() {
+      const d = new Date();
+      const sixMonthsAgo = new Date(d.getFullYear(), d.getMonth() - 6, 1);
+      let minMonth = sixMonthsAgo.toISOString().slice(0, 7); // YYYY-MM
+
+      try {
+        const { data: earliestAtt } = await supabase
+          .from('attendance')
+          .select('date')
+          .order('date', { ascending: true })
+          .limit(1);
+
+        if (earliestAtt && earliestAtt.length > 0 && earliestAtt[0].date) {
+          const attMonth = earliestAtt[0].date.slice(0, 7);
+          if (attMonth < minMonth) {
+            minMonth = attMonth;
+          }
+        }
+      } catch (err) {
+        console.error("Error fetching earliest attendance date:", err);
+      }
+
+      try {
+        const { data: earliestConf } = await supabase
+          .from('salary_confirmations')
+          .select('month')
+          .order('month', { ascending: true })
+          .limit(1);
+
+        if (earliestConf && earliestConf.length > 0 && earliestConf[0].month) {
+          const confMonth = earliestConf[0].month;
+          if (confMonth < minMonth) {
+            minMonth = confMonth;
+          }
+        }
+      } catch (err) {
+        console.error("Error fetching earliest confirmation month:", err);
+      }
+
+      setEarliestMonth(minMonth);
+    }
+    fetchEarliest();
+  }, []);
 
   const fetchLiveSalary = async (staffId: string) => {
     if (!staffId) {
@@ -137,8 +192,10 @@ export default function SalaryPage() {
   };
 
   useEffect(() => {
-    fetchLiveSalary(selectedStaffId);
-  }, [selectedStaffId, staffList]);
+    if (selectedStaffId && isCurrentMonth) {
+      fetchLiveSalary(selectedStaffId);
+    }
+  }, [selectedStaffId, staffList, selectedMonth, isCurrentMonth]);
 
   useEffect(() => {
     async function loadStaff() {
@@ -300,6 +357,82 @@ export default function SalaryPage() {
     );
   }
 
+  const ALL_MONTHS = [
+    { value: '01', label: 'January' },
+    { value: '02', label: 'February' },
+    { value: '03', label: 'March' },
+    { value: '04', label: 'April' },
+    { value: '05', label: 'May' },
+    { value: '06', label: 'June' },
+    { value: '07', label: 'July' },
+    { value: '08', label: 'August' },
+    { value: '09', label: 'September' },
+    { value: '10', label: 'October' },
+    { value: '11', label: 'November' },
+    { value: '12', label: 'December' },
+  ];
+
+  const handlePrevMonth = () => {
+    const [year, month] = selectedMonth.split('-').map(Number);
+    let prevYear = year;
+    let prevMonth = month - 1;
+    if (prevMonth < 1) {
+      prevMonth = 12;
+      prevYear--;
+    }
+    const target = `${prevYear}-${String(prevMonth).padStart(2, '0')}`;
+    if (!earliestMonth || target >= earliestMonth) {
+      setSelectedMonth(target);
+    }
+  };
+
+  const handleNextMonth = () => {
+    const [year, month] = selectedMonth.split('-').map(Number);
+    let nextYear = year;
+    let nextMonth = month + 1;
+    if (nextMonth > 12) {
+      nextMonth = 1;
+      nextYear++;
+    }
+    const target = `${nextYear}-${String(nextMonth).padStart(2, '0')}`;
+    if (target <= currentMonthKey) {
+      setSelectedMonth(target);
+    }
+  };
+
+  const handleMonthDropdownChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const newMonth = e.target.value;
+    const [year] = selectedMonth.split('-');
+    const target = `${year}-${newMonth}`;
+    updateSelectedMonthClamped(target);
+  };
+
+  const handleYearDropdownChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const newYear = e.target.value;
+    const [, month] = selectedMonth.split('-');
+    const target = `${newYear}-${month}`;
+    updateSelectedMonthClamped(target);
+  };
+
+  const updateSelectedMonthClamped = (target: string) => {
+    let clamped = target;
+    if (clamped > currentMonthKey) {
+      clamped = currentMonthKey;
+    } else if (earliestMonth && clamped < earliestMonth) {
+      clamped = earliestMonth;
+    }
+    setSelectedMonth(clamped);
+  };
+
+  const isFirstMonth = earliestMonth ? selectedMonth <= earliestMonth : false;
+  const isLastMonth = selectedMonth >= currentMonthKey;
+
+  const startYear = earliestMonth ? parseInt(earliestMonth.split('-')[0]) : 2024;
+  const yearsOptions: number[] = [];
+  for (let y = Math.min(2024, startYear); y <= now.getFullYear(); y++) {
+    yearsOptions.push(y);
+  }
+
   const tabs: { id: Tab; label: string }[] = [
     { id: 'bulk_confirm', label: 'Bulk Confirm' },
     { id: 'payslip', label: 'Payslip' },
@@ -332,12 +465,65 @@ export default function SalaryPage() {
         </div>
       </div>
 
+      {/* Global Month Selector */}
+      <div className="print:hidden bg-white border border-[#E8E8E8] rounded-[14px] p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4 select-none">
+        <div className="flex items-center space-x-3">
+          <button
+            onClick={handlePrevMonth}
+            disabled={isFirstMonth}
+            className="p-2 rounded-lg border border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-95 transition-all text-[#1A1A1A] disabled:opacity-30 disabled:pointer-events-none cursor-pointer"
+          >
+            <ChevronLeft size={16} />
+          </button>
+          <span className="text-sm font-extrabold text-[#1A1A1A]">
+            {formatMonthDisplay(selectedMonth)}
+          </span>
+          <button
+            onClick={handleNextMonth}
+            disabled={isLastMonth}
+            className="p-2 rounded-lg border border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-95 transition-all text-[#1A1A1A] disabled:opacity-30 disabled:pointer-events-none cursor-pointer"
+          >
+            <ChevronRight size={16} />
+          </button>
+        </div>
+
+        <div className="flex items-center space-x-2">
+          <select
+            value={selectedMonth.split('-')[1]}
+            onChange={handleMonthDropdownChange}
+            className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-2.5 text-xs font-bold text-[#1A1A1A] focus:outline-none focus:border-[#1A1A1A]"
+          >
+            {ALL_MONTHS.map((m) => (
+              <option key={m.value} value={m.value} className="bg-white text-[#1A1A1A]">
+                {m.label}
+              </option>
+            ))}
+          </select>
+          <select
+            value={selectedMonth.split('-')[0]}
+            onChange={handleYearDropdownChange}
+            className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-2.5 text-xs font-bold text-[#1A1A1A] focus:outline-none focus:border-[#1A1A1A]"
+          >
+            {yearsOptions.map((y) => (
+              <option key={y} value={y} className="bg-white text-[#1A1A1A]">
+                {y}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
       {/* Active Tab Content */}
       <div className="animate-in fade-in duration-200">
-        {activeTab === 'bulk_confirm' && <BulkConfirmTab />}
-        {activeTab === 'payslip' && <PayslipTab />}
-        {activeTab === 'payments' && <PaymentTrackerTab />}
-        {activeTab === 'report' && <MonthlyReportTab />}
+        {activeTab === 'bulk_confirm' && <BulkConfirmTab selectedMonth={selectedMonth} />}
+        {activeTab === 'payslip' && <PayslipTab selectedMonth={selectedMonth} />}
+        {activeTab === 'payments' && <PaymentTrackerTab selectedMonth={selectedMonth} />}
+        {activeTab === 'report' && (
+          <MonthlyReportTab
+            selectedMonth={selectedMonth}
+            onGoToBulkConfirm={() => setActiveTab('bulk_confirm')}
+          />
+        )}
         {activeTab === 'calculator' && (
           <SalaryCalculatorTab
             staffList={staffList}
@@ -369,7 +555,13 @@ function SalaryCalculatorTab({
   liveLoading,
   fetchLiveSalary,
 }: any) {
-  const months = getPastMonths(3);
+  const now = new Date();
+  const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  const isCurrentMonth = selectedMonth === currentMonthKey;
+  const [selectedYear, selectedMonthNum] = selectedMonth.split('-').map(Number);
+  const isPastMonth = 
+    selectedYear < now.getFullYear() ||
+    (selectedYear === now.getFullYear() && selectedMonthNum < now.getMonth() + 1);
 
   return (
     <div className="space-y-5 select-none">
@@ -393,115 +585,130 @@ function SalaryCalculatorTab({
             ))}
           </select>
         </div>
-
-        <div>
-          <label className="block text-xs font-bold text-[var(--text-muted)] mb-1.5 flex items-center">
-            <Calendar size={14} className="mr-1 text-[var(--text-secondary)]" />
-            Select Calculation Month
-          </label>
-          <div className="flex gap-2">
-            {months.map((m) => {
-              const isActive = selectedMonth === m;
-              return (
-                <button
-                  key={m}
-                  onClick={() => setSelectedMonth(m)}
-                  className={`flex-1 py-2.5 rounded-[12px] border text-xs font-bold transition-all cursor-pointer ${
-                    isActive
-                      ? 'bg-[#1A1A1A] text-white border-[#1A1A1A]'
-                      : 'bg-white text-[#555555] border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-95'
-                  }`}
-                >
-                  {formatMonthDisplay(m)}
-                </button>
-              );
-            })}
-          </div>
-        </div>
       </div>
 
-      {/* Live Salary Card */}
+      {/* Featured Metrics / Salary Card */}
       {selectedStaffId && (
-        <div className="bg-[#1A1A1A] border border-transparent text-white rounded-[14px] p-5 shadow-lg relative overflow-hidden flex flex-col space-y-4">
-          <div className="flex justify-between items-center">
-            <div>
-              <p className="text-[10px] text-white/50 font-bold uppercase tracking-wider">Featured Metrics</p>
-              <h3 className="text-sm font-extrabold text-white mt-0.5">Current Month Live Salary</h3>
-            </div>
-            <button
-              onClick={() => fetchLiveSalary(selectedStaffId)}
-              disabled={liveLoading}
-              className="text-white/60 hover:text-white p-1.5 rounded-full hover:bg-white/10 transition-colors cursor-pointer"
-            >
-              <RefreshCw size={16} className={`${liveLoading ? 'animate-spin' : ''}`} />
-            </button>
-          </div>
+        (() => {
+          const displayData = isPastMonth ? calcResult : liveSalary;
+          const displayLoading = isPastMonth ? calcLoading : liveLoading;
 
-          {liveLoading && !liveSalary ? (
-            <div className="py-6 flex justify-center items-center">
-              <RefreshCw size={24} className="animate-spin text-white/60" />
-            </div>
-          ) : liveSalary ? (
-            <div className="space-y-4 pt-1">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <span className="text-[10px] font-bold text-white/40 uppercase tracking-wider block">Net Current Salary</span>
-                  <span className="text-2xl font-black text-white block mt-1 leading-none">{formatCurrency(liveSalary.netSalary)}</span>
-                </div>
-                <div className="text-right">
-                  <span className="text-[10px] font-bold text-white/40 uppercase tracking-wider block">Days Worked</span>
-                  <span className="text-base font-extrabold text-white block mt-1 leading-none">{liveSalary.daysWorked} / {liveSalary.calendarDays}</span>
-                </div>
+          if (displayLoading && !displayData) {
+            return (
+              <div className="bg-[#1A1A1A] border border-transparent text-white rounded-[14px] p-5 shadow-lg relative overflow-hidden flex justify-center items-center py-8">
+                <RefreshCw size={24} className="animate-spin text-white/60" />
               </div>
-              <div className="grid grid-cols-3 gap-y-3 gap-x-2 border-t border-white/10 pt-3.5 text-xs text-white/70">
-                <div>
-                  <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Remaining Days</span>
-                  <span className="font-extrabold text-white block mt-0.5">{liveSalary.daysRemaining} days</span>
-                </div>
-                <div>
-                  <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Gross Pay</span>
-                  <span className="font-extrabold text-white block mt-0.5">{formatCurrency(liveSalary.grossPay)}</span>
-                </div>
-                <div className="text-right">
-                  <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">OT Earned</span>
-                  <span className="font-extrabold text-white block mt-0.5">{formatCurrency(liveSalary.otEarned)}</span>
-                </div>
-                <div>
-                  <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Early Leave Deduct</span>
-                  <span className="font-extrabold text-white block mt-0.5">-{formatCurrency(liveSalary.earlyLeaveDeduction || 0)}</span>
-                </div>
-                <div>
-                  <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Fines So Far</span>
-                  <span className="font-extrabold text-white block mt-0.5">-{formatCurrency(liveSalary.finesSoFar)}</span>
-                </div>
-                <div className="text-right">
-                  <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Paid Days</span>
-                  <span className="font-extrabold text-white block mt-0.5">{liveSalary.paidDays} days</span>
-                </div>
-              </div>
-              {(() => {
-                let milestoneMsg = "";
-                const dailyRateRounded = Math.round(liveSalary.dailyRate);
-                if (liveSalary.daysWorked < liveSalary.requiredWorkingDays) {
-                  const needed = liveSalary.requiredWorkingDays - liveSalary.daysWorked;
-                  milestoneMsg = `Work ${needed} more day${needed > 1 ? 's' : ''} to reach standard full salary target.`;
-                } else if (liveSalary.paidDays < liveSalary.maxPaidDays) {
-                  milestoneMsg = `Work 1 more day to earn +1 day extra bonus (+${formatCurrency(dailyRateRounded)}).`;
+            );
+          }
+
+          if (!displayData) {
+            return null;
+          }
+
+          const milestoneMsg = isPastMonth 
+            ? "" 
+            : (() => {
+                const dailyRateRounded = Math.round(displayData.dailyRate);
+                if (displayData.daysWorked < displayData.requiredWorkingDays) {
+                  const needed = displayData.requiredWorkingDays - displayData.daysWorked;
+                  return `Work ${needed} more day${needed > 1 ? 's' : ''} to reach standard full salary target.`;
+                } else if (displayData.paidDays < displayData.maxPaidDays) {
+                  return `Work 1 more day to earn +1 day extra bonus (+${formatCurrency(dailyRateRounded)}).`;
                 } else {
-                  milestoneMsg = `Maximum bonus paid days reached for this month.`;
+                  return `Maximum bonus paid days reached for this month.`;
                 }
-                return (
+              })();
+
+          return (
+            <div className="bg-[#1A1A1A] border border-transparent text-white rounded-[14px] p-5 shadow-lg relative overflow-hidden flex flex-col space-y-4">
+              <div className="flex justify-between items-center">
+                <div>
+                  <p className="text-[10px] text-white/50 font-bold uppercase tracking-wider">Featured Metrics</p>
+                  <h3 className="text-sm font-extrabold text-white mt-0.5 animate-in fade-in">
+                    {isPastMonth ? `FULL MONTH — ${formatMonthDisplay(selectedMonth)}` : "Current Month Live Salary"}
+                  </h3>
+                  {isCurrentMonth && (
+                    <p className="text-[10px] text-white/40 font-bold mt-0.5 animate-in fade-in">
+                      Based on {displayData.daysWorked || displayData.daysActuallyWorked || 0} days recorded so far
+                    </p>
+                  )}
+                </div>
+                {isCurrentMonth && (
+                  <button
+                    onClick={() => fetchLiveSalary(selectedStaffId)}
+                    disabled={liveLoading}
+                    className="text-white/60 hover:text-white p-1.5 rounded-full hover:bg-white/10 transition-colors cursor-pointer"
+                  >
+                    <RefreshCw size={16} className={`${liveLoading ? 'animate-spin' : ''}`} />
+                  </button>
+                )}
+              </div>
+
+              <div className="space-y-4 pt-1">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <span className="text-[10px] font-bold text-white/40 uppercase tracking-wider block">
+                      {isPastMonth ? "Net Salary" : "Net Current Salary"}
+                    </span>
+                    <span className="text-2xl font-black text-white block mt-1 leading-none">
+                      {formatCurrency(displayData.netSalary)}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[10px] font-bold text-white/40 uppercase tracking-wider block">Days Worked</span>
+                    <span className="text-base font-extrabold text-white block mt-1 leading-none">
+                      {displayData.daysWorked ?? displayData.daysActuallyWorked ?? 0} / {displayData.calendarDays}
+                    </span>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-y-3 gap-x-2 border-t border-white/10 pt-3.5 text-xs text-white/70">
+                  <div>
+                    <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Remaining Days</span>
+                    <span className="font-extrabold text-white block mt-0.5">
+                      {isPastMonth ? 0 : (displayData.daysRemaining ?? 0)} days
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Gross Pay</span>
+                    <span className="font-extrabold text-white block mt-0.5">
+                      {formatCurrency(displayData.grossPay)}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">OT Earned</span>
+                    <span className="font-extrabold text-white block mt-0.5">
+                      {formatCurrency(displayData.otEarned ?? displayData.otPay ?? 0)}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Early Leave Deduct</span>
+                    <span className="font-extrabold text-white block mt-0.5">
+                      -{formatCurrency(displayData.earlyLeaveDeduction || 0)}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Fines So Far</span>
+                    <span className="font-extrabold text-white block mt-0.5">
+                      -{formatCurrency(displayData.finesSoFar ?? ((displayData.confirmedLateFines || 0) + (displayData.confirmedSpecialFines || 0)))}
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Paid Days</span>
+                    <span className="font-extrabold text-white block mt-0.5">
+                      {displayData.paidDays} days
+                    </span>
+                  </div>
+                </div>
+                {milestoneMsg && (
                   <div className="mt-2 bg-white/10 border border-white/5 rounded-lg px-3 py-2 text-[10px] font-bold text-white/80 flex items-center space-x-1.5">
                     <span className="w-1.5 h-1.5 rounded-full bg-[var(--warning)] animate-ping flex-shrink-0" />
                     <span>{milestoneMsg}</span>
                   </div>
-                );
-              })()}
+                )}
+              </div>
             </div>
-          ) : (
-            <p className="text-xs text-white/50 italic py-2">Select staff to load live salary.</p>
-          )}
-        </div>
+          );
+        })()
       )}
 
 

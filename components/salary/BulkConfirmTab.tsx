@@ -10,7 +10,7 @@ import { Check, Search, AlertCircle } from 'lucide-react';
 import { createAuditLog } from '@/lib/audit';
 import SpecialFinesSection from './SpecialFinesSection';
 
-export default function BulkConfirmTab() {
+export default function BulkConfirmTab({ selectedMonth }: { selectedMonth?: string }) {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [confirming, setConfirming] = useState(false);
@@ -28,7 +28,7 @@ export default function BulkConfirmTab() {
   const [confirmingFines, setConfirmingFines] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   
-  const month = getCurrentMonthStr();
+  const month = selectedMonth || getCurrentMonthStr();
 
   const fetchData = async () => {
     try {
@@ -121,7 +121,7 @@ export default function BulkConfirmTab() {
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [month]);
 
   useEffect(() => {
     // Recalculate salaries when staff list, attendance records, extra leaves, late fines, or special fines change

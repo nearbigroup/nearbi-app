@@ -6,14 +6,25 @@ import { Staff, SalaryConfirmation } from './types';
 import { formatCurrency, getPastMonths, formatMonthDisplay } from './utils';
 import { AlertTriangle, FileText, Share2 } from 'lucide-react';
 
-export default function PayslipTab() {
+export default function PayslipTab({ selectedMonth: propMonth }: { selectedMonth?: string }) {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [selectedStaffId, setSelectedStaffId] = useState('');
   
   const months = getPastMonths(3);
-  const [selectedMonth, setSelectedMonth] = useState(months[0]);
+  const [selectedMonthState, setSelectedMonthState] = useState(propMonth || months[0]);
+  const selectedMonth = propMonth || selectedMonthState;
+
+  useEffect(() => {
+    if (propMonth) {
+      setSelectedMonthState(propMonth);
+    }
+  }, [propMonth]);
+
+  const setSelectedMonth = (m: string) => {
+    setSelectedMonthState(m);
+  };
   
   const [confirmation, setConfirmation] = useState<any | null>(null);
 
@@ -134,29 +145,31 @@ export default function PayslipTab() {
           </select>
         </div>
 
-        <div>
-          <label className="block text-xs font-bold text-[var(--text-muted)] mb-1.5">
-            Select Month
-          </label>
-          <div className="flex gap-2">
-            {months.map((m) => {
-              const isActive = selectedMonth === m;
-              return (
-                <button
-                  key={m}
-                  onClick={() => setSelectedMonth(m)}
-                  className={`flex-1 py-2.5 rounded-[12px] border text-xs font-bold transition-all cursor-pointer ${
-                    isActive
-                      ? 'bg-[#1A1A1A] text-white border-[#1A1A1A]'
-                      : 'bg-white text-[#555555] border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-95'
-                  }`}
-                >
-                  {formatMonthDisplay(m)}
-                </button>
-              );
-            })}
+        {!propMonth && (
+          <div>
+            <label className="block text-xs font-bold text-[var(--text-muted)] mb-1.5">
+              Select Month
+            </label>
+            <div className="flex gap-2">
+              {months.map((m) => {
+                const isActive = selectedMonth === m;
+                return (
+                  <button
+                    key={m}
+                    onClick={() => setSelectedMonth(m)}
+                    className={`flex-1 py-2.5 rounded-[12px] border text-xs font-bold transition-all cursor-pointer ${
+                      isActive
+                        ? 'bg-[#1A1A1A] text-white border-[#1A1A1A]'
+                        : 'bg-white text-[#555555] border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-95'
+                    }`}
+                  >
+                    {formatMonthDisplay(m)}
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {errorMsg && (

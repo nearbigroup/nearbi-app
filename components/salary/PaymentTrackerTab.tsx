@@ -7,12 +7,12 @@ import { Staff, SalaryConfirmation, SalaryPayment } from './types';
 import { formatCurrency, getCurrentMonthStr, formatMonthDisplay } from './utils';
 import { Check, X } from 'lucide-react';
 
-export default function PaymentTrackerTab() {
+export default function PaymentTrackerTab({ selectedMonth }: { selectedMonth?: string }) {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   const [toastMsg, setToastMsg] = useState('');
-  const month = getCurrentMonthStr();
+  const month = selectedMonth || getCurrentMonthStr();
 
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [confirmations, setConfirmations] = useState<SalaryConfirmation[]>([]);
@@ -72,7 +72,7 @@ export default function PaymentTrackerTab() {
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [month]);
 
   const handleOpenPayment = (s: Staff, conf: SalaryConfirmation | null) => {
     setSelectedStaff(s);

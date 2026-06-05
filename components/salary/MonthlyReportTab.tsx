@@ -7,12 +7,29 @@ import { formatCurrency, getPastMonths, formatMonthDisplay } from './utils';
 import { Download } from 'lucide-react';
 import { calculateSalary } from '@/lib/salary';
 
-export default function MonthlyReportTab() {
+export default function MonthlyReportTab({
+  selectedMonth: propMonth,
+  onGoToBulkConfirm
+}: {
+  selectedMonth?: string;
+  onGoToBulkConfirm?: () => void;
+}) {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   
   const months = getPastMonths(6);
-  const [selectedMonth, setSelectedMonth] = useState(months[0]);
+  const [selectedMonthState, setSelectedMonthState] = useState(propMonth || months[0]);
+  const selectedMonth = propMonth || selectedMonthState;
+
+  useEffect(() => {
+    if (propMonth) {
+      setSelectedMonthState(propMonth);
+    }
+  }, [propMonth]);
+
+  const setSelectedMonth = (m: string) => {
+    setSelectedMonthState(m);
+  };
   
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [confirmations, setConfirmations] = useState<SalaryConfirmation[]>([]);
@@ -98,12 +115,31 @@ export default function MonthlyReportTab() {
     fetchData();
   }, [selectedMonth]);
 
-  const recalculatedConfs = React.useMemo(() => {
+  const reportRecords = React.useMemo(() => {
     const [yearStr, monthStr] = selectedMonth.split('-');
     const year = parseInt(yearStr);
     const monthNum = parseInt(monthStr);
 
-    return confirmations.map((c) => {
+    const baseRecords = confirmations.length > 0
+      ? confirmations
+      : staffList.filter(s => s.active).map(s => ({
+          id: '',
+          staff_id: s.id,
+          base_salary: s.monthly_salary,
+          paid_days: 30,
+          leave_deduction: 0,
+          ot_pay: 0,
+          early_in_pay: 0,
+          early_leave_deduction: 0,
+          extra_leave_days: 0,
+          ot_minutes: 0,
+          confirmed_fines: 0,
+          confirmed_special_fines: 0,
+          confirmed_by: '',
+          month: selectedMonth
+        }));
+
+    return baseRecords.map((c) => {
       const s = staffList.find((x) => x.id === c.staff_id);
       if (!s) return null;
 
@@ -128,16 +164,22 @@ export default function MonthlyReportTab() {
       ) || 0;
 
       const staffLateFines = lateFines.filter(
-        (lf) => lf.staff_id === s.id && lf.confirmed && !lf.waived
+        (lf) => lf.staff_id === s.id && lf.confirmed
       );
-      const totalLateFinesAmt = staffLateFines.reduce((sum, lf) => sum + Number(lf.fine_amount), 0);
+      const totalLateFinesAmt = staffLateFines.reduce((sum, lf) => {
+        const amt = Number(lf.fine_amount);
+        const waivedAmt = Number(lf.waived_amount || 0);
+        return sum + (lf.waived ? 0 : Math.max(0, amt - waivedAmt));
+      }, 0);
 
       const staffSpecialFines = specialFines.filter(
-        (sf) => sf.staff_id === s.id && sf.confirmed && !sf.waived
+        (sf) => sf.staff_id === s.id && sf.confirmed
       );
-      const totalSpecialFinesAmt = staffSpecialFines.reduce(
-        (sum, sf) => sum + Number(sf.edited_amount ?? sf.amount), 0
-      );
+      const totalSpecialFinesAmt = staffSpecialFines.reduce((sum, sf) => {
+        const amt = Number(sf.edited_amount ?? sf.amount);
+        const waivedAmt = Number(sf.waived_amount || 0);
+        return sum + (sf.waived ? 0 : Math.max(0, amt - waivedAmt));
+      }, 0);
 
       const shiftHours = s.shift?.hours || 9;
 
@@ -180,7 +222,7 @@ export default function MonthlyReportTab() {
     const branchStaff = staffList.filter((s) => s.branch_id === branchId);
     const branchStaffIds = branchStaff.map((s) => s.id);
     
-    const branchConfs = recalculatedConfs.filter((c) => branchStaffIds.includes(c.staff_id));
+    const branchConfs = reportRecords.filter((c) => branchStaffIds.includes(c.staff_id));
     const branchPays = payments.filter((p) => branchStaffIds.includes(p.staff_id));
 
     const totalPayroll = branchConfs.reduce((sum, c) => sum + c.net_salary, 0);
@@ -199,10 +241,10 @@ export default function MonthlyReportTab() {
   const dailyStats = getBranchStats('daily');
   const hyperStats = getBranchStats('hypermarket');
 
-  const totalBase = recalculatedConfs.reduce((sum, c) => sum + c.base_salary, 0);
-  const totalOT = recalculatedConfs.reduce((sum, c) => sum + c.ot_pay, 0);
-  const totalDed = recalculatedConfs.reduce((sum, c) => sum + c.leave_deduction, 0);
-  const netPayroll = recalculatedConfs.reduce((sum, c) => sum + c.net_salary, 0);
+  const totalBase = reportRecords.reduce((sum, c) => sum + c.base_salary, 0);
+  const totalOT = reportRecords.reduce((sum, c) => sum + c.ot_pay, 0);
+  const totalDed = reportRecords.reduce((sum, c) => sum + c.leave_deduction, 0);
+  const netPayroll = reportRecords.reduce((sum, c) => sum + c.net_salary, 0);
 
   if (loading) {
     return (
@@ -217,22 +259,24 @@ export default function MonthlyReportTab() {
     <div className="space-y-5 select-none pb-6">
       {/* Selection row (Hidden on print) */}
       <div className="print:hidden space-y-4">
-        <div>
-          <label className="block text-xs font-bold text-[var(--text-muted)] mb-1.5">
-            Select Report Month
-          </label>
-          <select
-            value={selectedMonth}
-            onChange={(e) => setSelectedMonth(e.target.value)}
-            className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-xs font-bold text-[#1A1A1A] focus:outline-none focus:border-[#1A1A1A]"
-          >
-            {months.map((m) => (
-              <option key={m} value={m} className="bg-white text-[#1A1A1A]">
-                {formatMonthDisplay(m)}
-              </option>
-            ))}
-          </select>
-        </div>
+        {!propMonth && (
+          <div>
+            <label className="block text-xs font-bold text-[var(--text-muted)] mb-1.5">
+              Select Report Month
+            </label>
+            <select
+              value={selectedMonth}
+              onChange={(e) => setSelectedMonth(e.target.value)}
+              className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-xs font-bold text-[#1A1A1A] focus:outline-none focus:border-[#1A1A1A]"
+            >
+              {months.map((m) => (
+                <option key={m} value={m} className="bg-white text-[#1A1A1A]">
+                  {formatMonthDisplay(m)}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <button
           onClick={() => window.print()}
@@ -242,6 +286,22 @@ export default function MonthlyReportTab() {
           <span>Download / Print Report</span>
         </button>
       </div>
+
+      {confirmations.length === 0 && (
+        <div className="bg-[#FFF8E7] border border-[#FFEBAA] rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between text-xs print:hidden shadow-sm gap-3">
+          <div className="text-[#B8860B] font-semibold">
+            Salaries for {formatMonthDisplay(selectedMonth)} have not been confirmed yet. Run Bulk Confirm first to generate the monthly report.
+          </div>
+          {onGoToBulkConfirm && (
+            <button
+              onClick={onGoToBulkConfirm}
+              className="bg-[#B8860B] hover:bg-[#9E720A] text-white text-xs font-extrabold px-4 py-2 rounded-lg active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+            >
+              Go to Bulk Confirm &rarr;
+            </button>
+          )}
+        </div>
+      )}
 
       {errorMsg && (
         <div className="bg-[var(--danger-bg)] border border-[var(--danger)]/30 text-[var(--danger)] text-xs font-bold px-4 py-3 rounded-[12px] flex items-center justify-between">
@@ -401,13 +461,13 @@ export default function MonthlyReportTab() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E8E8E8] print:divide-gray-100">
-                {recalculatedConfs.map((conf) => {
+                {reportRecords.map((conf) => {
                   const s = staffList.find((x) => x.id === conf.staff_id);
                   if (!s) return null;
                   const isPaid = payments.find((p) => p.staff_id === conf.staff_id);
                   
                   return (
-                    <tr key={conf.id} className="hover:bg-[#F8F8F8] print:hover:bg-gray-50 transition-colors">
+                    <tr key={conf.id || conf.staff_id} className="hover:bg-[#F8F8F8] print:hover:bg-gray-50 transition-colors">
                       <td className="p-2 font-bold text-[#1A1A1A] print:text-black">{s.name}</td>
                       <td className="p-2 text-[#555555] print:text-gray-500 capitalize">{s.branch_id}</td>
                       <td className="p-2 text-right font-semibold text-[#1A1A1A] print:text-black">{formatCurrency(conf.base_salary)}</td>
@@ -415,20 +475,26 @@ export default function MonthlyReportTab() {
                       <td className="p-2 text-right text-[var(--danger)] print:text-red-700 font-semibold">-{formatCurrency(conf.leave_deduction)}</td>
                       <td className="p-2 text-right font-bold text-[#1A1A1A] print:text-black">{formatCurrency(conf.net_salary)}</td>
                       <td className="p-2 text-center font-bold">
-                        {isPaid ? (
-                          <span className="bg-[var(--success-bg)] text-[var(--success)] text-[8px] font-bold px-2 py-0.5 rounded uppercase border border-[var(--success)]/20 print:bg-green-50 print:text-green-700 print:border-green-150">
-                            Paid
-                          </span>
+                        {confirmations.length > 0 ? (
+                          isPaid ? (
+                            <span className="bg-[var(--success-bg)] text-[var(--success)] text-[8px] font-bold px-2 py-0.5 rounded uppercase border border-[var(--success)]/20 print:bg-green-50 print:text-green-700 print:border-green-150">
+                              Paid
+                            </span>
+                          ) : (
+                            <span className="bg-[var(--warning-bg)] text-[var(--warning)] text-[8px] font-bold px-2 py-0.5 rounded uppercase border border-[var(--warning)]/20 print:bg-amber-50 print:text-[#E65100] print:border-amber-150">
+                              Pending
+                            </span>
+                          )
                         ) : (
-                          <span className="bg-[var(--warning-bg)] text-[var(--warning)] text-[8px] font-bold px-2 py-0.5 rounded uppercase border border-[var(--warning)]/20 print:bg-amber-50 print:text-[#E65100] print:border-amber-150">
-                            Pending
+                          <span className="bg-red-100 text-red-700 text-[8px] font-bold px-2 py-0.5 rounded uppercase border border-red-200">
+                            PENDING — NOT CONFIRMED
                           </span>
                         )}
                       </td>
                     </tr>
                   );
                 })}
-                {recalculatedConfs.length === 0 && (
+                {reportRecords.length === 0 && (
                   <tr>
                     <td colSpan={7} className="p-6 text-center text-[var(--text-muted)] print:text-gray-400 italic font-semibold">
                       No records generated for this month.
