@@ -27,6 +27,8 @@ interface LeaveRequest {
   approved_by: string | null;
   is_quota_leave?: boolean;
   staff: Staff;
+  requires_ops_approval?: boolean;
+  day_of_week?: string;
 }
 
 export default function LeavePage() {
@@ -138,47 +140,62 @@ export default function LeavePage() {
   };
 
   const checkLeaveQuota = async (staffId: string) => {
-    // Get staff off_days_per_month
     const { data: staffData } = await supabase
       .from('staff')
       .select('off_days_per_month')
       .eq('id', staffId)
       .single();
 
-    // Count days worked this month
-    const firstDay = new Date();
-    firstDay.setDate(1);
-    const { data: attData } = await supabase
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth() + 1;
+    const firstDay = `${year}-${String(month).padStart(2, '0')}-01`;
+    const lastDay = new Date(year, month, 0).toISOString().split('T')[0];
+
+    const { count: daysWorked } = await supabase
       .from('attendance')
-      .select('date')
+      .select('*', { count: 'exact', head: true })
       .eq('staff_id', staffId)
       .not('check_in_time', 'is', null)
-      .gte('date', firstDay.toISOString().split('T')[0]);
+      .gte('date', firstDay)
+      .lte('date', lastDay);
 
-    const daysWorked = attData?.length || 0;
+    const worked = daysWorked || 0;
     const offDays = staffData?.off_days_per_month || 0;
 
-    // Calculate earned quota
     let earnedQuota = 0;
-    if (offDays === 4) earnedQuota = Math.floor(daysWorked / 6);
-    if (offDays === 2) earnedQuota = Math.floor(daysWorked / 12);
+    if (offDays === 4) earnedQuota = Math.floor(worked / 6);
+    if (offDays === 2) earnedQuota = Math.floor(worked / 12);
     earnedQuota = Math.min(earnedQuota, offDays);
 
-    // Count already approved leaves this month
-    const { data: approvedLeaves } = await supabase
+    const { count: usedLeaves } = await supabase
       .from('leave_requests')
-      .select('id')
+      .select('*', { count: 'exact', head: true })
       .eq('staff_id', staffId)
       .eq('status', 'approved')
-      .gte('date', firstDay.toISOString().split('T')[0]);
+      .gte('date', firstDay)
+      .lte('date', lastDay);
 
-    const usedLeaves = approvedLeaves?.length || 0;
-    const remaining = earnedQuota - usedLeaves;
+    const usedCount = usedLeaves || 0;
+    const remaining = earnedQuota - usedCount;
 
-    return { earnedQuota, usedLeaves, remaining };
+    return { earnedQuota, usedLeaves: usedCount, remaining };
   };
 
   const handleApproveClick = async (req: LeaveRequest) => {
+    // Weekend leave restriction
+    if (req.requires_ops_approval) {
+      if (user?.role === 'staff_executive') {
+        alert('This is a weekend leave request. Only the Operations Manager or Admin can approve weekend leaves.');
+        return;
+      }
+      // For ops_manager and admin, show confirmation
+      const dayName = req.day_of_week || new Date(req.date).toLocaleDateString('en-US', { weekday: 'long' });
+      if (!confirm(`This is a ${dayName} leave request. Weekends are peak business days. Confirm approval?`)) {
+        return;
+      }
+    }
+
     try {
       setLoading(true);
       const { earnedQuota, remaining } = await checkLeaveQuota(req.staff_id);
@@ -428,11 +445,18 @@ export default function LeavePage() {
               <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3.5 text-xs mb-4">
                 <div className="font-bold text-[#1A1A1A] mb-1.5 flex items-center">
                   <Calendar size={14} strokeWidth={1.5} className="mr-1.5 text-[var(--text-muted)]" />
-                  <span>Date of Leave: {formatDate(r.date)}</span>
+                  <span>Date of Leave: {formatDate(r.date)}{r.day_of_week && ` (${r.day_of_week})`}</span>
                 </div>
                 <div className="text-[#555555] font-medium">
                   <span className="text-[var(--text-muted)] font-bold">Reason:</span> "{r.reason || 'None provided'}"
                 </div>
+                {r.requires_ops_approval && (
+                  <div className="mt-2">
+                    <span className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-lg">
+                      ⚠ Weekend — Manual approval required
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Actions row */}
@@ -447,10 +471,15 @@ export default function LeavePage() {
                   </button>
                   <button
                     onClick={() => handleApproveClick(r)}
-                    className="flex-1 min-h-[40px] bg-[#1A1A1A] text-white font-bold text-xs rounded-[12px] hover:bg-[#333333] active:scale-95 transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
+                    disabled={r.requires_ops_approval && user?.role === 'staff_executive'}
+                    className={`flex-1 min-h-[40px] font-bold text-xs rounded-[12px] active:scale-95 transition-transform flex items-center justify-center space-x-1.5 cursor-pointer ${
+                      r.requires_ops_approval && user?.role === 'staff_executive'
+                        ? 'bg-[#E8E8E8] text-[#999] cursor-not-allowed'
+                        : 'bg-[#1A1A1A] text-white hover:bg-[#333333]'
+                    }`}
                   >
                     <Check size={14} strokeWidth={1.5} />
-                    <span>Approve</span>
+                    <span>{r.requires_ops_approval && user?.role === 'staff_executive' ? 'Ops Only' : 'Approve'}</span>
                   </button>
                 </div>
               ) : (

@@ -80,6 +80,16 @@ export default function SettingsPage() {
   });
   const [savingBreakSettings, setSavingBreakSettings] = useState(false);
 
+  const [recalculating, setRecalculating] = useState(false);
+  const [recalcProgress, setRecalcProgress] = useState<string | null>(null);
+  const [recalcResult, setRecalcResult] = useState<{
+    total: number;
+    corrected: number;
+    deleted: number;
+    skipped: number;
+  } | null>(null);
+  const [recalcConfirmOpen, setRecalcConfirmOpen] = useState(false);
+
   const showToast = (msg: string) => {
     setToastMsg(msg);
     setTimeout(() => setToastMsg(''), 3000);
@@ -394,6 +404,193 @@ export default function SettingsPage() {
       showToast('Error saving break settings.');
     } finally {
       setSavingBreakSettings(false);
+    }
+  };
+
+  const handleRecalculateFines = async () => {
+    setRecalcConfirmOpen(false);
+    setRecalculating(true);
+    setRecalcResult(null);
+
+    try {
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = now.getMonth() + 1;
+      const monthStr = `${year}-${String(month).padStart(2, '0')}`;
+      const firstDay = `${monthStr}-01`;
+      const daysInMonth = new Date(year, month, 0).getDate();
+      const lastDay = `${monthStr}-${String(daysInMonth).padStart(2, '0')}`;
+
+      // Fetch all attendance records for this month with check_in
+      const { data: attRecords, error: attErr } = await supabase
+        .from('attendance')
+        .select('id, staff_id, date, check_in_time, minutes_late, color_code, status')
+        .not('check_in_time', 'is', null)
+        .gte('date', firstDay)
+        .lte('date', lastDay);
+
+      if (attErr) throw attErr;
+      if (!attRecords || attRecords.length === 0) {
+        setRecalculating(false);
+        setRecalcResult({ total: 0, corrected: 0, deleted: 0, skipped: 0 });
+        return;
+      }
+
+      // Sort attRecords by date chronologically
+      attRecords.sort((a, b) => a.date.localeCompare(b.date));
+
+      // Fetch all staff with shifts
+      const staffIds = [...new Set(attRecords.map(a => a.staff_id))];
+      const { data: staffData } = await supabase
+        .from('staff')
+        .select('id, shift_id, shift:shifts(start_time)')
+        .in('id', staffIds);
+
+      const staffShiftMap = new Map<string, string>();
+      staffData?.forEach((s: any) => {
+        const shift = Array.isArray(s.shift) ? s.shift[0] : s.shift;
+        staffShiftMap.set(s.id, shift?.start_time || '09:00');
+      });
+
+      // Fetch fine settings
+      const { data: fSettings } = await supabase.from('fine_settings').select('*').limit(1).maybeSingle();
+      const fs = fSettings || { yellow_fine: 50, orange_fine: 100, red_fine: 200, yellow_free_passes: 3 };
+
+      // Fetch exemptions
+      const { data: exemptions } = await supabase.from('staff_fine_exemptions').select('staff_id');
+      const exemptSet = new Set(exemptions?.map(e => e.staff_id) || []);
+
+      // Fetch existing fines for the month
+      const { data: existingFines } = await supabase
+        .from('late_fines')
+        .select('id, staff_id, date, confirmed')
+        .gte('date', firstDay)
+        .lte('date', lastDay);
+
+      const fineMap = new Map<string, { id: string; confirmed: boolean }>();
+      existingFines?.forEach(f => {
+        fineMap.set(`${f.staff_id}_${f.date}`, { id: f.id, confirmed: f.confirmed });
+      });
+
+      let total = 0;
+      let corrected = 0;
+      let deleted = 0;
+      let skipped = 0;
+
+      const parseMins = (t: string) => {
+        const [h, m] = t.split(':').map(Number);
+        return h * 60 + m;
+      };
+
+      const yellowCountMap = new Map<string, number>();
+
+      for (let i = 0; i < attRecords.length; i++) {
+        const rec = attRecords[i];
+        total++;
+        setRecalcProgress(`Processing ${i + 1} / ${attRecords.length}...`);
+
+        const shiftStart = staffShiftMap.get(rec.staff_id) || '09:00';
+        const shiftStartMins = parseMins(shiftStart);
+        const checkInMins = parseMins(rec.check_in_time);
+
+        const correctMinutesLate = Math.max(0, checkInMins - shiftStartMins);
+        let correctColorCode = 'green';
+        let correctStatus: string = 'present';
+
+        if (correctMinutesLate > 0) {
+          correctStatus = 'late';
+          if (correctMinutesLate <= 15) correctColorCode = 'yellow';
+          else if (correctMinutesLate <= 30) correctColorCode = 'orange';
+          else correctColorCode = 'red';
+        }
+
+        // Update attendance if different
+        if (rec.minutes_late !== correctMinutesLate || rec.color_code !== correctColorCode || rec.status !== correctStatus) {
+          await supabase
+            .from('attendance')
+            .update({
+              minutes_late: correctMinutesLate,
+              color_code: correctColorCode,
+              status: correctStatus === 'late' ? 'late' : (rec.check_in_time ? 'present' : rec.status),
+            })
+            .eq('id', rec.id);
+        }
+
+        const fineKey = `${rec.staff_id}_${rec.date}`;
+        const existingFine = fineMap.get(fineKey);
+
+        if (correctMinutesLate === 0) {
+          // Staff was not late — delete unconfirmed fine
+          if (existingFine) {
+            if (existingFine.confirmed) {
+              skipped++;
+            } else {
+              await supabase.from('late_fines').delete().eq('id', existingFine.id);
+              deleted++;
+            }
+          }
+        } else if (!exemptSet.has(rec.staff_id)) {
+          // Staff was late — upsert fine
+          let fineAmount = 0;
+          if (correctColorCode === 'yellow') {
+            const currentYellows = yellowCountMap.get(rec.staff_id) || 0;
+            yellowCountMap.set(rec.staff_id, currentYellows + 1);
+            if (currentYellows >= Number(fs.yellow_free_passes || 0)) {
+              fineAmount = Number(fs.yellow_fine);
+            }
+          } else if (correctColorCode === 'orange') {
+            fineAmount = Number(fs.orange_fine);
+          } else if (correctColorCode === 'red') {
+            fineAmount = Number(fs.red_fine);
+          }
+
+          if (fineAmount > 0) {
+            if (existingFine?.confirmed) {
+              skipped++;
+            } else {
+              await supabase.from('late_fines').upsert({
+                staff_id: rec.staff_id,
+                date: rec.date,
+                late_minutes: correctMinutesLate,
+                color_code: correctColorCode,
+                fine_amount: fineAmount,
+                waived: false,
+                month: monthStr,
+              }, { onConflict: 'staff_id,date' });
+              corrected++;
+            }
+          } else {
+            // Delete fine if it became 0 due to pass
+            if (existingFine) {
+              if (existingFine.confirmed) {
+                skipped++;
+              } else {
+                await supabase.from('late_fines').delete().eq('id', existingFine.id);
+                deleted++;
+              }
+            }
+          }
+        } else {
+          // Staff was exempt — delete unconfirmed fine if exists
+          if (existingFine) {
+            if (existingFine.confirmed) {
+              skipped++;
+            } else {
+              await supabase.from('late_fines').delete().eq('id', existingFine.id);
+              deleted++;
+            }
+          }
+        }
+      }
+
+      setRecalcResult({ total, corrected, deleted, skipped });
+      showToast('Recalculation complete!');
+    } catch (err: any) {
+      console.error('Recalculate fines error:', err);
+      showToast('Failed to recalculate fines — see console.');
+    } finally {
+      setRecalculating(false);
+      setRecalcProgress(null);
     }
   };
 
@@ -756,6 +953,43 @@ export default function SettingsPage() {
             </form>
           </div>
 
+          {/* Recalculate Fines Card (Admin Only) */}
+          {user?.role === 'admin' && (
+            <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-5 shadow-sm space-y-4">
+              <h2 className="text-[#1A1A1A] font-bold text-sm">
+                4. Recalculate Late Fines
+              </h2>
+              <p className="text-[10px] text-[var(--text-muted)] font-semibold leading-relaxed">
+                Recalculates all late fines for the current month based on each staff member's actual shift start time. Wrong fines will be corrected. Confirmed fines will not be changed.
+              </p>
+
+              {recalcResult && (
+                <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-3 text-xs space-y-1">
+                  <div className="font-bold text-[#1A1A1A]">Recalculation Complete</div>
+                  <div className="text-[var(--text-secondary)] font-semibold">Processed: {recalcResult.total} records</div>
+                  <div className="text-[var(--success)] font-semibold">Corrected: {recalcResult.corrected} fines updated</div>
+                  <div className="text-[var(--warning)] font-semibold">Deleted: {recalcResult.deleted} wrong fines removed</div>
+                  <div className="text-[var(--text-muted)] font-semibold">Skipped: {recalcResult.skipped} confirmed fines (unchanged)</div>
+                </div>
+              )}
+
+              {recalculating && recalcProgress && (
+                <div className="bg-[var(--info-bg)] border border-[var(--info)]/20 rounded-xl p-3 text-xs text-[var(--info)] font-bold text-center">
+                  {recalcProgress}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setRecalcConfirmOpen(true)}
+                disabled={recalculating}
+                className="w-full min-h-[44px] bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs rounded-xl active:scale-95 transition-all shadow-sm disabled:opacity-50"
+              >
+                {recalculating ? 'Recalculating...' : 'Recalculate All Fines for Current Month'}
+              </button>
+            </div>
+          )}
+
           {/* Danger Zone Section (Admin Only) */}
           {user?.role === 'admin' && (
             <div className="space-y-4 pt-6">
@@ -811,6 +1045,36 @@ export default function SettingsPage() {
             </div>
           )}
         </>
+      )}
+
+      {recalcConfirmOpen && (
+        <div className="fixed inset-0 z-[12000] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="bg-white border border-[#E8E8E8] rounded-[20px] max-w-sm w-full p-6 flex flex-col space-y-4 shadow-2xl text-center">
+            <div className="flex flex-col items-center">
+              <span className="text-amber-500 mb-2 text-3xl">⚙️</span>
+              <h3 className="text-[#1A1A1A] text-base font-bold">Recalculate Fines</h3>
+              <p className="text-[#555555] text-xs font-semibold mt-2 leading-relaxed">
+                This will recalculate all late fines for the current month based on each staff member's actual shift start time. Wrong fines will be corrected. Confirmed fines will not be changed.
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setRecalcConfirmOpen(false)}
+                className="flex-1 min-h-[40px] bg-white border border-[#E8E8E8] text-[#1A1A1A] hover:bg-[#F8F8F8] font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleRecalculateFines}
+                className="flex-1 min-h-[40px] bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
+              >
+                Recalculate
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Danger Zone Confirmation Modal */}

@@ -65,6 +65,7 @@ interface AttendanceRecord {
   check_in_time: string | null;
   check_out_time: string | null;
   actual_hours_worked: number;
+  ot_minutes: number;
 }
 
 export default function ApprovalsPage() {
@@ -121,7 +122,7 @@ export default function ApprovalsPage() {
 
         const { data: attData } = await supabase
           .from('attendance')
-          .select('id, staff_id, date, check_in_time, check_out_time, actual_hours_worked')
+          .select('id, staff_id, date, check_in_time, check_out_time, actual_hours_worked, ot_minutes')
           .in('date', dates)
           .in('staff_id', staffIds);
 
@@ -131,6 +132,21 @@ export default function ApprovalsPage() {
             map[`${r.staff_id}_${r.date}`] = r;
           });
           setAttendanceMap(map);
+
+          // Auto-sync: update adjustment minutes to match attendance ot_minutes
+          for (const adj of adjData) {
+            const att = map[`${adj.staff_id}_${adj.date}`];
+            if (att && typeof att.ot_minutes === 'number' && att.ot_minutes !== adj.minutes) {
+              await supabase
+                .from('attendance_adjustments')
+                .update({ minutes: att.ot_minutes })
+                .eq('id', adj.id);
+              // Update local data to reflect sync
+              adj.minutes = att.ot_minutes;
+            }
+          }
+          // Re-set adjustments after sync
+          setAdjustments((adjData || []) as unknown as Adjustment[]);
         }
       }
     } catch (err) {
@@ -485,18 +501,30 @@ export default function ApprovalsPage() {
                         </span>
                       </div>
 
-                      <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-2.5 mb-4 text-xs font-semibold text-[#555555] grid grid-cols-3 gap-2 text-center">
-                        <div>
-                          <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Shift Hrs</div>
-                          <div className="text-[#1A1A1A] font-bold mt-0.5">{shiftHours} hrs</div>
+                      <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-2.5 mb-4 text-xs font-semibold text-[#555555]">
+                        <div className="grid grid-cols-2 gap-2 text-center">
+                          <div>
+                            <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Shift End</div>
+                            <div className="text-[#1A1A1A] font-bold mt-0.5">{adj.staff?.shift?.end_time || 'N/A'}</div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Actual Out</div>
+                            <div className="text-[#1A1A1A] font-bold mt-0.5">{att?.check_out_time || 'N/A'}</div>
+                          </div>
                         </div>
-                        <div>
-                          <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Actual Hrs</div>
-                          <div className="text-[#1A1A1A] font-bold mt-0.5">{actualHours} hrs</div>
-                        </div>
-                        <div>
-                          <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">OT Claim</div>
-                          <div className="text-[var(--info)] font-bold mt-0.5">{adj.minutes} mins</div>
+                        <div className="grid grid-cols-3 gap-2 text-center mt-2 pt-2 border-t border-[#E8E8E8]">
+                          <div>
+                            <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Shift Hrs</div>
+                            <div className="text-[#1A1A1A] font-bold mt-0.5">{shiftHours} hrs</div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Actual Hrs</div>
+                            <div className="text-[#1A1A1A] font-bold mt-0.5">{actualHours} hrs</div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">OT Qualified</div>
+                            <div className="text-[var(--info)] font-bold mt-0.5">{att?.ot_minutes ?? adj.minutes} mins</div>
+                          </div>
                         </div>
                       </div>
 

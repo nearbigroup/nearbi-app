@@ -12,6 +12,8 @@ interface LeaveRequest {
   status: 'pending' | 'approved' | 'rejected';
   is_quota_leave?: boolean;
   requested_at: string;
+  requires_ops_approval?: boolean;
+  day_of_week?: string;
 }
 
 export default function StaffLeavePage() {
@@ -50,15 +52,22 @@ export default function StaffLeavePage() {
       setStaffInfo(sData);
 
       // 2. Fetch Attendance for current month to compute earned leaves
-      const currentMonth = new Date().toISOString().slice(0, 7);
-      const { data: attData } = await supabase
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = now.getMonth() + 1;
+      const currentMonth = `${year}-${String(month).padStart(2, '0')}`;
+      const firstDay = `${currentMonth}-01`;
+      const lastDay = new Date(year, month, 0).toISOString().split('T')[0];
+
+      const { count: daysWorked } = await supabase
         .from('attendance')
-        .select('check_in_time, status')
+        .select('*', { count: 'exact', head: true })
         .eq('staff_id', user.staffId)
-        .gte('date', `${currentMonth}-01`)
-        .lte('date', `${currentMonth}-31`);
+        .not('check_in_time', 'is', null)
+        .gte('date', firstDay)
+        .lte('date', lastDay);
       
-      const worked = attData?.filter(a => a.check_in_time && a.status !== 'absent').length || 0;
+      const worked = daysWorked || 0;
       setDaysWorkedThisMonth(worked);
 
       // 3. Fetch All Leave Requests
@@ -97,14 +106,24 @@ export default function StaffLeavePage() {
     setSuccess('');
 
     try {
+      const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+      const requestedDate = new Date(date);
+      const dayOfWeek = requestedDate.getDay();
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+      const dayName = DAY_NAMES[dayOfWeek];
+
       // Insert leave request
       const { data: insertedLeave, error: insertError } = await supabase
         .from('leave_requests')
         .insert({
           staff_id: user.staffId,
           date: date,
-          reason: reason.trim(),
-          status: 'pending'
+          reason: isWeekend
+            ? `${reason.trim()} [Weekend leave — requires ops manager approval]`
+            : reason.trim(),
+          status: 'pending',
+          requires_ops_approval: isWeekend,
+          day_of_week: dayName,
         })
         .select()
         .single();
@@ -156,7 +175,14 @@ export default function StaffLeavePage() {
         console.error('Failed to create notifications for leave:', notifError);
       }
 
-      setSuccess('Leave request submitted successfully!');
+      if (isWeekend) {
+        const formattedDateLong = requestedDate.toLocaleDateString('en-IN', {
+          weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+        });
+        setSuccess(`Your leave request for ${formattedDateLong} has been submitted. Weekend leaves require special approval from the operations manager.`);
+      } else {
+        setSuccess('Leave request submitted successfully!');
+      }
       setDate('');
       setReason('');
       fetchData(); // Refresh list & quota metrics
@@ -259,7 +285,7 @@ export default function StaffLeavePage() {
       <div className="bg-white border border-[#E8E8E8] rounded-[16px] p-4 shadow-sm">
         <h3 className="text-xs font-extrabold text-[#1A1A1A] uppercase tracking-wider mb-2">Leave Quota (This Month)</h3>
         <p className="text-[10px] text-[var(--text-muted)] font-semibold mb-3 leading-tight">
-          Earned based on worked days: {daysWorkedThisMonth} worked this month.
+          Earned based on {daysWorkedThisMonth} days worked this month
         </p>
         <div className="grid grid-cols-3 gap-3">
           <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-3 text-center">
@@ -267,14 +293,19 @@ export default function StaffLeavePage() {
             <div className="text-[9px] text-[var(--text-secondary)] font-bold uppercase tracking-wider mt-1">Earned</div>
           </div>
           <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-3 text-center">
-            <div className="text-lg font-black text-[var(--warning)]">{quota.used}</div>
+            <div className={`text-lg font-black ${quota.used > quota.earned ? 'text-[var(--danger)]' : 'text-[var(--warning)]'}`}>{quota.used}</div>
             <div className="text-[9px] text-[var(--text-secondary)] font-bold uppercase tracking-wider mt-1">Used</div>
           </div>
           <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-3 text-center">
-            <div className="text-lg font-black text-[var(--success)]">{quota.remaining}</div>
+            <div className={`text-lg font-black ${quota.remaining > 0 ? 'text-[var(--success)]' : 'text-[#999]'}`}>{quota.remaining}</div>
             <div className="text-[9px] text-[var(--text-secondary)] font-bold uppercase tracking-wider mt-1">Remaining</div>
           </div>
         </div>
+        {quota.earned === 0 && daysWorkedThisMonth < 6 && staffInfo?.off_days_per_month > 0 && (
+          <p className="text-[10px] text-[var(--info)] font-bold mt-3 text-center bg-[var(--info-bg)] border border-[var(--info)]/20 rounded-lg py-2 px-3">
+            Earn your first leave day after {(staffInfo.off_days_per_month === 4 ? 6 : 12) - daysWorkedThisMonth} more working days
+          </p>
+        )}
       </div>
 
       {/* Apply Leave Section */}
@@ -376,7 +407,13 @@ export default function StaffLeavePage() {
                     {getStatusIcon(l.status)}
                     <span className="text-xs font-black text-[#1A1A1A] font-mono">
                       {new Date(l.date).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric', weekday: 'short' })}
+                      {l.day_of_week && ` (${l.day_of_week})`}
                     </span>
+                    {l.requires_ops_approval && (
+                      <span className="bg-amber-50 text-amber-700 border border-amber-200 text-[9px] font-bold px-2 py-0.5 rounded uppercase tracking-wider ml-1">
+                        Weekend
+                      </span>
+                    )}
                   </div>
                   {getStatusBadge(l.status)}
                 </div>

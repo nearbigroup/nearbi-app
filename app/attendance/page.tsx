@@ -1320,9 +1320,7 @@ export default function AttendancePage() {
 
         if (inMins > shiftStartMins) {
           minutesLate = inMins - shiftStartMins;
-          if (minutesLate > 5) {
-            status = 'late';
-          }
+          status = 'late';
           if (minutesLate <= 15) {
             colorCode = 'yellow';
           } else if (minutesLate <= 30) {
@@ -1351,11 +1349,11 @@ export default function AttendancePage() {
           check_in_time: row.inTime,
           check_out_time: row.outTime || null,
           status,
+          minutes_late: minutesLate,
+          color_code: colorCode,
           marked_by: 'import'
         };
 
-        if (minutesLate > 0) record.minutes_late = minutesLate;
-        if (colorCode) record.color_code = colorCode;
         if (actualHoursWorked && actualHoursWorked > 0) record.actual_hours_worked = actualHoursWorked;
         if (otMinutes > 0) record.ot_minutes = otMinutes;
 
@@ -1379,6 +1377,8 @@ export default function AttendancePage() {
               check_in_time: row.inTime,
               check_out_time: row.outTime || null,
               status,
+              minutes_late: minutesLate,
+              color_code: colorCode,
               marked_by: 'import'
             };
             const { error: retryErr } = await supabase
@@ -1393,8 +1393,8 @@ export default function AttendancePage() {
         checkIns++;
         if (row.outTime) checkOuts++;
 
+        let fineAmount = 0;
         if (status === 'late' && !exemptStaffIds.has(row.staffId)) {
-          let fineAmount = 0;
           if (colorCode === 'yellow') {
             const currentYellows = yellowCountsMap.get(row.staffId) || 0;
             yellowCountsMap.set(row.staffId, currentYellows + 1);
@@ -1406,22 +1406,29 @@ export default function AttendancePage() {
           } else if (colorCode === 'red') {
             fineAmount = Number(settings.red_fine);
           }
+        }
 
-          const fineKey = `${row.staffId}_${row.date}`;
-          if (fineAmount > 0 && !existingFinesSet.has(fineKey)) {
-            const currentMonthStr = `${yearStr}-${monthStr}`;
-            const { error: fineErr } = await supabase.from('late_fines').insert({
-              staff_id: row.staffId,
-              date: row.date,
-              late_minutes: minutesLate,
-              color_code: colorCode,
-              fine_amount: fineAmount,
-              waived: false,
-              month: currentMonthStr
-            });
-            if (fineErr) throw fineErr;
-            finesLogged++;
-          }
+        if (fineAmount > 0) {
+          const currentMonthStr = `${yearStr}-${monthStr}`;
+          const { error: fineErr } = await supabase.from('late_fines').upsert({
+            staff_id: row.staffId,
+            date: row.date,
+            late_minutes: minutesLate,
+            color_code: colorCode,
+            fine_amount: fineAmount,
+            waived: false,
+            month: currentMonthStr
+          }, { onConflict: 'staff_id,date' });
+          if (fineErr) throw fineErr;
+          finesLogged++;
+        } else {
+          // Delete any existing unconfirmed fine for this date
+          await supabase
+            .from('late_fines')
+            .delete()
+            .eq('staff_id', row.staffId)
+            .eq('date', row.date)
+            .eq('confirmed', false);
         }
 
         if (otMinutes > 0) {
