@@ -5,6 +5,8 @@ import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { ChevronLeft, ChevronRight, X, Clock, AlertTriangle, AlertCircle, CheckCircle, Calendar, Sparkles } from 'lucide-react';
 import { HOLIDAYS } from '@/lib/data';
+import { formatTime12hr } from '@/lib/utils';
+import { calculateEarlyLeaveDeduction } from '@/lib/salary';
 
 interface AttendanceRecord {
   id: string;
@@ -540,11 +542,11 @@ export default function StaffAttendancePage() {
                 <>
                   <div className="flex justify-between">
                     <span>Check-In:</span>
-                    <span className="text-[#1A1A1A] font-mono font-bold">{selectedDayDetail.record.check_in_time || '—'}</span>
+                    <span className="text-[#1A1A1A] font-mono font-bold">{formatTime12hr(selectedDayDetail.record.check_in_time) || '—'}</span>
                   </div>
                   <div className="flex justify-between">
                     <span>Check-Out:</span>
-                    <span className="text-[#1A1A1A] font-mono font-bold">{selectedDayDetail.record.check_out_time || '—'}</span>
+                    <span className="text-[#1A1A1A] font-mono font-bold">{formatTime12hr(selectedDayDetail.record.check_out_time) || '—'}</span>
                   </div>
                   <div className="flex justify-between">
                     <span>Hours Worked:</span>
@@ -558,6 +560,22 @@ export default function StaffAttendancePage() {
                     <div className="flex justify-between text-amber-700">
                       <span>Late by:</span>
                       <span className="font-mono font-black">{selectedDayDetail.record.minutes_late} mins</span>
+                    </div>
+                  )}
+                  {selectedDayDetail.record.early_leave_minutes > 0 && (
+                    <div className="flex justify-between text-red-700 font-bold">
+                      <span>Early Leave ({selectedDayDetail.record.early_leave_minutes} mins):</span>
+                      <span className="font-mono">
+                        -₹{(() => {
+                          const salary = staff?.monthly_salary || 0;
+                          const shiftHours = staff?.shift?.hours || 9;
+                          const recordDate = selectedDayDetail.dateStr;
+                          const [yr, mo] = recordDate.split('-').map(Number);
+                          const calendarDays = new Date(yr, mo, 0).getDate();
+                          const dailyRate = salary / calendarDays;
+                          return calculateEarlyLeaveDeduction(selectedDayDetail.record.early_leave_minutes, dailyRate, shiftHours);
+                        })()}
+                      </span>
                     </div>
                   )}
                   <div className="flex justify-between items-center">

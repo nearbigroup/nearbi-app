@@ -9,7 +9,8 @@ import { Clock, RefreshCw, CircleCheck, CircleX, AlertTriangle, X, AlertCircle, 
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import * as XLSX from 'xlsx';
 import { DEPARTMENTS } from '@/lib/data';
-import { calculateOTMinutes, calculateActualHours } from '@/lib/salary';
+import { calculateOTMinutes, calculateActualHours, calculateEarlyLeaveDeduction } from '@/lib/salary';
+import { formatTime12hr } from '@/lib/utils';
 
 
 
@@ -195,6 +196,19 @@ export default function AttendancePage() {
     return calculateOTMinutes(shiftEnd, editCheckOutTime);
   }, [editCheckOutTime, detailRecord]);
 
+  const liveEarlyLeaveMinutes = useMemo(() => {
+    if (!editCheckInTime || !editCheckOutTime) return 0;
+    const shiftEnd = detailRecord?.shift?.end_time || '18:00';
+    const [eh, em] = shiftEnd.split(':').map(Number);
+    const [oh, om] = editCheckOutTime.split(':').map(Number);
+    const shiftEndMins = eh * 60 + em;
+    const actualOutMins = oh * 60 + om;
+    if (actualOutMins >= shiftEndMins) return 0;
+    const shiftHours = Number(detailRecord?.shift?.hours || 9);
+    const shortHours = Math.max(0, shiftHours - liveHoursWorked);
+    return Math.round(shortHours * 60);
+  }, [editCheckInTime, editCheckOutTime, liveHoursWorked, detailRecord]);
+
   useEffect(() => {
     if (editStatus !== 'late') {
       setEditFineAmount(0);
@@ -244,16 +258,17 @@ export default function AttendancePage() {
 
     if (checkIn && checkOut) {
       actual_hours_worked = calculateActualHours(checkIn, checkOut);
+      
+      const checkout_mins = parseMins(checkOut);
+      if (checkout_mins < shift_end_mins) {
+        const shiftHours = Number(shift?.hours || 9);
+        const shortHours = Math.max(0, shiftHours - actual_hours_worked);
+        early_leave_minutes = Math.round(shortHours * 60);
+      }
     }
 
     if (checkOut) {
       ot_minutes = calculateOTMinutes(shift?.end_time || '18:00', checkOut);
-    }
-
-    if (checkOut) {
-      const checkout_mins = parseMins(checkOut);
-      const early = shift_end_mins - checkout_mins;
-      early_leave_minutes = early > 0 ? early : 0;
     }
 
     return {
@@ -647,6 +662,7 @@ export default function AttendancePage() {
       const actual_hours_worked = liveHoursWorked;
       const ot_minutes = liveOTMinutes;
       const color_code = liveColorCode;
+      const early_leave_minutes = liveEarlyLeaveMinutes;
 
       const attendanceData: any = {
         staff_id: staffId,
@@ -657,6 +673,7 @@ export default function AttendancePage() {
         minutes_late,
         actual_hours_worked,
         ot_minutes,
+        early_leave_minutes: editStatus === 'absent' ? 0 : early_leave_minutes,
         ot_approved: otApproved,
         color_code,
         marked_by: 'manual_edit'
@@ -1332,11 +1349,25 @@ export default function AttendancePage() {
 
         let actualHoursWorked = null;
         let otMinutes = 0;
+        let earlyLeaveMinutes = 0;
 
         if (row.outTime) {
           const shiftEnd = row.shift?.end_time || '18:00';
           otMinutes = calculateOTFromImport(row.outTime, shiftEnd);
-          actualHoursWorked = calculateActualHours(row.inTime, row.outTime);
+          
+          const [oh, om] = row.outTime.split(':').map(Number);
+          const actualMins = (oh * 60 + om) - (inMins);
+          actualHoursWorked = Math.round((actualMins / 60) * 100) / 100;
+          
+          const [eh, em] = shiftEnd.split(':').map(Number);
+          const shiftEndMins = eh * 60 + em;
+          const actualOutMins = oh * 60 + om;
+          
+          if (actualOutMins < shiftEndMins) {
+            const shiftHours = Number(row.shift?.hours || 9);
+            const shortHours = Math.max(0, shiftHours - actualHoursWorked);
+            earlyLeaveMinutes = Math.round(shortHours * 60);
+          }
         }
 
         // FIX 4: Build the record object dynamically.
@@ -1351,7 +1382,8 @@ export default function AttendancePage() {
           status,
           minutes_late: minutesLate,
           color_code: colorCode,
-          marked_by: 'import'
+          marked_by: 'import',
+          early_leave_minutes: earlyLeaveMinutes
         };
 
         if (actualHoursWorked && actualHoursWorked > 0) record.actual_hours_worked = actualHoursWorked;
@@ -1379,7 +1411,8 @@ export default function AttendancePage() {
               status,
               minutes_late: minutesLate,
               color_code: colorCode,
-              marked_by: 'import'
+              marked_by: 'import',
+              early_leave_minutes: earlyLeaveMinutes
             };
             const { error: retryErr } = await supabase
               .from('attendance')
@@ -1774,7 +1807,7 @@ export default function AttendancePage() {
             statusContent: (
               <span className="flex items-center gap-0.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-[#B8860B]" />
-                {record.check_in_time} ({record.minutes_late}m)
+                {formatTime12hr(record.check_in_time)} ({record.minutes_late}m)
               </span>
             )
           };
@@ -1788,7 +1821,7 @@ export default function AttendancePage() {
             statusContent: (
               <span className="flex items-center gap-0.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-[#E07000]" />
-                {record.check_in_time} ({record.minutes_late}m)
+                {formatTime12hr(record.check_in_time)} ({record.minutes_late}m)
               </span>
             )
           };
@@ -1803,7 +1836,7 @@ export default function AttendancePage() {
             statusContent: (
               <span className="flex items-center gap-0.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-[#C0392B]" />
-                {record.check_in_time} ({record.minutes_late}m)
+                {formatTime12hr(record.check_in_time)} ({record.minutes_late}m)
               </span>
             )
           };
@@ -1819,7 +1852,7 @@ export default function AttendancePage() {
           statusContent: (
             <span className="flex items-center gap-0.5">
               <span className="w-1.5 h-1.5 rounded-full bg-[#4ADE80]" />
-              {record.check_in_time}
+              {formatTime12hr(record.check_in_time)}
             </span>
           )
         };
@@ -2412,7 +2445,7 @@ export default function AttendancePage() {
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                       {/* Check In Time & Photo */}
                       <div className="bg-[#EDF7EF] border border-[#2D7A3A]/20 text-[#2D7A3A] text-[10px] font-bold px-2.5 py-1 rounded-[20px] flex items-center space-x-1.5">
-                        <span>IN: {item.record.check_in_time}</span>
+                        <span>IN: {formatTime12hr(item.record.check_in_time)}</span>
                         {item.record.check_in_photo && (
                           <button
                             onClick={(e) => {
@@ -2420,7 +2453,7 @@ export default function AttendancePage() {
                               setSelectedPhoto({
                                 url: item.record!.check_in_photo!,
                                 label: `${item.name} - Check In`,
-                                time: item.record!.check_in_time || '',
+                                time: formatTime12hr(item.record!.check_in_time) || '',
                               });
                             }}
                             className="w-4.5 h-4.5 rounded-full overflow-hidden border border-[#2D7A3A]/25 active:scale-90"
@@ -2444,7 +2477,7 @@ export default function AttendancePage() {
                       {/* Check Out Time & Photo */}
                       {hasCheckOut && (
                         <div className="bg-[#EBF3FB] border border-[#1A5FA8]/20 text-[#1A5FA8] text-[10px] font-bold px-2.5 py-1 rounded-[20px] flex items-center space-x-1.5">
-                          <span>OUT: {item.record.check_out_time}</span>
+                          <span>OUT: {formatTime12hr(item.record.check_out_time)}</span>
                           {item.record.check_out_photo && (
                             <button
                               onClick={(e) => {
@@ -2452,7 +2485,7 @@ export default function AttendancePage() {
                                 setSelectedPhoto({
                                   url: item.record!.check_out_photo!,
                                   label: `${item.name} - Check Out`,
-                                  time: item.record!.check_out_time || '',
+                                  time: formatTime12hr(item.record!.check_out_time) || '',
                                 });
                               }}
                               className="w-4.5 h-4.5 rounded-full overflow-hidden border border-[#1A5FA8]/25 active:scale-90"
@@ -3152,7 +3185,7 @@ export default function AttendancePage() {
                                 url: detailRecord.record.check_in_photo,
                                 name: detailRecord.name,
                                 label: 'Check In Photo',
-                                time: detailRecord.record.check_in_time || '',
+                                time: formatTime12hr(detailRecord.record.check_in_time) || '',
                                 date: detailRecord.record.date
                               })}
                               className="w-full aspect-square max-w-[120px] rounded-[12px] overflow-hidden border border-[#E8E8E8] shadow-sm relative group hover:opacity-90 active:scale-95 transition-all cursor-pointer"
@@ -3181,7 +3214,7 @@ export default function AttendancePage() {
                                 url: detailRecord.record.check_out_photo,
                                 name: detailRecord.name,
                                 label: 'Check Out Photo',
-                                time: detailRecord.record.check_out_time || '',
+                                time: formatTime12hr(detailRecord.record.check_out_time) || '',
                                 date: detailRecord.record.date
                               })}
                               className="w-full aspect-square max-w-[120px] rounded-[12px] overflow-hidden border border-[#E8E8E8] shadow-sm relative group hover:opacity-90 active:scale-95 transition-all cursor-pointer"
@@ -3233,6 +3266,31 @@ export default function AttendancePage() {
                             </span>
                           )
                         )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Early Leave Deduction Panel */}
+                  {liveEarlyLeaveMinutes > 0 && (
+                    <div className="border border-[#E8E8E8] rounded-[14px] p-4 flex items-center justify-between bg-white shadow-sm">
+                      <div>
+                        <p className="text-xs font-bold text-[#1A1A1A]">Early Leave ({liveEarlyLeaveMinutes} mins)</p>
+                        <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-0.5">
+                          Left before shift end ({formatTime12hr(detailRecord?.shift?.end_time)}).
+                        </p>
+                      </div>
+                      <div>
+                        <span className="bg-[#FFF0F0] border border-[#C0392B]/20 text-[#C0392B] text-xs font-bold px-3 py-1.5 rounded-full">
+                          -₹{(() => {
+                            const salary = detailRecord?.monthly_salary || 0;
+                            const shiftHours = detailRecord?.shift?.hours || 9;
+                            const recordDate = detailRecord?.record?.date || addDate || new Date().toISOString().split('T')[0];
+                            const [yr, mo] = recordDate.split('-').map(Number);
+                            const calendarDays = new Date(yr, mo, 0).getDate();
+                            const dailyRate = salary / calendarDays;
+                            return calculateEarlyLeaveDeduction(liveEarlyLeaveMinutes, dailyRate, shiftHours);
+                          })()}
+                        </span>
                       </div>
                     </div>
                   )}

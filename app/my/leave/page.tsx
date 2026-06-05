@@ -339,6 +339,19 @@ export default function StaffLeavePage() {
               className="w-full text-[#1A1A1A] font-bold [color-scheme:light]"
               required
             />
+            {date && (() => {
+              const d = new Date(date);
+              const day = d.getDay();
+              if (day === 0 || day === 6) {
+                return (
+                  <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200/50 p-2 rounded-lg font-bold mt-1.5 flex items-center gap-1.5">
+                    <AlertCircle size={12} className="flex-shrink-0" />
+                    Weekend leave requires special approval from the operations manager.
+                  </p>
+                );
+              }
+              return null;
+            })()}
           </div>
 
           <div>

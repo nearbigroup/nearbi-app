@@ -5,11 +5,33 @@ import { useAuth } from '@/lib/auth-context';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { House, CalendarDays, ClipboardList, Timer, AlertCircle, LogOut, User } from 'lucide-react';
+import { supabase } from '@/lib/supabase';
 
 export default function StaffLayout({ children }: { children: React.ReactNode }) {
   const { user, logout, isLoading } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
+  const [showProfileDot, setShowProfileDot] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!user || !user.staffId) return;
+    const staffId = user.staffId;
+    async function checkProfile() {
+      try {
+        const { data } = await supabase
+          .from('staff')
+          .select('profile_pending')
+          .eq('id', staffId)
+          .single();
+        if (data && data.profile_pending) {
+          setShowProfileDot(true);
+        }
+      } catch (e) {
+        console.error('Error checking profile dot:', e);
+      }
+    }
+    checkProfile();
+  }, [user, pathname]); // Re-run when navigation changes to refresh state
 
   if (isLoading) {
     return (
@@ -53,10 +75,13 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
             
             <button
               onClick={() => router.push('/my/profile')}
-              className="p-1 text-[#999999] hover:text-[#1A1A1A] transition-colors active:scale-90"
+              className="p-1 text-[#999999] hover:text-[#1A1A1A] transition-colors active:scale-90 relative"
               title="Profile"
             >
               <User size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
+              {showProfileDot && (
+                <span className="absolute top-0 right-0 w-2 h-2 bg-red-500 rounded-full border border-white" />
+              )}
             </button>
 
             <button

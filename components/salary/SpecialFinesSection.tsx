@@ -21,6 +21,7 @@ interface SpecialFine {
   waived_by: string | null;
   confirmed: boolean;
   confirmed_by: string | null;
+  waived_amount?: number;
 }
 
 interface SpecialFinesSectionProps {
@@ -40,6 +41,12 @@ export default function SpecialFinesSection({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editVal, setEditVal] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+
+  // Fine Waive States
+  const [waiveModalOpen, setWaiveModalOpen] = useState(false);
+  const [selectedFineForWaive, setSelectedFineForWaive] = useState<any | null>(null);
+  const [waivedAmountInput, setWaivedAmountInput] = useState('');
+  const [isSavingWaive, setIsSavingWaive] = useState(false);
 
   const fetchFines = async () => {
     try {
@@ -95,24 +102,43 @@ export default function SpecialFinesSection({
     }
   };
 
-  const handleWaive = async (id: string) => {
+  const handleSaveWaive = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedFineForWaive) return;
+
+    const inputVal = Number(waivedAmountInput);
+    if (isNaN(inputVal) || inputVal < 0 || inputVal > selectedFineForWaive.originalAmount) {
+      alert(`Please enter a valid waived amount between 0 and ${selectedFineForWaive.originalAmount}`);
+      return;
+    }
+
+    setIsSavingWaive(true);
     try {
+      const isFullyWaived = inputVal === selectedFineForWaive.originalAmount;
+      const waivedBy = user?.email || 'System';
+
       const { error } = await supabase
         .from('special_fines')
         .update({
-          waived: true,
-          waived_by: user?.email || 'System',
-          confirmed: false,
+          waived: isFullyWaived,
+          waived_amount: inputVal,
+          waived_by: waivedBy,
+          confirmed: !isFullyWaived,
           updated_at: new Date().toISOString()
         })
-        .eq('id', id);
+        .eq('id', selectedFineForWaive.id);
 
       if (error) throw error;
+
+      setWaiveModalOpen(false);
+      setSelectedFineForWaive(null);
       await fetchFines();
       onFinesChanged();
     } catch (e) {
       console.error(e);
-      alert('Failed to waive fine');
+      alert('Failed to save waiver');
+    } finally {
+      setIsSavingWaive(false);
     }
   };
 
@@ -243,7 +269,7 @@ export default function SpecialFinesSection({
                   <td className="py-2 px-2 text-[var(--text-muted)] truncate" title={f.added_by}>
                     {f.added_by.split('@')[0]}
                   </td>
-                  <td className="py-2 px-2 text-right font-bold whitespace-nowrap">
+                  <td className="py-2 px-2 text-right font-bold whitespace-nowrap text-[10px]">
                     {editingId === f.id ? (
                       <input
                         type="number"
@@ -252,14 +278,15 @@ export default function SpecialFinesSection({
                         className="w-12 bg-white border border-[#E8E8E8] rounded px-1.5 py-0.5 text-[10px] text-right font-bold text-[#1A1A1A] focus:outline-none focus:border-[#1A1A1A]"
                       />
                     ) : (
-                      <>
-                        {f.edited_amount !== null && (
-                          <span className="text-[9px] text-[var(--text-muted)] line-through mr-1">
-                            ₹{f.amount}
-                          </span>
+                      <div className="flex flex-col text-right">
+                        <span>Original: ₹{f.edited_amount ?? f.amount}</span>
+                        {Number(f.waived_amount || 0) > 0 && (
+                          <span className="text-red-500 font-bold">Waived: ₹{f.waived_amount}</span>
                         )}
-                        ₹{displayAmt}
-                      </>
+                        <span className="text-[#2D7A3A] font-extrabold text-[11px]">
+                          Deducted: ₹{f.waived ? 0 : Math.max(0, (f.edited_amount ?? f.amount) - Number(f.waived_amount || 0))}
+                        </span>
+                      </div>
                     )}
                   </td>
                   <td className="py-2 px-2 text-center whitespace-nowrap">
@@ -302,7 +329,16 @@ export default function SpecialFinesSection({
                               <Check size={10} />
                             </button>
                             <button
-                              onClick={() => handleWaive(f.id)}
+                              onClick={() => {
+                                setSelectedFineForWaive({
+                                  id: f.id,
+                                  date: f.date,
+                                  originalAmount: f.edited_amount ?? f.amount,
+                                  reason: f.reason
+                                });
+                                setWaivedAmountInput('');
+                                setWaiveModalOpen(true);
+                              }}
                               className="p-1 bg-[var(--danger-bg)] hover:bg-[var(--danger-bg)]/80 text-[var(--danger)] rounded border border-[var(--danger)]/20 cursor-pointer"
                               title="Waive"
                             >
@@ -319,6 +355,82 @@ export default function SpecialFinesSection({
           </tbody>
         </table>
       </div>
+      {/* Waive Fine Bottom Sheet */}
+      {waiveModalOpen && selectedFineForWaive && (
+        <div className="fixed inset-0 z-[12000] flex items-end justify-center">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-xs" onClick={() => { setWaiveModalOpen(false); setSelectedFineForWaive(null); }} />
+          <div className="bg-white rounded-t-3xl shadow-2xl relative z-10 p-5 w-full max-w-md border-t border-[#E8E8E8] flex flex-col space-y-4 text-[#1A1A1A] animate-in slide-in-from-bottom duration-250">
+            <div className="w-12 h-1 bg-[#E8E8E8] rounded-full mx-auto flex-shrink-0" />
+            <div className="flex justify-between items-center pb-1">
+              <h3 className="text-[#1A1A1A] text-base font-extrabold">Waive Special Fine</h3>
+              <button onClick={() => { setWaiveModalOpen(false); setSelectedFineForWaive(null); }} className="text-gray-400 hover:text-black p-1">
+                <X size={18} />
+              </button>
+            </div>
+            
+            <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3.5 space-y-2 text-xs font-semibold text-gray-500">
+              <div className="flex justify-between">
+                <span>Date:</span>
+                <span className="text-[#1A1A1A] font-mono">{new Date(selectedFineForWaive.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Fine Amount:</span>
+                <span className="text-[#1A1A1A] font-bold">₹{selectedFineForWaive.originalAmount}</span>
+              </div>
+              {selectedFineForWaive.reason && (
+                <div className="flex flex-col space-y-1 mt-1 border-t border-gray-200/50 pt-1.5">
+                  <span>Reason:</span>
+                  <span className="text-[#1A1A1A] italic">"{selectedFineForWaive.reason}"</span>
+                </div>
+              )}
+            </div>
+
+            <form onSubmit={handleSaveWaive} className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-black uppercase text-gray-500 tracking-wider mb-1.5">Waived Amount (₹)</label>
+                <input
+                  type="number"
+                  value={waivedAmountInput}
+                  onChange={(e) => setWaivedAmountInput(e.target.value)}
+                  placeholder="e.g. 50"
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3.5 text-xs text-[#1A1A1A] focus:outline-none focus:border-black font-bold"
+                  required
+                />
+              </div>
+
+              {/* Deduction Summary display */}
+              {(() => {
+                const amt = Number(waivedAmountInput) || 0;
+                const deducted = Math.max(0, selectedFineForWaive.originalAmount - amt);
+                return (
+                  <div className="bg-black/5 rounded-xl p-3.5 space-y-2 text-xs font-bold text-gray-500 border border-black/5">
+                    <div className="flex justify-between">
+                      <span>Original Amount:</span>
+                      <span className="text-[#1A1A1A] font-mono">₹{selectedFineForWaive.originalAmount}</span>
+                    </div>
+                    <div className="flex justify-between text-red-650">
+                      <span>Waived Amount:</span>
+                      <span className="font-mono">-₹{amt}</span>
+                    </div>
+                    <div className="flex justify-between border-t border-[#E8E8E8] pt-2.5 text-[#2D7A3A]">
+                      <span>Net Deducted Amount:</span>
+                      <span className="font-mono text-sm">₹{deducted}</span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <button 
+                type="submit" 
+                disabled={isSavingWaive}
+                className="w-full min-h-[44px] bg-[#1A1A1A] text-white hover:bg-black font-bold text-xs rounded-xl active:scale-95 transition-all flex items-center justify-center cursor-pointer"
+              >
+                {isSavingWaive ? 'Saving...' : 'Save Waiver'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

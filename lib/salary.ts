@@ -7,6 +7,18 @@ export function getDaysInMonth(
   return new Date(year, month, 0).getDate();
 }
 
+export function calculateEarlyLeaveDeduction(
+  earlyLeaveMinutes: number,
+  dailyRate: number,
+  shiftHours: number
+): number {
+  if (!earlyLeaveMinutes || earlyLeaveMinutes <= 0)
+    return 0;
+  const hourlyRate = dailyRate / shiftHours;
+  const deduction = (earlyLeaveMinutes / 60) * hourlyRate;
+  return Math.round(deduction * 100) / 100;
+}
+
 export function calculateSalary(
   config: {
     monthlySalary: number;
@@ -79,8 +91,12 @@ export function calculateSalary(
   // Early check-in pay (approved only)
   const earlyInPay = (approvedEarlyInMinutes / 60) * hourlyRate;
 
-  // Early leave deduction
-  const earlyLeaveDeduction = (earlyLeaveMinutes / 60) * hourlyRate;
+  // Early leave deduction (automatic always)
+  const earlyLeaveDeduction = calculateEarlyLeaveDeduction(
+    earlyLeaveMinutes,
+    dailyRate,
+    shiftHours
+  );
 
   // Net salary
   const netSalary = grossPay

@@ -454,7 +454,7 @@ export default function SettingsPage() {
 
       // Fetch fine settings
       const { data: fSettings } = await supabase.from('fine_settings').select('*').limit(1).maybeSingle();
-      const fs = fSettings || { yellow_fine: 50, orange_fine: 100, red_fine: 200, yellow_free_passes: 3 };
+      const fs = fSettings || { yellow_fine: 50, orange_fine: 100, red_fine: 200, yellow_free_passes: 4 };
 
       // Fetch exemptions
       const { data: exemptions } = await supabase.from('staff_fine_exemptions').select('staff_id');
@@ -953,40 +953,51 @@ export default function SettingsPage() {
             </form>
           </div>
 
-          {/* Recalculate Fines Card (Admin Only) */}
+          {/* Data Tools Section (Admin Only) */}
           {user?.role === 'admin' && (
-            <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-5 shadow-sm space-y-4">
-              <h2 className="text-[#1A1A1A] font-bold text-sm">
-                4. Recalculate Late Fines
-              </h2>
-              <p className="text-[10px] text-[var(--text-muted)] font-semibold leading-relaxed">
-                Recalculates all late fines for the current month based on each staff member's actual shift start time. Wrong fines will be corrected. Confirmed fines will not be changed.
-              </p>
-
-              {recalcResult && (
-                <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-3 text-xs space-y-1">
-                  <div className="font-bold text-[#1A1A1A]">Recalculation Complete</div>
-                  <div className="text-[var(--text-secondary)] font-semibold">Processed: {recalcResult.total} records</div>
-                  <div className="text-[var(--success)] font-semibold">Corrected: {recalcResult.corrected} fines updated</div>
-                  <div className="text-[var(--warning)] font-semibold">Deleted: {recalcResult.deleted} wrong fines removed</div>
-                  <div className="text-[var(--text-muted)] font-semibold">Skipped: {recalcResult.skipped} confirmed fines (unchanged)</div>
+            <div className="space-y-4 pt-6">
+              <div>
+                <h2 className="text-[#1A1A1A] font-extrabold text-sm tracking-wider uppercase">
+                  Data Tools
+                </h2>
+                <div className="text-[#E8E8E8] text-xs font-semibold select-none leading-none my-1">
+                  ─────────────────────────────
                 </div>
-              )}
+              </div>
 
-              {recalculating && recalcProgress && (
-                <div className="bg-[var(--info-bg)] border border-[var(--info)]/20 rounded-xl p-3 text-xs text-[var(--info)] font-bold text-center">
-                  {recalcProgress}
-                </div>
-              )}
+              <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-5 shadow-sm space-y-4">
+                <h3 className="text-[#1A1A1A] font-bold text-sm">
+                  Chronological Late Fines Recalculator
+                </h3>
+                <p className="text-[10px] text-[var(--text-muted)] font-semibold leading-relaxed">
+                  Recalculates all late fines for the current month chronologically, day-by-day, applying yellow free pass limits (first 4 free passes). Wrong unconfirmed fines will be corrected or deleted. Confirmed fines are left unchanged.
+                </p>
 
-              <button
-                type="button"
-                onClick={() => setRecalcConfirmOpen(true)}
-                disabled={recalculating}
-                className="w-full min-h-[44px] bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs rounded-xl active:scale-95 transition-all shadow-sm disabled:opacity-50"
-              >
-                {recalculating ? 'Recalculating...' : 'Recalculate All Fines for Current Month'}
-              </button>
+                {recalcResult && (
+                  <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-3 text-xs space-y-1">
+                    <div className="font-bold text-[#1A1A1A]">Recalculation Complete</div>
+                    <div className="text-[var(--text-secondary)] font-semibold">Processed: {recalcResult.total} records</div>
+                    <div className="text-[var(--success)] font-semibold">Corrected: {recalcResult.corrected} fines updated</div>
+                    <div className="text-[var(--warning)] font-semibold">Deleted: {recalcResult.deleted} wrong fines removed</div>
+                    <div className="text-[var(--text-muted)] font-semibold">Skipped: {recalcResult.skipped} confirmed fines (unchanged)</div>
+                  </div>
+                )}
+
+                {recalculating && recalcProgress && (
+                  <div className="bg-[var(--info-bg)] border border-[var(--info)]/20 rounded-xl p-3 text-xs text-[var(--info)] font-bold text-center">
+                    {recalcProgress}
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setRecalcConfirmOpen(true)}
+                  disabled={recalculating}
+                  className="w-full min-h-[44px] bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs rounded-xl active:scale-95 transition-all shadow-sm disabled:opacity-50"
+                >
+                  {recalculating ? 'Recalculating...' : 'Recalculate All Fines for Current Month'}
+                </button>
+              </div>
             </div>
           )}
 

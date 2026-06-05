@@ -28,6 +28,8 @@ import {
   Trash2
 } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
+import { formatTime12hr } from '@/lib/utils';
+import { calculateEarlyLeaveDeduction } from '@/lib/salary';
 
 interface StaffMember {
   id: string;
@@ -60,6 +62,7 @@ interface AttendanceRecord {
   ot_approved: boolean;
   early_in_minutes: number;
   early_in_approved: boolean;
+  early_leave_minutes?: number;
   actual_hours_worked: number;
   check_in_photo: string | null;
   check_out_photo: string | null;
@@ -75,6 +78,7 @@ interface LateFine {
   waived: boolean;
   waived_by: string | null;
   confirmed: boolean;
+  waived_amount?: number;
 }
 
 interface SpecialFine {
@@ -86,6 +90,7 @@ interface SpecialFine {
   waived: boolean;
   waived_by: string | null;
   created_by: string | null;
+  waived_amount?: number;
 }
 
 interface LeaveRequest {
@@ -176,6 +181,70 @@ export default function StaffProfilePage() {
   const showToast = (msg: string) => {
     setToastMsg(msg);
     setTimeout(() => setToastMsg(''), 3000);
+  };
+
+  // Fine Waive States
+  const [waiveModalOpen, setWaiveModalOpen] = useState(false);
+  const [selectedFineForWaive, setSelectedFineForWaive] = useState<{
+    id: string;
+    type: 'late' | 'special';
+    date: string;
+    originalAmount: number;
+    waivedAmount: number;
+    reason?: string;
+  } | null>(null);
+  const [waivedAmountInput, setWaivedAmountInput] = useState('');
+  const [isSavingWaive, setIsSavingWaive] = useState(false);
+
+  const handleSaveWaive = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedFineForWaive || !staff) return;
+    
+    const inputVal = Number(waivedAmountInput);
+    if (isNaN(inputVal) || inputVal < 0 || inputVal > selectedFineForWaive.originalAmount) {
+      alert(`Please enter a valid waived amount between 0 and ${selectedFineForWaive.originalAmount}`);
+      return;
+    }
+
+    setIsSavingWaive(true);
+    try {
+      const isFullyWaived = inputVal === selectedFineForWaive.originalAmount;
+      const waivedBy = user?.name || user?.email || 'Management';
+
+      if (selectedFineForWaive.type === 'late') {
+        const { error } = await supabase
+          .from('late_fines')
+          .update({
+            waived: isFullyWaived,
+            waived_amount: inputVal,
+            waived_by: waivedBy
+          })
+          .eq('id', selectedFineForWaive.id);
+
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
+          .from('special_fines')
+          .update({
+            waived: isFullyWaived,
+            waived_amount: inputVal,
+            waived_by: waivedBy
+          })
+          .eq('id', selectedFineForWaive.id);
+
+        if (error) throw error;
+      }
+
+      showToast('Fine waiver updated ✓');
+      setWaiveModalOpen(false);
+      setSelectedFineForWaive(null);
+      fetchMonthData(); // Reload fines list
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to save waiver: ' + err.message);
+    } finally {
+      setIsSavingWaive(false);
+    }
   };
 
   // Branch access authorization on mount / load
@@ -502,7 +571,7 @@ export default function StaffProfilePage() {
             </div>
             <p className="text-xs text-[var(--text-secondary)] font-semibold flex items-center gap-1">
               <Clock size={12} className="text-[var(--text-muted)]" />
-              <span>Shift: {staff.shift?.label || 'No Shift'}</span>
+              <span>Shift: {staff.shift ? `${staff.shift.label} (${formatTime12hr(staff.shift.start_time)} - ${formatTime12hr(staff.shift.end_time)})` : 'No Shift'}</span>
             </p>
             <p className="text-[11px] text-[var(--text-muted)] font-bold">
               Joined: {new Date(staff.join_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
@@ -741,13 +810,13 @@ export default function StaffProfilePage() {
               <div>
                 <span className="text-[9px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Late Fines Total</span>
                 <p className="text-base font-extrabold text-white font-mono mt-0.5">
-                  ₹{lateFines.filter(f => !f.waived && f.confirmed).reduce((sum, f) => sum + Number(f.fine_amount), 0).toLocaleString('en-IN')}
+                  ₹{lateFines.filter(f => f.confirmed).reduce((sum, f) => sum + (f.waived ? 0 : (Number(f.fine_amount) - Number(f.waived_amount || 0))), 0).toLocaleString('en-IN')}
                 </p>
               </div>
               <div>
                 <span className="text-[9px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Special Fines Total</span>
                 <p className="text-base font-extrabold text-white font-mono mt-0.5">
-                  ₹{specialFines.filter(f => !f.waived && f.confirmed).reduce((sum, f) => sum + Number(f.amount), 0).toLocaleString('en-IN')}
+                  ₹{specialFines.filter(f => f.confirmed).reduce((sum, f) => sum + (f.waived ? 0 : (Number(f.amount) - Number(f.waived_amount || 0))), 0).toLocaleString('en-IN')}
                 </p>
               </div>
             </div>
@@ -770,21 +839,46 @@ export default function StaffProfilePage() {
                 <p className="text-xs text-[var(--text-muted)] italic p-3 bg-[var(--bg-surface)] rounded-xl border border-[var(--border)] text-center">No late fines this month.</p>
               ) : (
                 lateFines.map(fine => (
-                  <div key={fine.id} className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-xl p-3 flex justify-between items-center">
+                  <div 
+                    key={fine.id} 
+                    onClick={() => {
+                      if (user?.role === 'staff_executive') return; // disabled for HR role
+                      setSelectedFineForWaive({
+                        id: fine.id,
+                        type: 'late',
+                        date: fine.date,
+                        originalAmount: fine.fine_amount,
+                        waivedAmount: fine.waived_amount || 0
+                      });
+                      setWaivedAmountInput(String(fine.waived_amount || 0));
+                      setWaiveModalOpen(true);
+                    }}
+                    className={`bg-[var(--bg-surface)] border border-[var(--border)] rounded-xl p-3 flex justify-between items-center ${user?.role !== 'staff_executive' ? 'cursor-pointer hover:border-white/20 hover:bg-white/5 active:scale-99' : ''} transition-all`}
+                  >
                     <div>
                       <p className="text-xs font-bold text-white">{new Date(fine.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}</p>
                       <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-0.5">{fine.late_minutes} mins late • Code {fine.color_code.toUpperCase()}</p>
                     </div>
                     <div className="text-right">
-                      <p className="text-xs font-black text-white font-mono">₹{fine.fine_amount}</p>
+                      {fine.waived_amount && fine.waived_amount > 0 ? (
+                        <div className="text-[10px] font-medium text-[var(--text-muted)] space-y-0.5">
+                          <p className="line-through">Original: ₹{fine.fine_amount}</p>
+                          <p className="text-[#A93226]">Waived: -₹{fine.waived_amount}</p>
+                          <p className="text-white font-black font-mono">Deducted: ₹{Math.max(0, fine.fine_amount - fine.waived_amount)}</p>
+                        </div>
+                      ) : (
+                        <p className="text-xs font-black text-white font-mono">₹{fine.fine_amount}</p>
+                      )}
                       <span className={`inline-block text-[8px] font-black uppercase mt-1 px-1.5 py-0.25 rounded-sm ${
                         fine.waived 
                           ? 'bg-[#9CA3AF]/10 text-[#9CA3AF]' 
-                          : fine.confirmed 
-                            ? 'bg-[#4ADE80]/10 text-[#4ADE80]' 
-                            : 'bg-[#FBBF24]/10 text-[#FBBF24]'
+                          : fine.waived_amount && fine.waived_amount > 0
+                            ? 'bg-[#FB923C]/10 text-[#FB923C]'
+                            : fine.confirmed 
+                              ? 'bg-[#4ADE80]/10 text-[#4ADE80]' 
+                              : 'bg-[#FBBF24]/10 text-[#FBBF24]'
                       }`}>
-                        {fine.waived ? `Waived (${fine.waived_by || 'HR'})` : fine.confirmed ? 'Confirmed' : 'Pending'}
+                        {fine.waived ? `Waived (${fine.waived_by || 'Management'})` : fine.waived_amount && fine.waived_amount > 0 ? `Partially Waived` : fine.confirmed ? 'Confirmed' : 'Pending'}
                       </span>
                     </div>
                   </div>
@@ -799,7 +893,23 @@ export default function StaffProfilePage() {
                 <p className="text-xs text-[var(--text-muted)] italic p-3 bg-[var(--bg-surface)] rounded-xl border border-[var(--border)] text-center">No special fines this month.</p>
               ) : (
                 specialFines.map(fine => (
-                  <div key={fine.id} className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-xl p-3 flex justify-between items-start">
+                  <div 
+                    key={fine.id} 
+                    onClick={() => {
+                      if (user?.role === 'staff_executive') return; // disabled for HR role
+                      setSelectedFineForWaive({
+                        id: fine.id,
+                        type: 'special',
+                        date: fine.date,
+                        originalAmount: fine.amount,
+                        waivedAmount: fine.waived_amount || 0,
+                        reason: fine.reason
+                      });
+                      setWaivedAmountInput(String(fine.waived_amount || 0));
+                      setWaiveModalOpen(true);
+                    }}
+                    className={`bg-[var(--bg-surface)] border border-[var(--border)] rounded-xl p-3 flex justify-between items-start ${user?.role !== 'staff_executive' ? 'cursor-pointer hover:border-white/20 hover:bg-white/5 active:scale-99' : ''} transition-all`}
+                  >
                     <div className="flex-1 min-w-0 pr-3">
                       <p className="text-xs font-bold text-white">{new Date(fine.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}</p>
                       <p className="text-[10px] text-[var(--text-secondary)] font-semibold mt-1 bg-[var(--bg-elevated)] p-2 rounded-lg border border-[var(--border-strong)] leading-relaxed italic">
@@ -807,15 +917,25 @@ export default function StaffProfilePage() {
                       </p>
                     </div>
                     <div className="text-right flex-shrink-0">
-                      <p className="text-xs font-black text-white font-mono">₹{fine.amount}</p>
+                      {fine.waived_amount && fine.waived_amount > 0 ? (
+                        <div className="text-[10px] font-medium text-[var(--text-muted)] space-y-0.5">
+                          <p className="line-through">Original: ₹{fine.amount}</p>
+                          <p className="text-[#A93226]">Waived: -₹{fine.waived_amount}</p>
+                          <p className="text-white font-black font-mono">Deducted: ₹{Math.max(0, fine.amount - fine.waived_amount)}</p>
+                        </div>
+                      ) : (
+                        <p className="text-xs font-black text-white font-mono">₹{fine.amount}</p>
+                      )}
                       <span className={`inline-block text-[8px] font-black uppercase mt-1 px-1.5 py-0.25 rounded-sm ${
                         fine.waived 
                           ? 'bg-[#9CA3AF]/10 text-[#9CA3AF]' 
-                          : fine.confirmed 
-                            ? 'bg-[#4ADE80]/10 text-[#4ADE80]' 
-                            : 'bg-[#FBBF24]/10 text-[#FBBF24]'
+                          : fine.waived_amount && fine.waived_amount > 0
+                            ? 'bg-[#FB923C]/10 text-[#FB923C]'
+                            : fine.confirmed 
+                              ? 'bg-[#4ADE80]/10 text-[#4ADE80]' 
+                              : 'bg-[#FBBF24]/10 text-[#FBBF24]'
                       }`}>
-                        {fine.waived ? `Waived (${fine.waived_by || 'HR'})` : fine.confirmed ? 'Confirmed' : 'Pending'}
+                        {fine.waived ? `Waived (${fine.waived_by || 'Management'})` : fine.waived_amount && fine.waived_amount > 0 ? `Partially Waived` : fine.confirmed ? 'Confirmed' : 'Pending'}
                       </span>
                     </div>
                   </div>
@@ -920,21 +1040,47 @@ export default function StaffProfilePage() {
                         </div>
                         <div className="flex justify-between">
                           <span>Late Fines Confirmed:</span>
-                          <span className="text-[#F87171] font-mono">-₹{lateFines.filter(f => !f.waived && f.confirmed).reduce((sum, f) => sum + Number(f.fine_amount), 0).toLocaleString('en-IN')}</span>
+                          <span className="text-[#F87171] font-mono">-₹{lateFines.filter(f => f.confirmed).reduce((sum, f) => sum + (f.waived ? 0 : (Number(f.fine_amount) - Number(f.waived_amount || 0))), 0).toLocaleString('en-IN')}</span>
                         </div>
                         <div className="flex justify-between">
                           <span>Special Fines Confirmed:</span>
-                          <span className="text-[#F87171] font-mono">-₹{specialFines.filter(f => !f.waived && f.confirmed).reduce((sum, f) => sum + Number(f.amount), 0).toLocaleString('en-IN')}</span>
+                          <span className="text-[#F87171] font-mono">-₹{specialFines.filter(f => f.confirmed).reduce((sum, f) => sum + (f.waived ? 0 : (Number(f.amount) - Number(f.waived_amount || 0))), 0).toLocaleString('en-IN')}</span>
                         </div>
+                        {(() => {
+                          const [yearStr, monthStr] = selectedMonth.split('-');
+                          const daysInMonth = new Date(Number(yearStr), Number(monthStr), 0).getDate();
+                          const dailyRate = Number(staff.monthly_salary) / daysInMonth;
+                          const totalEarlyMins = attendance.reduce((sum, a) => sum + (a.early_leave_minutes || 0), 0);
+                          const earlyLeaveDeduction = calculateEarlyLeaveDeduction(totalEarlyMins, dailyRate, staff.shift?.hours || 9);
+                          if (earlyLeaveDeduction <= 0) return null;
+                          return (
+                            <div className="flex justify-between text-[#F87171]">
+                              <span>Early Leave Deductions:</span>
+                              <span className="font-mono">-₹{earlyLeaveDeduction.toLocaleString('en-IN')}</span>
+                            </div>
+                          );
+                        })()}
                         <div className="flex justify-between border-t border-[var(--border-strong)] pt-2.5 font-bold text-white">
                           <span>Estimated Net Payout:</span>
                           <span className="text-white font-mono text-sm font-black">
-                            ₹{Math.max(0, 
-                              Number(staff.monthly_salary) + 
-                              Math.round(monthStats.otHours * (staff.monthly_salary / 240) * 1.5) - 
-                              lateFines.filter(f => !f.waived && f.confirmed).reduce((sum, f) => sum + Number(f.fine_amount), 0) -
-                              specialFines.filter(f => !f.waived && f.confirmed).reduce((sum, f) => sum + Number(f.amount), 0)
-                            ).toLocaleString('en-IN')}
+                            ₹{(() => {
+                              const [yearStr, monthStr] = selectedMonth.split('-');
+                              const daysInMonth = new Date(Number(yearStr), Number(monthStr), 0).getDate();
+                              const dailyRate = Number(staff.monthly_salary) / daysInMonth;
+                              const totalEarlyMins = attendance.reduce((sum, a) => sum + (a.early_leave_minutes || 0), 0);
+                              const earlyLeaveDeduction = calculateEarlyLeaveDeduction(totalEarlyMins, dailyRate, staff.shift?.hours || 9);
+                              
+                              const lateFinesTotal = lateFines.filter(f => f.confirmed).reduce((sum, f) => sum + (f.waived ? 0 : (Number(f.fine_amount) - Number(f.waived_amount || 0))), 0);
+                              const specialFinesTotal = specialFines.filter(f => f.confirmed).reduce((sum, f) => sum + (f.waived ? 0 : (Number(f.amount) - Number(f.waived_amount || 0))), 0);
+                              
+                              return Math.max(0, 
+                                Number(staff.monthly_salary) + 
+                                Math.round(monthStats.otHours * (staff.monthly_salary / 240) * 1.5) - 
+                                earlyLeaveDeduction -
+                                lateFinesTotal -
+                                specialFinesTotal
+                              );
+                            })().toLocaleString('en-IN')}
                           </span>
                         </div>
                       </div>
@@ -1171,7 +1317,7 @@ export default function StaffProfilePage() {
                   <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-3 flex flex-col items-center">
                     <span className="text-[8px] text-[var(--text-muted)] font-black uppercase tracking-wider">CHECK IN</span>
                     <span className="text-base font-extrabold text-[#4ADE80] font-mono mt-1">
-                      {selectedDayDetail.record.check_in_time || '—'}
+                      {formatTime12hr(selectedDayDetail.record.check_in_time) || '—'}
                     </span>
                     {selectedDayDetail.record.check_in_photo ? (
                       <button 
@@ -1188,7 +1334,7 @@ export default function StaffProfilePage() {
                   <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-3 flex flex-col items-center">
                     <span className="text-[8px] text-[var(--text-muted)] font-black uppercase tracking-wider">CHECK OUT</span>
                     <span className="text-base font-extrabold text-[#60A5FA] font-mono mt-1">
-                      {selectedDayDetail.record.check_out_time || '—'}
+                      {formatTime12hr(selectedDayDetail.record.check_out_time) || '—'}
                     </span>
                     {selectedDayDetail.record.check_out_photo ? (
                       <button 
@@ -1229,6 +1375,27 @@ export default function StaffProfilePage() {
                     <span>OT Minutes:</span>
                     <span className="text-white font-mono">{selectedDayDetail.record.ot_minutes} mins ({selectedDayDetail.record.ot_approved ? 'Approved' : 'Pending'})</span>
                   </div>
+                  {(selectedDayDetail.record.early_leave_minutes ?? 0) > 0 && (
+                    <>
+                      <div className="flex justify-between border-t border-[var(--border-strong)] pt-2 mt-1 text-[#F87171]">
+                        <span>Early Leave Duration:</span>
+                        <span className="font-mono">{selectedDayDetail.record.early_leave_minutes} mins</span>
+                      </div>
+                      <div className="flex justify-between text-[#F87171]">
+                        <span>Early Leave Deduction:</span>
+                        <span className="font-mono">
+                          -₹{(() => {
+                            const salary = staff?.monthly_salary || 0;
+                            const shiftHours = staff?.shift?.hours || 9;
+                            const [yr, mo] = selectedDayDetail.dateStr.split('-').map(Number);
+                            const calendarDays = new Date(yr, mo, 0).getDate();
+                            const dailyRate = salary / calendarDays;
+                            return calculateEarlyLeaveDeduction(selectedDayDetail.record.early_leave_minutes ?? 0, dailyRate, shiftHours);
+                          })()}
+                        </span>
+                      </div>
+                    </>
+                  )}
                 </div>
 
                 {/* Day Breaks */}
@@ -1289,6 +1456,83 @@ export default function StaffProfilePage() {
             </button>
             <h4 className="text-white text-sm font-bold mb-3">{selectedPhoto.title}</h4>
             <img src={selectedPhoto.url} alt="Selfie zoom" className="w-full max-h-[60vh] object-contain rounded-lg border border-[var(--border)]" />
+          </div>
+        </div>
+      )}
+
+      {/* Waive Fine Bottom Sheet */}
+      {waiveModalOpen && selectedFineForWaive && (
+        <div className="fixed inset-0 z-[12000] flex items-end justify-center">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => { setWaiveModalOpen(false); setSelectedFineForWaive(null); }} />
+          <div className="bg-[var(--bg-surface)] rounded-t-3xl shadow-2xl relative z-10 p-5 w-full max-w-md border-t border-[var(--border-strong)] animate-slide-up flex flex-col space-y-4 text-white">
+            <div className="w-12 h-1 bg-[var(--border-strong)] rounded-full mx-auto flex-shrink-0" />
+            <div className="flex justify-between items-center pb-1">
+              <h3 className="text-white text-base font-bold">Waive Fine</h3>
+              <button onClick={() => { setWaiveModalOpen(false); setSelectedFineForWaive(null); }} className="text-[var(--text-secondary)] hover:text-white p-1">
+                <X size={18} />
+              </button>
+            </div>
+            
+            <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-3.5 space-y-2 text-xs font-semibold text-[var(--text-secondary)]">
+              <div className="flex justify-between">
+                <span>Date:</span>
+                <span className="text-white font-mono">{new Date(selectedFineForWaive.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Fine Type:</span>
+                <span className="text-white capitalize">{selectedFineForWaive.type} Fine</span>
+              </div>
+              {selectedFineForWaive.reason && (
+                <div className="flex justify-between">
+                  <span>Reason:</span>
+                  <span className="text-white italic pr-1">"{selectedFineForWaive.reason}"</span>
+                </div>
+              )}
+            </div>
+
+            <form onSubmit={handleSaveWaive} className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider mb-1.5">Waived Amount (₹)</label>
+                <input
+                  type="number"
+                  value={waivedAmountInput}
+                  onChange={(e) => setWaivedAmountInput(e.target.value)}
+                  placeholder="e.g. 50"
+                  className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-xl p-3.5 text-xs text-white focus:outline-none focus:border-white/30 font-bold"
+                  required
+                />
+              </div>
+
+              {/* Deduction Summary display */}
+              {(() => {
+                const amt = Number(waivedAmountInput) || 0;
+                const deducted = Math.max(0, selectedFineForWaive.originalAmount - amt);
+                return (
+                  <div className="bg-black/35 rounded-xl p-3.5 space-y-2 text-xs font-bold text-[var(--text-secondary)] border border-white/5">
+                    <div className="flex justify-between">
+                      <span>Original Amount:</span>
+                      <span className="text-white font-mono">₹{selectedFineForWaive.originalAmount}</span>
+                    </div>
+                    <div className="flex justify-between text-[#A93226]">
+                      <span>Waived Amount:</span>
+                      <span className="font-mono">-₹{amt}</span>
+                    </div>
+                    <div className="flex justify-between border-t border-[var(--border-strong)] pt-2.5 text-[#4ADE80]">
+                      <span>Net Deducted Amount:</span>
+                      <span className="font-mono text-sm">₹{deducted}</span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <button 
+                type="submit" 
+                disabled={isSavingWaive}
+                className="w-full min-h-[44px] bg-white text-[#1E2028] hover:bg-white/95 font-bold text-xs rounded-xl active:scale-95 transition-all flex items-center justify-center cursor-pointer"
+              >
+                {isSavingWaive ? 'Saving...' : 'Save Waiver'}
+              </button>
+            </form>
           </div>
         </div>
       )}

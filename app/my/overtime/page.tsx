@@ -4,6 +4,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { Timer, ChevronLeft, ChevronRight, CheckCircle, Clock, XCircle, AlertCircle } from 'lucide-react';
+import { formatTime12hr } from '@/lib/utils';
 
 interface OTRecord {
   date: string;
@@ -267,11 +268,11 @@ export default function StaffOvertimePage() {
                 <div className="bg-white border border-gray-150/50 rounded-lg p-2.5 text-xs text-gray-600 font-semibold grid grid-cols-2 gap-2">
                   <div>
                     <span className="text-[9px] text-[var(--text-muted)] uppercase block">Shift Out Time</span>
-                    <span className="text-[#1A1A1A] font-mono font-bold mt-0.5 block">{r.shiftEndTime}</span>
+                    <span className="text-[#1A1A1A] font-mono font-bold mt-0.5 block">{formatTime12hr(r.shiftEndTime)}</span>
                   </div>
                   <div>
                     <span className="text-[9px] text-[var(--text-muted)] uppercase block">Actual Checkout</span>
-                    <span className="text-[#1A1A1A] font-mono font-bold mt-0.5 block">{r.actualOutTime}</span>
+                    <span className="text-[#1A1A1A] font-mono font-bold mt-0.5 block">{formatTime12hr(r.actualOutTime)}</span>
                   </div>
                 </div>
 

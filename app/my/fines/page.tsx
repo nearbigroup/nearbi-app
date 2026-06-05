@@ -3,13 +3,16 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
-import { AlertCircle, ChevronLeft, ChevronRight, CheckCircle, HelpCircle, XCircle } from 'lucide-react';
+import { AlertCircle, ChevronLeft, ChevronRight, CheckCircle, HelpCircle, XCircle, Clock } from 'lucide-react';
+import { calculateEarlyLeaveDeduction } from '@/lib/salary';
 
 interface FineItem {
   id: string;
   date: string;
   type: 'late' | 'special';
   amount: number;
+  originalAmount: number;
+  waivedAmount: number;
   reason: string;
   status: 'confirmed' | 'waived' | 'pending';
   colorCode?: string;
@@ -26,6 +29,7 @@ export default function StaffFinesPage() {
 
   const [loading, setLoading] = useState(true);
   const [fines, setFines] = useState<FineItem[]>([]);
+  const [earlyLeaves, setEarlyLeaves] = useState<any[]>([]);
 
   const fetchFinesData = async () => {
     if (!user || !user.staffId) return;
@@ -47,6 +51,32 @@ export default function StaffFinesPage() {
         .eq('month', selectedMonth);
       if (sfErr) throw sfErr;
 
+      // 3. Fetch Staff info for early leave calculation
+      const { data: sData } = await supabase
+        .from('staff')
+        .select('monthly_salary, shift:shifts(hours)')
+        .eq('id', user.staffId)
+        .single();
+      const monthlySalary = sData?.monthly_salary || 0;
+      const shiftObj: any = sData?.shift;
+      const shiftHours = (Array.isArray(shiftObj) ? shiftObj[0]?.hours : shiftObj?.hours) || 9;
+
+      const year = parseInt(selectedMonth.split('-')[0]);
+      const monthNum = parseInt(selectedMonth.split('-')[1]);
+      const calendarDays = new Date(year, monthNum, 0).getDate();
+      const dailyRate = monthlySalary / calendarDays;
+
+      const startDate = `${selectedMonth}-01`;
+      const endDate = `${selectedMonth}-${calendarDays}`;
+
+      const { data: attData } = await supabase
+        .from('attendance')
+        .select('*')
+        .eq('staff_id', user.staffId)
+        .gte('date', startDate)
+        .lte('date', endDate)
+        .gt('early_leave_minutes', 0);
+
       const combined: FineItem[] = [];
 
       (lfData || []).forEach(f => {
@@ -54,11 +84,17 @@ export default function StaffFinesPage() {
         if (f.waived) status = 'waived';
         else if (f.confirmed) status = 'confirmed';
 
+        const originalAmt = Number(f.fine_amount || 0);
+        const waivedAmt = Number(f.waived_amount || 0);
+        const netAmt = f.waived ? 0 : Math.max(0, originalAmt - waivedAmt);
+
         combined.push({
           id: f.id,
           date: f.date,
           type: 'late',
-          amount: Number(f.fine_amount || 0),
+          amount: netAmt,
+          originalAmount: originalAmt,
+          waivedAmount: waivedAmt,
           reason: `Arrived ${f.late_minutes} mins late`,
           status,
           colorCode: f.color_code || 'yellow',
@@ -71,15 +107,19 @@ export default function StaffFinesPage() {
         if (f.waived) status = 'waived';
         else if (f.confirmed) status = 'confirmed';
 
-        const amount = f.edited_amount !== null && f.edited_amount !== undefined 
+        const originalAmt = f.edited_amount !== null && f.edited_amount !== undefined 
           ? Number(f.edited_amount) 
           : Number(f.amount);
+        const waivedAmt = Number(f.waived_amount || 0);
+        const netAmt = f.waived ? 0 : Math.max(0, originalAmt - waivedAmt);
 
         combined.push({
           id: f.id,
           date: f.date,
           type: 'special',
-          amount,
+          amount: netAmt,
+          originalAmount: originalAmt,
+          waivedAmount: waivedAmt,
           reason: f.reason || 'Uniform or operational issue',
           status
         });
@@ -88,6 +128,18 @@ export default function StaffFinesPage() {
       // Sort by date descending
       combined.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       setFines(combined);
+
+      const mappedEarlyLeaves = (attData || []).map((att: any) => {
+        const roundedAmt = calculateEarlyLeaveDeduction(att.early_leave_minutes, dailyRate, shiftHours);
+        return {
+          id: att.id,
+          date: att.date,
+          minutes: att.early_leave_minutes,
+          amount: roundedAmt
+        };
+      });
+      mappedEarlyLeaves.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      setEarlyLeaves(mappedEarlyLeaves);
 
     } catch (e) {
       console.error('Error fetching fines data:', e);
@@ -131,17 +183,27 @@ export default function StaffFinesPage() {
     let pending = 0;
 
     fines.forEach(f => {
+      const originalAmt = f.originalAmount;
+      const waivedAmt = f.waivedAmount;
+      const netAmt = f.amount;
+
       if (f.status === 'confirmed') {
-        confirmed += f.amount;
+        confirmed += netAmt;
+        waived += waivedAmt;
       } else if (f.status === 'waived') {
-        waived += f.amount;
+        waived += originalAmt;
       } else if (f.status === 'pending') {
-        pending += f.amount;
+        pending += netAmt;
+        waived += waivedAmt;
       }
     });
 
     return { confirmed, waived, pending };
   }, [fines]);
+
+  const earlyLeaveTotal = useMemo(() => {
+    return earlyLeaves.reduce((sum, e) => sum + e.amount, 0);
+  }, [earlyLeaves]);
 
   // Grouped fines
   const lateFinesList = useMemo(() => fines.filter(f => f.type === 'late'), [fines]);
@@ -263,9 +325,17 @@ export default function StaffFinesPage() {
                   </div>
                   <div className="flex justify-between items-center text-xs font-bold bg-white border border-gray-150/40 rounded-lg p-2">
                     <span className="text-[11px] text-gray-600">{f.reason}</span>
-                    <span className={`font-mono font-black ${f.status === 'waived' ? 'text-gray-400 line-through' : 'text-red-700'}`}>
-                      ₹{f.amount}
-                    </span>
+                    <div className="flex flex-col text-right">
+                      {f.waivedAmount > 0 && (
+                        <>
+                          <span className="text-[9px] text-gray-400 line-through">Org: ₹{f.originalAmount}</span>
+                          <span className="text-[9px] text-red-500">Waived: -₹{f.waivedAmount}</span>
+                        </>
+                      )}
+                      <span className={`font-mono font-black ${f.status === 'waived' ? 'text-gray-400 line-through' : 'text-red-755'}`}>
+                        ₹{f.amount}
+                      </span>
+                    </div>
                   </div>
                   {f.status === 'pending' && (
                     <p className="text-[9.5px] text-amber-700 font-semibold bg-amber-50/50 border border-amber-100/50 rounded p-1.5 text-center leading-none">
@@ -300,9 +370,17 @@ export default function StaffFinesPage() {
                   <div className="flex flex-col space-y-1.5 bg-white border border-gray-150/40 rounded-lg p-2.5">
                     <div className="flex justify-between items-center text-xs font-bold">
                       <span className="text-[10px] text-gray-400 uppercase leading-none">Operational Incident</span>
-                      <span className={`font-mono font-black ${f.status === 'waived' ? 'text-gray-400 line-through' : 'text-red-700'}`}>
-                        ₹{f.amount}
-                      </span>
+                      <div className="flex flex-col text-right">
+                        {f.waivedAmount > 0 && (
+                          <>
+                            <span className="text-[9px] text-gray-400 line-through">Org: ₹{f.originalAmount}</span>
+                            <span className="text-[9px] text-red-500">Waived: -₹{f.waivedAmount}</span>
+                          </>
+                        )}
+                        <span className={`font-mono font-black ${f.status === 'waived' ? 'text-gray-400 line-through' : 'text-red-755'}`}>
+                          ₹{f.amount}
+                        </span>
+                      </div>
                     </div>
                     <p className="text-[11px] text-gray-700 font-semibold leading-normal">{f.reason}</p>
                   </div>
@@ -311,6 +389,42 @@ export default function StaffFinesPage() {
                       Pending — will be reviewed at month end
                     </p>
                   )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Early Leave Deductions Section */}
+        <div>
+          <h3 className="text-xs font-black text-[#1A1A1A] uppercase tracking-wider border-b border-[var(--border)] pb-2 mb-3.5 flex items-center justify-between">
+            <span>Early Leave Deductions</span>
+            <span className="text-[9px] font-bold text-gray-450 font-mono">Total: -₹{earlyLeaveTotal.toFixed(2)}</span>
+          </h3>
+
+          {earlyLeaves.length === 0 ? (
+            <p className="text-[11px] text-[var(--text-muted)] italic py-3 text-center">No early check-out deductions logged.</p>
+          ) : (
+            <div className="space-y-3">
+              {earlyLeaves.map(e => (
+                <div key={e.id} className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-3 flex flex-col space-y-2">
+                  <div className="flex justify-between items-center">
+                    <div className="flex items-center space-x-2">
+                      <span className="bg-red-500 text-white text-[9px] font-black px-1.5 py-0.5 rounded leading-none flex items-center gap-1">
+                        <Clock size={10} />
+                        <span>Left Early</span>
+                      </span>
+                      <span className="text-xs font-black text-[#1A1A1A] font-mono">
+                        {new Date(e.date).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric', weekday: 'short' })}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex justify-between items-center text-xs font-bold bg-white border border-gray-150/40 rounded-lg p-2">
+                    <span className="text-[11px] text-gray-600">Left shift {e.minutes} minutes early</span>
+                    <span className="font-mono font-black text-red-750">
+                      -₹{e.amount}
+                    </span>
+                  </div>
                 </div>
               ))}
             </div>

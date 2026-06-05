@@ -7,6 +7,7 @@ import { createNotification } from '@/lib/notifications';
 import { useRouter } from 'next/navigation';
 import { Check, LogOut, Camera, AlertCircle, UserCheck, Timer, AlertTriangle, Coffee, RotateCcw, CircleCheck } from 'lucide-react';
 import { calculateOTMinutes, calculateActualHours, calculateActualHoursWithBreaks } from '@/lib/salary';
+import { formatTime12hr } from '@/lib/utils';
 
 
 type KioskState = 'IDLE' | 'LOADING' | 'STAFF_FOUND' | 'CAMERA' | 'RESULT' | 'ERROR';
@@ -25,6 +26,9 @@ export default function KioskPage() {
   const [cameraError, setCameraError] = useState(false);
   const [stats, setStats] = useState({ checkedIn: 0, late: 0, checkedOut: 0, onBreak: 0 });
   const [effectiveBranch, setEffectiveBranch] = useState<string | null>(null);
+
+  const [pendingAnnouncements, setPendingAnnouncements] = useState<any[]>([]);
+  const [activeAnnouncement, setActiveAnnouncement] = useState<any>(null);
 
   const [resultData, setResultData] = useState<{
     status: 'green' | 'yellow' | 'orange' | 'red' | 'blue';
@@ -353,9 +357,7 @@ export default function KioskPage() {
 
         if (currentMins > shiftMins) {
           minutesLate = currentMins - shiftMins;
-          if (minutesLate > 5) {
-            status = 'late';
-          }
+          status = 'late';
           
           if (minutesLate <= 15) {
             colorCode = 'yellow';
@@ -534,6 +536,37 @@ export default function KioskPage() {
             : 'Check-in saved. Photo could not be uploaded.';
         }
 
+        // Check kiosk announcements
+        let pending: any[] = [];
+        try {
+          const { data: announcements } = await supabase
+            .from('staff_announcements')
+            .select('*')
+            .eq('show_on_kiosk', true)
+            .or(`target.eq.all,target.eq.${staff.branch_id},target_staff_id.eq.${staff.id}`);
+
+          const { data: reads } = await supabase
+            .from('announcement_reads')
+            .select('*')
+            .eq('staff_id', staff.id);
+
+          const readMap = new Map(reads?.map(r => [r.announcement_id, r]) || []);
+
+          pending = announcements?.filter(a => {
+            const read = readMap.get(a.id);
+            if (!read) return true;
+            if (read.read_on_kiosk) return false;
+            if (a.is_important) {
+              const createdTime = new Date(a.created_at).getTime();
+              const hours = (now.getTime() - createdTime) / (1000 * 60 * 60);
+              if (hours >= 24) return true;
+            }
+            return false;
+          }) || [];
+        } catch (e) {
+          console.error('Failed to fetch kiosk announcements:', e);
+        }
+
         setResultData({
           status: colorCode,
           title: resTitle,
@@ -543,7 +576,12 @@ export default function KioskPage() {
 
         setKioskState('RESULT');
         setTimeout(() => {
-          resetKiosk();
+          if (pending.length > 0) {
+            setPendingAnnouncements(pending);
+            setActiveAnnouncement(pending[0]);
+          } else {
+            resetKiosk();
+          }
           fetchStats();
         }, 4000);
 
@@ -594,16 +632,23 @@ export default function KioskPage() {
 
         const shiftEnd = staff.shift?.end_time || staff.shifts?.end_time || '18:00';
         const otMins = calculateOTMinutes(shiftEnd, actualOut);
-        const actualHrs = await calculateActualHoursWithBreaks(record.check_in_time, actualOut, staff.id, todayStr);
 
-        const shiftHours = Number(staff.shift?.hours || staff.shifts?.hours || 9);
-        
-        // Calculate early leave minutes
         const [shiftEndH, shiftEndM] = shiftEnd.split(':').map(Number);
         const [actualOutH, actualOutM] = actualOut.split(':').map(Number);
         const shiftEndMins = shiftEndH * 60 + shiftEndM;
         const actualOutMins = actualOutH * 60 + actualOutM;
-        const earlyLeaveMins = Math.max(0, shiftEndMins - actualOutMins);
+
+        let earlyLeaveMins = 0;
+        const [ih, im] = record.check_in_time.split(':').map(Number);
+        const actualMins = (actualOutH * 60 + actualOutM) - (ih * 60 + im);
+        const actualHrs = Math.round((actualMins / 60) * 100) / 100;
+
+        const shiftHours = Number(staff.shift?.hours || staff.shifts?.hours || 9);
+
+        if (actualOutMins < shiftEndMins) {
+          const shortHours = Math.max(0, shiftHours - actualHrs);
+          earlyLeaveMins = Math.round(shortHours * 60);
+        }
 
         const isEarlyLeave = earlyLeaveMins > 0;
         const earlyLeaveMinutes = earlyLeaveMins;
@@ -683,6 +728,37 @@ export default function KioskPage() {
             : 'Check-out saved. Photo could not be uploaded.';
         }
 
+        // Check kiosk announcements
+        let pending: any[] = [];
+        try {
+          const { data: announcements } = await supabase
+            .from('staff_announcements')
+            .select('*')
+            .eq('show_on_kiosk', true)
+            .or(`target.eq.all,target.eq.${staff.branch_id},target_staff_id.eq.${staff.id}`);
+
+          const { data: reads } = await supabase
+            .from('announcement_reads')
+            .select('*')
+            .eq('staff_id', staff.id);
+
+          const readMap = new Map(reads?.map(r => [r.announcement_id, r]) || []);
+
+          pending = announcements?.filter(a => {
+            const read = readMap.get(a.id);
+            if (!read) return true;
+            if (read.read_on_kiosk) return false;
+            if (a.is_important) {
+              const createdTime = new Date(a.created_at).getTime();
+              const hours = (now.getTime() - createdTime) / (1000 * 60 * 60);
+              if (hours >= 24) return true;
+            }
+            return false;
+          }) || [];
+        } catch (e) {
+          console.error('Failed to fetch kiosk announcements:', e);
+        }
+
         setResultData({
           status: 'blue',
           title: 'CHECKED OUT',
@@ -692,7 +768,12 @@ export default function KioskPage() {
 
         setKioskState('RESULT');
         setTimeout(() => {
-          resetKiosk();
+          if (pending.length > 0) {
+            setPendingAnnouncements(pending);
+            setActiveAnnouncement(pending[0]);
+          } else {
+            resetKiosk();
+          }
           fetchStats();
         }, 4000);
       }
@@ -1046,6 +1127,33 @@ export default function KioskPage() {
     });
   };
 
+  const handleAcknowledgeAnnouncement = async () => {
+    if (!activeAnnouncement || !staff) return;
+    try {
+      const { error } = await supabase
+        .from('announcement_reads')
+        .upsert({
+          announcement_id: activeAnnouncement.id,
+          staff_id: staff.id,
+          read_on_kiosk: true,
+          read_at: new Date().toISOString()
+        }, { onConflict: 'announcement_id,staff_id' });
+
+      if (error) throw error;
+    } catch (e) {
+      console.error('Failed to mark announcement as read:', e);
+    }
+
+    const nextIndex = pendingAnnouncements.indexOf(activeAnnouncement) + 1;
+    if (nextIndex < pendingAnnouncements.length) {
+      setActiveAnnouncement(pendingAnnouncements[nextIndex]);
+    } else {
+      setActiveAnnouncement(null);
+      setPendingAnnouncements([]);
+      resetKiosk();
+    }
+  };
+
   if (!currentTime) return null;
 
   return (
@@ -1146,7 +1254,7 @@ export default function KioskPage() {
               {staff.name}
             </div>
             <div className="text-white text-xs font-bold mb-8 bg-white/10 px-3 py-1 rounded-[20px] border border-white/20">
-              Shift: {staff.shift?.label} ({staff.shift?.start_time} - {staff.shift?.end_time})
+              Shift: {staff.shift?.label} ({formatTime12hr(staff.shift?.start_time)} - {formatTime12hr(staff.shift?.end_time)})
             </div>
 
             <div className="w-full grid grid-cols-2 gap-3.5 px-4">
@@ -1262,6 +1370,38 @@ export default function KioskPage() {
             <div className="bg-[#222222] border border-[#333333] text-white p-6 rounded-[14px] max-w-[280px] w-full text-center shadow-lg flex flex-col items-center">
               <AlertCircle size={48} strokeWidth={1.5} className="text-[#C0392B] mb-3" />
               <h3 className="text-base font-black leading-tight">{errorMsg}</h3>
+            </div>
+          </div>
+        )}
+
+        {/* Kiosk Announcement Overlay */}
+        {activeAnnouncement && (
+          <div className="absolute inset-0 z-[13000] flex items-center justify-center bg-black/95 backdrop-blur-md p-6">
+            <div className="bg-[#222222] border border-[#333333] rounded-[20px] max-w-sm w-full p-6 flex flex-col justify-between shadow-2xl min-h-[350px]">
+              <div className="space-y-4">
+                <div className="flex items-center space-x-2 text-amber-500 font-extrabold text-xs tracking-wider uppercase">
+                  <span>📢 Message from Management</span>
+                  {activeAnnouncement.is_important && (
+                    <span className="bg-red-500/20 text-red-500 border border-red-500/30 text-[9px] font-bold px-1.5 py-0.5 rounded">
+                      IMPORTANT
+                    </span>
+                  )}
+                </div>
+                <h3 className="text-white text-xl font-black leading-tight">
+                  {activeAnnouncement.title}
+                </h3>
+                <p className="text-gray-300 text-sm font-medium leading-relaxed max-h-[200px] overflow-y-auto pr-1 whitespace-pre-wrap">
+                  {activeAnnouncement.message}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleAcknowledgeAnnouncement}
+                className="w-full min-h-[44px] bg-white hover:bg-gray-200 text-[#1A1A1A] font-bold text-sm rounded-xl active:scale-95 transition-all mt-6 shadow-md"
+              >
+                Okay, got it
+              </button>
             </div>
           </div>
         )}

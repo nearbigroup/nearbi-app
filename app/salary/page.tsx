@@ -8,7 +8,7 @@ import PaymentTrackerTab from '@/components/salary/PaymentTrackerTab';
 import MonthlyReportTab from '@/components/salary/MonthlyReportTab';
 import { Lock, Calculator, User, Calendar, RefreshCw } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import { calculateSalary, getDaysInMonth } from '@/lib/salary';
+import { calculateSalary, getDaysInMonth, calculateEarlyLeaveDeduction } from '@/lib/salary';
 import { formatCurrency, getPastMonths, formatMonthDisplay } from '@/components/salary/utils';
 
 type Tab = 'bulk_confirm' | 'payslip' | 'payments' | 'report' | 'calculator';
@@ -61,33 +61,53 @@ export default function SalaryPage() {
 
       const { data: lateFines } = await supabase
         .from('late_fines')
-        .select('fine_amount')
+        .select('fine_amount, waived_amount, waived')
         .eq('staff_id', staffId)
         .eq('month', currentMonthKey)
-        .eq('confirmed', true)
-        .eq('waived', false);
+        .eq('confirmed', true);
 
-      const lateFinesSum = lateFines?.reduce((sum, f) => sum + Number(f.fine_amount), 0) || 0;
+      const lateFinesSum = lateFines?.reduce((sum, f) => {
+        return sum + (f.waived ? 0 : Math.max(0, Number(f.fine_amount) - Number(f.waived_amount || 0)));
+      }, 0) || 0;
 
       const { data: specialFines } = await supabase
         .from('special_fines')
-        .select('amount, edited_amount')
+        .select('amount, edited_amount, waived_amount, waived')
         .eq('staff_id', staffId)
         .eq('month', currentMonthKey)
-        .eq('confirmed', true)
-        .eq('waived', false);
+        .eq('confirmed', true);
 
-      const specialFinesSum = specialFines?.reduce((sum, f) => sum + Number(f.edited_amount ?? f.amount), 0) || 0;
+      const specialFinesSum = specialFines?.reduce((sum, f) => {
+        const amt = Number(f.edited_amount ?? f.amount);
+        const waivedAmt = Number(f.waived_amount || 0);
+        return sum + (f.waived ? 0 : Math.max(0, amt - waivedAmt));
+      }, 0) || 0;
 
       const dailyRate = staff.monthly_salary / calendarDays;
       const shiftHours = staff.shift?.hours || staff.shifts?.hours || 9;
       const hourlyRate = dailyRate / shiftHours;
 
+      const offDaysPerMonth = staff.off_days_per_month as 0 | 2 | 4;
+      const requiredWorkingDays = calendarDays - offDaysPerMonth;
+      const maxPaidDays = calendarDays + offDaysPerMonth;
+
+      let paidDays: number;
+      let extraDaysWorked = 0;
+      let missingDays = 0;
+
+      if (daysWorked >= requiredWorkingDays) {
+        extraDaysWorked = daysWorked - requiredWorkingDays;
+        paidDays = Math.min(calendarDays + extraDaysWorked, maxPaidDays);
+      } else {
+        missingDays = requiredWorkingDays - daysWorked;
+        paidDays = calendarDays - missingDays;
+      }
+
       const daysRemaining = calendarDays - daysWorked;
-      const grossPay = daysWorked * dailyRate;
+      const grossPay = paidDays * dailyRate;
       const otEarned = (approvedOT / 60) * hourlyRate;
       const earlyInEarned = (approvedEarlyIn / 60) * hourlyRate;
-      const earlyLeaveDeduction = (earlyLeave / 60) * hourlyRate;
+      const earlyLeaveDeduction = calculateEarlyLeaveDeduction(earlyLeave, dailyRate, shiftHours);
       const finesSoFar = lateFinesSum + specialFinesSum;
 
       const netSalary = grossPay + otEarned + earlyInEarned - earlyLeaveDeduction - finesSoFar;
@@ -96,8 +116,14 @@ export default function SalaryPage() {
         daysWorked,
         daysRemaining,
         calendarDays,
+        requiredWorkingDays,
+        maxPaidDays,
+        extraDaysWorked,
+        missingDays,
+        paidDays,
         grossPay: Math.round(grossPay),
         otEarned: Math.round(otEarned),
+        earlyLeaveDeduction: Math.round(earlyLeaveDeduction),
         finesSoFar: Math.round(finesSoFar),
         netSalary: Math.round(netSalary),
         hourlyRate,
@@ -181,24 +207,32 @@ export default function SalaryPage() {
         // Fetch confirmed late fines
         const { data: lateFines } = await supabase
           .from('late_fines')
-          .select('fine_amount, confirmed, waived')
+          .select('fine_amount, waived_amount, confirmed, waived')
           .eq('staff_id', selectedStaffId)
           .eq('month', selectedMonth);
 
         const confirmedLateFines = lateFines?.filter(
-          (f) => f.confirmed && !f.waived
-        ).reduce((sum, f) => sum + Number(f.fine_amount), 0) || 0;
+          (f) => f.confirmed
+        ).reduce((sum, f) => {
+          const amt = Number(f.fine_amount);
+          const waivedAmt = Number(f.waived_amount || 0);
+          return sum + (f.waived ? 0 : Math.max(0, amt - waivedAmt));
+        }, 0) || 0;
 
         // Fetch confirmed special fines
         const { data: specialFines } = await supabase
           .from('special_fines')
-          .select('amount, edited_amount, confirmed, waived')
+          .select('amount, edited_amount, waived_amount, confirmed, waived')
           .eq('staff_id', selectedStaffId)
           .eq('month', selectedMonth);
 
         const confirmedSpecialFines = specialFines?.filter(
-          (f) => f.confirmed && !f.waived
-        ).reduce((sum, f) => sum + Number(f.edited_amount ?? f.amount), 0) || 0;
+          (f) => f.confirmed
+        ).reduce((sum, f) => {
+          const amt = Number(f.edited_amount ?? f.amount);
+          const waivedAmt = Number(f.waived_amount || 0);
+          return sum + (f.waived ? 0 : Math.max(0, amt - waivedAmt));
+        }, 0) || 0;
 
         const shiftHours = staff.shift?.hours || staff.shifts?.hours || 9;
 
@@ -419,24 +453,50 @@ function SalaryCalculatorTab({
                   <span className="text-base font-extrabold text-white block mt-1 leading-none">{liveSalary.daysWorked} / {liveSalary.calendarDays}</span>
                 </div>
               </div>
-              <div className="grid grid-cols-4 gap-2 border-t border-white/10 pt-3.5 text-xs text-white/70">
+              <div className="grid grid-cols-3 gap-y-3 gap-x-2 border-t border-white/10 pt-3.5 text-xs text-white/70">
                 <div>
-                  <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Remaining</span>
+                  <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Remaining Days</span>
                   <span className="font-extrabold text-white block mt-0.5">{liveSalary.daysRemaining} days</span>
                 </div>
                 <div>
                   <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Gross Pay</span>
                   <span className="font-extrabold text-white block mt-0.5">{formatCurrency(liveSalary.grossPay)}</span>
                 </div>
-                <div>
+                <div className="text-right">
                   <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">OT Earned</span>
                   <span className="font-extrabold text-white block mt-0.5">{formatCurrency(liveSalary.otEarned)}</span>
                 </div>
-                <div className="text-right">
+                <div>
+                  <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Early Leave Deduct</span>
+                  <span className="font-extrabold text-white block mt-0.5">-{formatCurrency(liveSalary.earlyLeaveDeduction || 0)}</span>
+                </div>
+                <div>
                   <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Fines So Far</span>
-                  <span className="font-extrabold text-white block mt-0.5">{formatCurrency(liveSalary.finesSoFar)}</span>
+                  <span className="font-extrabold text-white block mt-0.5">-{formatCurrency(liveSalary.finesSoFar)}</span>
+                </div>
+                <div className="text-right">
+                  <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Paid Days</span>
+                  <span className="font-extrabold text-white block mt-0.5">{liveSalary.paidDays} days</span>
                 </div>
               </div>
+              {(() => {
+                let milestoneMsg = "";
+                const dailyRateRounded = Math.round(liveSalary.dailyRate);
+                if (liveSalary.daysWorked < liveSalary.requiredWorkingDays) {
+                  const needed = liveSalary.requiredWorkingDays - liveSalary.daysWorked;
+                  milestoneMsg = `Work ${needed} more day${needed > 1 ? 's' : ''} to reach standard full salary target.`;
+                } else if (liveSalary.paidDays < liveSalary.maxPaidDays) {
+                  milestoneMsg = `Work 1 more day to earn +1 day extra bonus (+${formatCurrency(dailyRateRounded)}).`;
+                } else {
+                  milestoneMsg = `Maximum bonus paid days reached for this month.`;
+                }
+                return (
+                  <div className="mt-2 bg-white/10 border border-white/5 rounded-lg px-3 py-2 text-[10px] font-bold text-white/80 flex items-center space-x-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[var(--warning)] animate-ping flex-shrink-0" />
+                    <span>{milestoneMsg}</span>
+                  </div>
+                );
+              })()}
             </div>
           ) : (
             <p className="text-xs text-white/50 italic py-2">Select staff to load live salary.</p>

@@ -31,6 +31,7 @@ interface StaffMember {
   join_date: string;
   date_of_birth?: string | null;
   mobile_number?: string | null;
+  profile_pending?: boolean;
   active: boolean;
   shift?: Shift;
   staff_accounts?: {
@@ -48,6 +49,7 @@ export default function StaffPage() {
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [profileFilter, setProfileFilter] = useState<'all' | 'incomplete'>('all');
   
   const [showAddPanel, setShowAddPanel] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
@@ -1710,12 +1712,17 @@ export default function StaffPage() {
   // Search filtering
   const filteredStaff = staff.filter((s) => {
     const terms = search.toLowerCase();
-    return (
+    const matchesSearch = (
       s.name.toLowerCase().includes(terms) ||
       s.department.toLowerCase().includes(terms) ||
       (s.pin || '').toLowerCase().includes(terms) ||
       (s.shift?.label || '').toLowerCase().includes(terms)
     );
+    if (!matchesSearch) return false;
+    if (profileFilter === 'incomplete') {
+      return s.profile_pending === true;
+    }
+    return true;
   });
 
   const getBranchLabel = (branchId: string) => {
@@ -1811,6 +1818,31 @@ export default function StaffPage() {
         />
       </div>
 
+      {/* Profile Complete / Incomplete Filter Pills */}
+      <div className="flex gap-2">
+        <button
+          onClick={() => setProfileFilter('all')}
+          className={`px-3.5 py-2 rounded-full text-xs font-bold transition-all shadow-sm ${
+            profileFilter === 'all'
+              ? 'bg-[#1A1A1A] text-white border border-transparent'
+              : 'bg-white border border-[#E8E8E8] text-[#555555] hover:bg-[#F8F8F8]'
+          }`}
+        >
+          All Staff
+        </button>
+        <button
+          onClick={() => setProfileFilter('incomplete')}
+          className={`px-3.5 py-2 rounded-full text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 ${
+            profileFilter === 'incomplete'
+              ? 'bg-[#C0392B] text-white border border-transparent'
+              : 'bg-white border border-[#E8E8E8] text-[#C0392B] hover:bg-[#FFF0F0]'
+          }`}
+        >
+          <span className={`w-1.5 h-1.5 rounded-full ${profileFilter === 'incomplete' ? 'bg-white' : 'bg-[#C0392B]'}`} />
+          Profile Incomplete (DOB Missing)
+        </button>
+      </div>
+
       {/* Staff list */}
       {loading ? (
         <div className="space-y-3">
@@ -1888,9 +1920,16 @@ export default function StaffPage() {
 
                   {/* Profile info details */}
                   <div className="flex-1 min-w-0">
-                    <h3 className="font-bold text-sm text-[#1A1A1A] leading-tight truncate">
-                      {s.name}
-                    </h3>
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-bold text-sm text-[#1A1A1A] leading-tight truncate">
+                        {s.name}
+                      </h3>
+                      {s.profile_pending && (
+                        <span className="bg-[#FFF0F0] border border-[#C0392B]/25 text-[#C0392B] text-[9.5px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider flex items-center">
+                          DOB Missing
+                        </span>
+                      )}
+                    </div>
                     <p className="text-[11px] text-[var(--text-muted)] font-semibold mt-0.5 leading-none">
                       {s.department} • <span className="capitalize">{getBranchLabel(s.branch_id)}</span>
                     </p>

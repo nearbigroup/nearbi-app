@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { User, LogOut, Lock, Calendar, Building, Briefcase, Phone, Smartphone, ChevronRight } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { formatTime12hr } from '@/lib/utils';
 
 export default function StaffProfilePage() {
   const { user, logout } = useAuth();
@@ -88,7 +89,7 @@ export default function StaffProfilePage() {
                 <Briefcase size={14} className="mr-2" /> Shift Schedule:
               </span>
               <span className="text-[#1a1a1a] font-bold">
-                {staffInfo.shift?.label || 'None'} ({staffInfo.shift?.start_time} - {staffInfo.shift?.end_time})
+                {staffInfo.shift?.label || 'None'} ({formatTime12hr(staffInfo.shift?.start_time)} - {formatTime12hr(staffInfo.shift?.end_time)})
               </span>
             </div>
             <div className="flex items-center justify-between">

@@ -159,19 +159,25 @@ export default function BulkConfirmTab() {
         (sum, r) => sum + (r.early_leave_minutes || 0), 0
       ) || 0;
 
-      // Calculate confirmed late fines (not waived)
+      // Calculate confirmed late fines (with partial waive support)
       const staffLateFines = lateFines.filter(
-        (lf) => lf.staff_id === s.id && lf.confirmed && !lf.waived
+        (lf) => lf.staff_id === s.id && lf.confirmed
       );
-      const totalLateFinesAmt = staffLateFines.reduce((sum, lf) => sum + Number(lf.fine_amount), 0);
+      const totalLateFinesAmt = staffLateFines.reduce((sum, lf) => {
+        const amt = Number(lf.fine_amount);
+        const waivedAmt = Number(lf.waived_amount || 0);
+        return sum + (lf.waived ? 0 : Math.max(0, amt - waivedAmt));
+      }, 0);
 
-      // Calculate confirmed special fines (not waived)
+      // Calculate confirmed special fines (with partial waive support)
       const staffSpecialFines = specialFines.filter(
-        (sf) => sf.staff_id === s.id && sf.confirmed && !sf.waived
+        (sf) => sf.staff_id === s.id && sf.confirmed
       );
-      const totalSpecialFinesAmt = staffSpecialFines.reduce(
-        (sum, sf) => sum + Number(sf.edited_amount ?? sf.amount), 0
-      );
+      const totalSpecialFinesAmt = staffSpecialFines.reduce((sum, sf) => {
+        const amt = Number(sf.edited_amount ?? sf.amount);
+        const waivedAmt = Number(sf.waived_amount || 0);
+        return sum + (sf.waived ? 0 : Math.max(0, amt - waivedAmt));
+      }, 0);
 
       const shiftHours = s.shift?.hours || 9;
 
@@ -488,20 +494,26 @@ export default function BulkConfirmTab() {
                   )}
                 </div>
                 <div className="flex flex-col items-end">
+                  <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Early Leave Deduct</span>
+                  <span className={`font-bold mt-0.5 ${bd.early_leave_deduction > 0 ? 'text-[var(--danger)]' : 'text-[#555555]'}`}>
+                    -{formatCurrency(bd.early_leave_deduction || 0)}
+                  </span>
+                </div>
+                <div className="flex flex-col">
                   <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Late Fines</span>
                   <span className={`font-bold mt-0.5 ${bd.confirmed_fines > 0 ? 'text-[var(--danger)]' : 'text-[#555555]'}`}>
                     -{formatCurrency(bd.confirmed_fines)}
                   </span>
                 </div>
-                <div className="flex flex-col">
+                <div className="flex flex-col items-end">
                   <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Special Fines</span>
                   <span className={`font-bold mt-0.5 ${bd.confirmed_special_fines > 0 ? 'text-[var(--danger)]' : 'text-[#555555]'}`}>
                     -{formatCurrency(bd.confirmed_special_fines)}
                   </span>
                 </div>
-                <div className="flex flex-col items-end">
+                <div className="flex flex-row justify-between items-center col-span-2 border-t border-[#E8E8E8] pt-2 mt-1">
                   <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Net Salary</span>
-                  <span className="text-[#1A1A1A] font-bold text-sm mt-0.5">
+                  <span className="text-[#1A1A1A] font-bold text-sm">
                     {formatCurrency(bd.net_salary)}
                   </span>
                 </div>

@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { createAuditLog } from '@/lib/audit';
 import { Check, X, RefreshCw, CheckSquare } from 'lucide-react';
+import { formatTime12hr } from '@/lib/utils';
 
 const isCheckoutValidForOT = (checkoutTime: string | null | undefined, shiftEndTime: string | null | undefined) => {
   if (!checkoutTime || !shiftEndTime) return false;
@@ -487,6 +488,20 @@ export default function ApprovalsPage() {
                   const shiftHours = Number(adj.staff?.shift?.hours || 8);
                   const actualHours = att ? Number(att.actual_hours_worked || 0) : 0;
                   
+                  const parseMins = (str: string) => {
+                    const [h, m] = str.split(':').map(Number);
+                    return h * 60 + m;
+                  };
+                  let extraTimeMins = 0;
+                  if (att?.check_out_time && adj.staff?.shift?.end_time) {
+                    const outMins = parseMins(att.check_out_time);
+                    const endMins = parseMins(adj.staff.shift.end_time);
+                    let diff = outMins - endMins;
+                    if (diff < -720) diff += 1440;
+                    if (diff > 720) diff -= 1440;
+                    extraTimeMins = Math.max(0, diff);
+                  }
+                  
                   return (
                     <div key={adj.id} className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col shadow-sm">
                       <div className="flex items-start justify-between mb-3">
@@ -502,14 +517,18 @@ export default function ApprovalsPage() {
                       </div>
 
                       <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-2.5 mb-4 text-xs font-semibold text-[#555555]">
-                        <div className="grid grid-cols-2 gap-2 text-center">
+                        <div className="grid grid-cols-3 gap-2 text-center">
                           <div>
                             <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Shift End</div>
-                            <div className="text-[#1A1A1A] font-bold mt-0.5">{adj.staff?.shift?.end_time || 'N/A'}</div>
+                            <div className="text-[#1A1A1A] font-bold mt-0.5">{formatTime12hr(adj.staff?.shift?.end_time) || 'N/A'}</div>
                           </div>
                           <div>
                             <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Actual Out</div>
-                            <div className="text-[#1A1A1A] font-bold mt-0.5">{att?.check_out_time || 'N/A'}</div>
+                            <div className="text-[#1A1A1A] font-bold mt-0.5">{formatTime12hr(att?.check_out_time) || 'N/A'}</div>
+                          </div>
+                          <div>
+                            <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Extra Time</div>
+                            <div className="text-[var(--info)] font-bold mt-0.5">{extraTimeMins} mins</div>
                           </div>
                         </div>
                         <div className="grid grid-cols-3 gap-2 text-center mt-2 pt-2 border-t border-[#E8E8E8]">
@@ -581,11 +600,11 @@ export default function ApprovalsPage() {
                     <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-2.5 mb-4 text-xs font-semibold text-[#555555] grid grid-cols-3 gap-2 text-center">
                       <div>
                         <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Shift Start</div>
-                        <div className="text-[#1A1A1A] font-bold mt-0.5">{shiftStart}</div>
+                        <div className="text-[#1A1A1A] font-bold mt-0.5">{formatTime12hr(shiftStart) || 'None'}</div>
                       </div>
                       <div>
                         <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Actual IN</div>
-                        <div className="text-[#1A1A1A] font-bold mt-0.5">{actualIn}</div>
+                        <div className="text-[#1A1A1A] font-bold mt-0.5">{formatTime12hr(actualIn) || 'None'}</div>
                       </div>
                       <div>
                         <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Early By</div>

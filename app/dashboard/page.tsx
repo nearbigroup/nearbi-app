@@ -23,7 +23,8 @@ import {
   Activity,
   Cake,
   PartyPopper,
-  X
+  X,
+  Megaphone
 } from 'lucide-react';
 
 interface StaffMember {
@@ -61,6 +62,7 @@ export default function DashboardPage() {
   const [pendingApprovalsCount, setPendingApprovalsCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
+  const [latestAnn, setLatestAnn] = useState<any>(null);
 
   // Month-end checklist counts
   const [checklistIssues, setChecklistIssues] = useState(0);
@@ -197,6 +199,34 @@ export default function DashboardPage() {
       const paidStaffIds = new Set((paymentsData || []).map((p) => p.staff_id));
       const unpaidCount = (confirmationsData || []).filter((c) => !paidStaffIds.has(c.staff_id)).length;
       setChecklistUnpaid(unpaidCount);
+
+      // F. Fetch latest announcement stats
+      const { data: latestAnnData } = await supabase
+        .from('staff_announcements')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (latestAnnData) {
+        const { count: readCount } = await supabase
+          .from('announcement_reads')
+          .select('*', { count: 'exact', head: true })
+          .eq('announcement_id', latestAnnData.id);
+
+        let targetCount = verifiedStaff.length;
+        if (latestAnnData.target !== 'all') {
+          targetCount = verifiedStaff.filter(s => s.branch_id === latestAnnData.target).length;
+        }
+
+        setLatestAnn({
+          ...latestAnnData,
+          readCount: readCount || 0,
+          targetCount: targetCount || 1
+        });
+      } else {
+        setLatestAnn(null);
+      }
 
       // 6. Run automatic absent alerts check
       checkAndCreateAbsentAlerts(verifiedStaff, attData || []);
@@ -528,12 +558,12 @@ export default function DashboardPage() {
           <h1 className="text-[#1A1A1A] text-2xl font-bold">{getGreeting()} 👋</h1>
         </div>
         {user?.role === 'ops_manager' && (
-          <button
-            onClick={() => setIsAnnModalOpen(true)}
-            className="bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold px-4 py-2 rounded-xl text-xs active:scale-95 transition-all shadow cursor-pointer text-center"
+          <Link
+            href="/announcements"
+            className="bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold px-4 py-2 rounded-xl text-xs active:scale-95 transition-all shadow cursor-pointer text-center flex items-center justify-center"
           >
-            New Announcement
-          </button>
+            Announcements Center
+          </Link>
         )}
       </div>
 
@@ -755,11 +785,35 @@ export default function DashboardPage() {
           )}
 
           {/* Alerts section */}
-          {(absentStaffAlerts.length > 0 || lateArrivalsAlerts.length > 0 || pendingLeavesCount > 0 || pendingApprovalsCount > 0) && (
+          {(absentStaffAlerts.length > 0 || lateArrivalsAlerts.length > 0 || pendingLeavesCount > 0 || pendingApprovalsCount > 0 || latestAnn) && (
             <div className="space-y-3">
               <h4 className="text-[#999999] text-[11px] font-black uppercase tracking-wider">
                 Alerts
               </h4>
+
+              {/* Latest Announcement read receipt card */}
+              {latestAnn && (
+                <Link
+                  href="/announcements"
+                  className="block bg-white border border-[#E8E8E8] border-l-[4px] border-l-amber-500 rounded-[14px] p-4 text-left active:bg-[#F8F8F8] transition-colors shadow-sm"
+                >
+                  <div className="font-bold text-amber-600 text-xs flex items-center justify-between mb-1">
+                    <span className="flex items-center">
+                      <Megaphone size={16} strokeWidth={1.5} className="mr-1.5 flex-shrink-0 text-amber-500" />
+                      Latest Announcement Status
+                    </span>
+                    <span className="text-[10px] uppercase font-bold text-[#999999] tracking-wider flex items-center">
+                      Manage <ChevronRight size={14} strokeWidth={1.5} className="ml-0.5" />
+                    </span>
+                  </div>
+                  <div className="text-xs text-[#1A1A1A] font-bold mt-1.5 truncate">
+                    "{latestAnn.title}"
+                  </div>
+                  <div className="text-[10px] text-[#555555] font-semibold mt-1">
+                    Read coverage: <span className="font-bold text-[#1A1A1A]">{latestAnn.readCount}</span> / <span className="font-bold text-[#1A1A1A]">{latestAnn.targetCount}</span> staff ({Math.round((latestAnn.readCount / latestAnn.targetCount) * 100)}%)
+                  </div>
+                </Link>
+              )}
 
               {/* Absent staff alert */}
               {absentStaffAlerts.length > 0 && (

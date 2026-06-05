@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { Calendar, User, Clock, AlertTriangle, CheckCircle, ChevronRight, Award, Megaphone, Bell, Sparkles, X, Info, Coins } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { formatTime12hr } from '@/lib/utils';
 
 interface Announcement {
   id: string;
@@ -29,6 +30,9 @@ export default function StaffHomePage() {
   const [featuredAnnouncement, setFeaturedAnnouncement] = useState<Announcement | null>(null);
   const [selectedAnnouncement, setSelectedAnnouncement] = useState<Announcement | null>(null);
   const [tomorrowShift, setTomorrowShift] = useState<string>('');
+  const [showCompletionModal, setShowCompletionModal] = useState(false);
+  const [dobInput, setDobInput] = useState('');
+  const [savingProfile, setSavingProfile] = useState(false);
 
   useEffect(() => {
     if (!user || !user.staffId) return;
@@ -48,6 +52,16 @@ export default function StaffHomePage() {
           .single();
         if (sErr) throw sErr;
         setStaffInfo(sData);
+
+        if (sData.profile_pending) {
+          const isReminded = sessionStorage.getItem('profile_reminded');
+          if (!isReminded) {
+            setShowCompletionModal(true);
+            if (sData.date_of_birth) {
+              setDobInput(sData.date_of_birth);
+            }
+          }
+        }
 
         // 2. Fetch Attendance for Current Month
         const { data: attData, error: attErr } = await supabase
@@ -97,21 +111,25 @@ export default function StaffHomePage() {
         const { data: annData } = await supabase
           .from('staff_announcements')
           .select('*')
-          .or(`target.eq.all,target.eq.${sData.branch_id}`)
+          .or(`target.eq.all,target.eq.${sData.branch_id},target_staff_id.eq.${user.staffId}`)
           .order('created_at', { ascending: false });
 
         if (annData) {
           setAnnouncements(annData);
           
-          // Check read status in localStorage
-          const readIds = JSON.parse(localStorage.getItem('read_announcements') || '[]');
-          const unread = annData.filter((a: any) => !readIds.includes(a.id));
+          // Check read status in DB announcement_reads
+          const { data: readLogs } = await supabase
+            .from('announcement_reads')
+            .select('announcement_id')
+            .eq('staff_id', user.staffId);
+            
+          const readIds = new Set(readLogs?.map(r => r.announcement_id) || []);
+          const unread = annData.filter((a: any) => !readIds.has(a.id));
           setUnreadCount(unread.length);
           
           if (unread.length > 0) {
             setFeaturedAnnouncement(unread[0]);
-          } else if (annData.length > 0) {
-            // fallback to most recent if none unread
+          } else {
             setFeaturedAnnouncement(null);
           }
         }
@@ -124,7 +142,7 @@ export default function StaffHomePage() {
         // Simple logic: check if tomorrow is standard weekly off (e.g. Sunday for 4-off staff, or based on shift label)
         // Usually, tomorrow's shift is their regular shift unless it is an off day.
         if (sData.shift) {
-          setTomorrowShift(`${sData.shift.start_time} - ${sData.shift.end_time} (${sData.shift.label})`);
+          setTomorrowShift(`${formatTime12hr(sData.shift.start_time)} - ${formatTime12hr(sData.shift.end_time)} (${sData.shift.label})`);
         } else {
           setTomorrowShift('No shift scheduled');
         }
@@ -139,22 +157,100 @@ export default function StaffHomePage() {
     fetchData();
   }, [user]);
 
-  const handleDismissAnnouncement = (annId: string) => {
-    const readIds = JSON.parse(localStorage.getItem('read_announcements') || '[]');
-    if (!readIds.includes(annId)) {
-      readIds.push(annId);
-      localStorage.setItem('read_announcements', JSON.stringify(readIds));
+  const handleDismissAnnouncement = async (annId: string) => {
+    if (!user?.staffId) return;
+    try {
+      await supabase
+        .from('announcement_reads')
+        .upsert({
+          announcement_id: annId,
+          staff_id: user.staffId,
+          read_on_kiosk: false,
+          read_at: new Date().toISOString()
+        }, { onConflict: 'announcement_id,staff_id' });
+        
+      // Re-fetch data to update UI
+      const currentMonth = new Date().toISOString().slice(0, 7); // e.g. "2026-06"
+      const year = parseInt(currentMonth.split('-')[0]);
+      const monthNum = parseInt(currentMonth.split('-')[1]);
+      const calendarDays = new Date(year, monthNum, 0).getDate();
+      
+      const { data: annData } = await supabase
+        .from('staff_announcements')
+        .select('*')
+        .or(`target.eq.all,target.eq.${staffInfo?.branch_id},target_staff_id.eq.${user.staffId}`)
+        .order('created_at', { ascending: false });
+
+      if (annData) {
+        setAnnouncements(annData);
+        const { data: readLogs } = await supabase
+          .from('announcement_reads')
+          .select('announcement_id')
+          .eq('staff_id', user.staffId);
+          
+        const readIds = new Set(readLogs?.map(r => r.announcement_id) || []);
+        const unread = annData.filter((a: any) => !readIds.has(a.id));
+        setUnreadCount(unread.length);
+        
+        if (unread.length > 0) {
+          setFeaturedAnnouncement(unread[0]);
+        } else {
+          setFeaturedAnnouncement(null);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to dismiss announcement:', e);
     }
-    
-    // Recalculate unread count
-    const unread = announcements.filter(a => !readIds.includes(a.id));
-    setUnreadCount(unread.length);
-    setFeaturedAnnouncement(unread.length > 0 ? unread[0] : null);
   };
 
-  const handleOpenAnnouncement = (ann: Announcement) => {
+  const handleOpenAnnouncement = async (ann: Announcement) => {
     setSelectedAnnouncement(ann);
-    handleDismissAnnouncement(ann.id);
+    await handleDismissAnnouncement(ann.id);
+  };
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !user.staffId || !dobInput) return;
+
+    setSavingProfile(true);
+    try {
+      const { error: staffErr } = await supabase
+        .from('staff')
+        .update({
+          date_of_birth: dobInput,
+          profile_pending: false
+        })
+        .eq('id', user.staffId);
+
+      if (staffErr) throw staffErr;
+
+      const { error: accountErr } = await supabase
+        .from('staff_accounts')
+        .update({
+          profile_completed: true
+        })
+        .eq('staff_id', user.staffId);
+
+      if (accountErr) throw accountErr;
+
+      setStaffInfo((prev: any) => ({
+        ...prev,
+        profile_pending: false,
+        date_of_birth: dobInput
+      }));
+      setShowCompletionModal(false);
+      alert('Profile completed successfully!');
+    } catch (err) {
+      console.error('Error completing profile:', err);
+      alert('Failed to save profile details.');
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
+  const handleRemindLater = () => {
+    sessionStorage.setItem('profile_reminded', 'true');
+    setShowCompletionModal(false);
   };
 
   const getBranchLabel = (branchId: string) => {
@@ -230,7 +326,7 @@ export default function StaffHomePage() {
 
           <div className="border-t border-dashed border-gray-100 pt-3 flex flex-wrap gap-2 z-10">
             <span className="bg-[var(--bg-secondary)] text-[var(--text-secondary)] border border-[var(--border)] text-[10px] font-black px-2.5 py-1 rounded-lg">
-              Shift: {staffInfo.shift?.label || 'None'} ({staffInfo.shift?.start_time} - {staffInfo.shift?.end_time})
+              Shift: {staffInfo.shift?.label || 'None'} ({formatTime12hr(staffInfo.shift?.start_time)} - {formatTime12hr(staffInfo.shift?.end_time)})
             </span>
             {staffInfo.join_date && (
               <span className="bg-[var(--bg-secondary)] text-[var(--text-secondary)] border border-[var(--border)] text-[10px] font-black px-2.5 py-1 rounded-lg">
@@ -403,6 +499,63 @@ export default function StaffHomePage() {
             >
               Close
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Profile Completion Modal */}
+      {showCompletionModal && staffInfo && (
+        <div className="fixed inset-0 z-[19000] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-250">
+          <div className="bg-white border border-[#E8E8E8] rounded-[24px] max-w-sm w-full p-6 flex flex-col space-y-4 shadow-2xl text-left animate-in scale-in-95 duration-250">
+            <div>
+              <div className="w-10 h-10 rounded-full bg-red-50 text-red-500 flex items-center justify-center mb-3">
+                <User size={20} />
+              </div>
+              <h3 className="text-[#1A1A1A] text-base font-black leading-tight">Complete Your Profile</h3>
+              <p className="text-[#555555] text-xs font-semibold mt-1">
+                Please complete your details. Joining date is read-only, while Date of Birth is required.
+              </p>
+            </div>
+
+            <form onSubmit={handleSaveProfile} className="space-y-4 text-xs font-semibold text-[#555555]">
+              <div>
+                <label className="block text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider mb-1">Joining Date (Read-Only)</label>
+                <input
+                  type="text"
+                  value={staffInfo.join_date ? new Date(staffInfo.join_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
+                  disabled
+                  className="w-full bg-gray-150 border border-gray-200 rounded-xl p-3 text-xs font-bold text-gray-400 cursor-not-allowed"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider mb-1">Date of Birth</label>
+                <input
+                  type="date"
+                  value={dobInput}
+                  onChange={e => setDobInput(e.target.value)}
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3 text-xs font-bold text-[#1A1A1A] focus:outline-none focus:border-black [color-scheme:light]"
+                  required
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={handleRemindLater}
+                  className="flex-1 min-h-[40px] bg-white border border-[#E8E8E8] text-[#1A1A1A] hover:bg-[#F8F8F8] font-black text-xs rounded-xl active:scale-95 transition-all cursor-pointer text-center"
+                >
+                  Remind Later
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingProfile}
+                  className="flex-1 min-h-[40px] bg-[#1A1A1A] hover:bg-black text-white font-black text-xs rounded-xl active:scale-95 transition-all flex items-center justify-center"
+                >
+                  {savingProfile ? 'Saving...' : 'Save Profile'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
