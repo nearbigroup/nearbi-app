@@ -67,6 +67,7 @@ interface AttendanceRecord {
   check_in_photo: string | null;
   check_out_photo: string | null;
   marked_by: string;
+  day_type?: string;
 }
 
 interface LateFine {
@@ -705,7 +706,16 @@ export default function StaffProfilePage() {
                   if (isFuture) {
                     cellClass += "bg-transparent border-[var(--border)] text-[var(--text-muted)] opacity-35 cursor-not-allowed";
                   } else if (record) {
-                    if (record.status === 'present' || record.status === 'late') {
+                    if (record.day_type === 'weekly_off') {
+                      cellClass += "bg-[rgba(96,165,250,0.12)] border-[rgba(96,165,250,0.25)] text-[#60A5FA] hover:bg-[rgba(96,165,250,0.2)]";
+                      dotColor = "bg-[#60A5FA]";
+                    } else if (record.day_type === 'holiday') {
+                      cellClass += "bg-[rgba(167,139,250,0.12)] border-[rgba(167,139,250,0.25)] text-[#A78BFA] hover:bg-[rgba(167,139,250,0.2)]";
+                      dotColor = "bg-[#A78BFA]";
+                    } else if (record.day_type === 'leave') {
+                      cellClass += "bg-[rgba(251,146,60,0.12)] border-[rgba(251,146,60,0.25)] text-[#FB923C] hover:bg-[rgba(251,146,60,0.2)]";
+                      dotColor = "bg-[#FB923C]";
+                    } else if (record.status === 'present' || record.status === 'late') {
                       if (record.color_code === 'green') {
                         cellClass += "bg-[rgba(74,222,128,0.12)] border-[rgba(74,222,128,0.25)] text-[#4ADE80] hover:bg-[rgba(74,222,128,0.2)]";
                         dotColor = "bg-[#4ADE80]";
@@ -721,8 +731,8 @@ export default function StaffProfilePage() {
                       }
                     } else {
                       // Absent record exists
-                      cellClass += "bg-[rgba(248,113,113,0.06)] border-[rgba(248,113,113,0.12)] text-[var(--text-muted)] hover:bg-[rgba(248,113,113,0.12)]";
-                      dotColor = "bg-[#F87171]";
+                      cellClass += "bg-[rgba(107,114,128,0.12)] border-[rgba(107,114,128,0.25)] text-[#6B7280] hover:bg-[rgba(107,114,128,0.2)]";
+                      dotColor = "bg-[#6B7280]";
                     }
                   } else {
                     // No attendance record. Check leave or off day

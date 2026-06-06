@@ -111,7 +111,6 @@ export default function SalaryPage() {
 
       const daysWorked = attRecords?.filter(r => r.check_in_time !== null).length || 0;
       const approvedOT = attRecords?.filter(r => r.ot_approved).reduce((sum, r) => sum + (r.ot_minutes || 0), 0) || 0;
-      const approvedEarlyIn = attRecords?.filter(r => r.early_in_approved).reduce((sum, r) => sum + (r.early_in_minutes || 0), 0) || 0;
       const earlyLeave = attRecords?.reduce((sum, r) => sum + (r.early_leave_minutes || 0), 0) || 0;
 
       const { data: lateFines } = await supabase
@@ -138,51 +137,54 @@ export default function SalaryPage() {
         return sum + (f.waived ? 0 : Math.max(0, amt - waivedAmt));
       }, 0) || 0;
 
+      const finesSoFar = lateFinesSum + specialFinesSum;
+
+      const offDaysPerMonth = staff.off_days_per_month as 0 | 2 | 4;
+      
+      let offBonusEarned = 0;
+      if (offDaysPerMonth === 4) {
+        offBonusEarned = Math.min(Math.floor(daysWorked / 6), 4);
+      } else if (offDaysPerMonth === 2) {
+        offBonusEarned = Math.min(Math.floor(daysWorked / 12), 2);
+      }
+
+      const paidDaysSoFar = daysWorked + offBonusEarned;
       const dailyRate = staff.monthly_salary / calendarDays;
       const shiftHours = staff.shift?.hours || staff.shifts?.hours || 9;
       const hourlyRate = dailyRate / shiftHours;
 
-      const offDaysPerMonth = staff.off_days_per_month as 0 | 2 | 4;
-      const requiredWorkingDays = calendarDays - offDaysPerMonth;
-      const maxPaidDays = calendarDays + offDaysPerMonth;
+      const grossSoFar = paidDaysSoFar * dailyRate;
+      const otPay = (approvedOT / 60) * hourlyRate;
+      const earlyLeaveDeduction = (earlyLeave / 60) * hourlyRate;
 
-      let paidDays: number;
-      let extraDaysWorked = 0;
-      let missingDays = 0;
+      const netSoFar = grossSoFar + otPay - earlyLeaveDeduction - finesSoFar;
 
-      if (daysWorked >= requiredWorkingDays) {
-        extraDaysWorked = daysWorked - requiredWorkingDays;
-        paidDays = Math.min(calendarDays + extraDaysWorked, maxPaidDays);
-      } else {
-        missingDays = requiredWorkingDays - daysWorked;
-        paidDays = calendarDays - missingDays;
+      let nextMilestone = '';
+      if (offDaysPerMonth === 4) {
+        const daysToNext = 6 - (daysWorked % 6);
+        if (daysToNext < 6) {
+          nextMilestone = `Work ${daysToNext} more days to earn +1 day bonus (₹${dailyRate.toFixed(0)})`;
+        }
+      } else if (offDaysPerMonth === 2) {
+        const daysToNext = 12 - (daysWorked % 12);
+        if (daysToNext < 12) {
+          nextMilestone = `Work ${daysToNext} more days to earn +1 day bonus (₹${dailyRate.toFixed(0)})`;
+        }
       }
-
-      const daysRemaining = calendarDays - daysWorked;
-      const grossPay = paidDays * dailyRate;
-      const otEarned = (approvedOT / 60) * hourlyRate;
-      const earlyInEarned = (approvedEarlyIn / 60) * hourlyRate;
-      const earlyLeaveDeduction = calculateEarlyLeaveDeduction(earlyLeave, dailyRate, shiftHours);
-      const finesSoFar = lateFinesSum + specialFinesSum;
-
-      const netSalary = grossPay + otEarned + earlyInEarned - earlyLeaveDeduction - finesSoFar;
 
       setLiveSalary({
         daysWorked,
-        daysRemaining,
+        offBonusEarned,
+        paidDays: paidDaysSoFar,
         calendarDays,
-        requiredWorkingDays,
-        maxPaidDays,
-        extraDaysWorked,
-        missingDays,
-        paidDays,
-        grossPay: Math.round(grossPay),
-        otEarned: Math.round(otEarned),
+        dailyRate,
+        hourlyRate,
+        grossPay: Math.round(grossSoFar),
+        otEarned: Math.round(otPay),
         earlyLeaveDeduction: Math.round(earlyLeaveDeduction),
         finesSoFar: Math.round(finesSoFar),
-        netSalary: Math.round(netSalary),
-        hourlyRate,
-        dailyRate
+        netSalary: Math.round(netSoFar),
+        nextMilestone
       });
     } catch (err) {
       console.error('Error fetching live salary:', err);
@@ -605,35 +607,16 @@ function SalaryCalculatorTab({
             return null;
           }
 
-          const milestoneMsg = isPastMonth 
-            ? "" 
-            : (() => {
-                const dailyRateRounded = Math.round(displayData.dailyRate);
-                if (displayData.daysWorked < displayData.requiredWorkingDays) {
-                  const needed = displayData.requiredWorkingDays - displayData.daysWorked;
-                  return `Work ${needed} more day${needed > 1 ? 's' : ''} to reach standard full salary target.`;
-                } else if (displayData.paidDays < displayData.maxPaidDays) {
-                  return `Work 1 more day to earn +1 day extra bonus (+${formatCurrency(dailyRateRounded)}).`;
-                } else {
-                  return `Maximum bonus paid days reached for this month.`;
-                }
-              })();
-
-          return (
-            <div className="bg-[#1A1A1A] border border-transparent text-white rounded-[14px] p-5 shadow-lg relative overflow-hidden flex flex-col space-y-4">
-              <div className="flex justify-between items-center">
-                <div>
-                  <p className="text-[10px] text-white/50 font-bold uppercase tracking-wider">Featured Metrics</p>
-                  <h3 className="text-sm font-extrabold text-white mt-0.5 animate-in fade-in">
-                    {isPastMonth ? `FULL MONTH — ${formatMonthDisplay(selectedMonth)}` : "Current Month Live Salary"}
-                  </h3>
-                  {isCurrentMonth && (
-                    <p className="text-[10px] text-white/40 font-bold mt-0.5 animate-in fade-in">
-                      Based on {displayData.daysWorked || displayData.daysActuallyWorked || 0} days recorded so far
-                    </p>
-                  )}
-                </div>
-                {isCurrentMonth && (
+          if (isCurrentMonth) {
+            return (
+              <div className="bg-[#1A1A1A] border border-transparent text-white rounded-[14px] p-5 shadow-lg relative overflow-hidden flex flex-col space-y-4 font-sans select-none">
+                <div className="flex justify-between items-center border-b border-white/10 pb-3">
+                  <div>
+                    <p className="text-[10px] text-white/50 font-bold uppercase tracking-wider">Salary So Far</p>
+                    <h3 className="text-sm font-extrabold text-white mt-0.5">
+                      SALARY SO FAR — {formatMonthDisplay(selectedMonth)}
+                    </h3>
+                  </div>
                   <button
                     onClick={() => fetchLiveSalary(selectedStaffId)}
                     disabled={liveLoading}
@@ -641,15 +624,79 @@ function SalaryCalculatorTab({
                   >
                     <RefreshCw size={16} className={`${liveLoading ? 'animate-spin' : ''}`} />
                   </button>
+                </div>
+
+                <div className="space-y-2.5 text-xs text-white/90">
+                  <div className="flex justify-between">
+                    <span className="text-white/50">Days worked:</span>
+                    <span className="font-extrabold">{displayData.daysWorked} days</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-white/50">Off bonus earned:</span>
+                    <span className="font-extrabold text-[var(--success)]">+{displayData.offBonusEarned} days</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-white/50">Paid days so far:</span>
+                    <span className="font-extrabold">{displayData.paidDays} days</span>
+                  </div>
+                  <div className="flex justify-between border-b border-dashed border-white/10 pb-2.5">
+                    <span className="text-white/50">Daily rate:</span>
+                    <span className="font-extrabold">{formatCurrency(displayData.dailyRate)}</span>
+                  </div>
+
+                  <div className="flex justify-between pt-1">
+                    <span className="text-white/50">Gross so far:</span>
+                    <span className="font-extrabold">{formatCurrency(displayData.grossPay)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-white/50">OT earned:</span>
+                    <span className="font-extrabold text-[var(--success)]">+{formatCurrency(displayData.otEarned)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-white/50">Early leave:</span>
+                    <span className="font-extrabold text-[var(--danger)]">-{formatCurrency(displayData.earlyLeaveDeduction)}</span>
+                  </div>
+                  <div className="flex justify-between border-b border-white/15 pb-2.5">
+                    <span className="text-white/50">Late fines:</span>
+                    <span className="font-extrabold text-[var(--danger)]">-{formatCurrency(displayData.finesSoFar)}</span>
+                  </div>
+
+                  <div className="flex justify-between items-end pt-1">
+                    <span className="text-[10px] font-black uppercase text-white/50 tracking-wider">SALARY SO FAR:</span>
+                    <span className="text-xl font-black text-white">{formatCurrency(displayData.netSalary)}</span>
+                  </div>
+                </div>
+
+                {displayData.nextMilestone && (
+                  <div className="mt-1 bg-white/10 border border-white/5 rounded-lg px-3 py-2 text-[10px] font-bold text-white/80 flex items-center space-x-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[var(--warning)] animate-ping flex-shrink-0" />
+                    <span>{displayData.nextMilestone}</span>
+                  </div>
                 )}
+
+                <div className="text-[9px] text-white/40 italic leading-snug border-t border-white/5 pt-2.5 mt-1">
+                  Note: Based on {displayData.daysWorked} days recorded. No deductions for future days. Final salary calculated at month end.
+                </div>
+              </div>
+            );
+          }
+
+          // If isPastMonth:
+          return (
+            <div className="bg-[#1A1A1A] border border-transparent text-white rounded-[14px] p-5 shadow-lg relative overflow-hidden flex flex-col space-y-4 select-none">
+              <div className="flex justify-between items-center border-b border-white/10 pb-3">
+                <div>
+                  <p className="text-[10px] text-white/50 font-bold uppercase tracking-wider">Featured Metrics</p>
+                  <h3 className="text-sm font-extrabold text-white mt-0.5 animate-in fade-in">
+                    FULL MONTH — {formatMonthDisplay(selectedMonth)}
+                  </h3>
+                </div>
               </div>
 
               <div className="space-y-4 pt-1">
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <span className="text-[10px] font-bold text-white/40 uppercase tracking-wider block">
-                      {isPastMonth ? "Net Salary" : "Net Current Salary"}
-                    </span>
+                    <span className="text-[10px] font-bold text-white/40 uppercase tracking-wider block">Net Salary</span>
                     <span className="text-2xl font-black text-white block mt-1 leading-none">
                       {formatCurrency(displayData.netSalary)}
                     </span>
@@ -657,16 +704,14 @@ function SalaryCalculatorTab({
                   <div className="text-right">
                     <span className="text-[10px] font-bold text-white/40 uppercase tracking-wider block">Days Worked</span>
                     <span className="text-base font-extrabold text-white block mt-1 leading-none">
-                      {displayData.daysWorked ?? displayData.daysActuallyWorked ?? 0} / {displayData.calendarDays}
+                      {displayData.daysActuallyWorked ?? displayData.daysWorked ?? 0} / {displayData.calendarDays}
                     </span>
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-y-3 gap-x-2 border-t border-white/10 pt-3.5 text-xs text-white/70">
                   <div>
                     <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Remaining Days</span>
-                    <span className="font-extrabold text-white block mt-0.5">
-                      {isPastMonth ? 0 : (displayData.daysRemaining ?? 0)} days
-                    </span>
+                    <span className="font-extrabold text-white block mt-0.5">0 days</span>
                   </div>
                   <div>
                     <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Gross Pay</span>
@@ -677,7 +722,7 @@ function SalaryCalculatorTab({
                   <div className="text-right">
                     <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">OT Earned</span>
                     <span className="font-extrabold text-white block mt-0.5">
-                      {formatCurrency(displayData.otEarned ?? displayData.otPay ?? 0)}
+                      {formatCurrency(displayData.otPay ?? displayData.otEarned ?? 0)}
                     </span>
                   </div>
                   <div>
@@ -699,12 +744,6 @@ function SalaryCalculatorTab({
                     </span>
                   </div>
                 </div>
-                {milestoneMsg && (
-                  <div className="mt-2 bg-white/10 border border-white/5 rounded-lg px-3 py-2 text-[10px] font-bold text-white/80 flex items-center space-x-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[var(--warning)] animate-ping flex-shrink-0" />
-                    <span>{milestoneMsg}</span>
-                  </div>
-                )}
               </div>
             </div>
           );

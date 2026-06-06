@@ -34,6 +34,7 @@ export function calculateSalary(
     approvedOTMinutes: number;
     approvedEarlyInMinutes: number;
     earlyLeaveMinutes: number;
+    missingDays?: number;
   }
 ) {
   const {
@@ -71,15 +72,22 @@ export function calculateSalary(
   let extraDaysWorked = 0;
   let missingDays = 0;
 
-  if (daysActuallyWorked >= requiredWorkingDays) {
-    extraDaysWorked = daysActuallyWorked - requiredWorkingDays;
-    paidDays = Math.min(
-      calendarDays + extraDaysWorked,
-      maxPaidDays
-    );
+  if (attendance.missingDays !== undefined) {
+    missingDays = attendance.missingDays;
+    extraDaysWorked = Math.max(0, daysActuallyWorked - requiredWorkingDays);
+    paidDays = Math.max(0, calendarDays + extraDaysWorked - missingDays);
+    paidDays = Math.min(paidDays, maxPaidDays);
   } else {
-    missingDays = requiredWorkingDays - daysActuallyWorked;
-    paidDays = calendarDays - missingDays;
+    if (daysActuallyWorked >= requiredWorkingDays) {
+      extraDaysWorked = daysActuallyWorked - requiredWorkingDays;
+      paidDays = Math.min(
+        calendarDays + extraDaysWorked,
+        maxPaidDays
+      );
+    } else {
+      missingDays = requiredWorkingDays - daysActuallyWorked;
+      paidDays = calendarDays - missingDays;
+    }
   }
 
   // Gross pay

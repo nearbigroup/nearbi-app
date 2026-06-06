@@ -52,6 +52,25 @@ export default function SettingsPage() {
   const [confirmText, setConfirmText] = useState('');
   const [executingDanger, setExecutingDanger] = useState(false);
 
+  // Data management cleanup states
+  const [cleanupMonth, setCleanupMonth] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
+  const [cleanupBranch, setCleanupBranch] = useState<'all' | 'daily' | 'hypermarket'>('all');
+  const [cleanupItems, setCleanupItems] = useState({
+    attendance: false,
+    fines: false,
+    breaks: false,
+    wall: false,
+    notifications: false,
+    leaves: false,
+    salaries: false,
+  });
+  const [cleanupConfirmText, setCleanupConfirmText] = useState('');
+  const [isCleaningUp, setIsCleaningUp] = useState(false);
+  const [cleanupResult, setCleanupResult] = useState<string | null>(null);
+
   const [settings, setSettings] = useState<FineSettings>({
     id: 'default',
     yellow_fine: 25,
@@ -267,6 +286,185 @@ export default function SettingsPage() {
     }
   };
 
+  const generateMonthsList = () => {
+    const list = [];
+    const d = new Date();
+    for (let i = 0; i < 24; i++) {
+      const year = d.getFullYear();
+      const month = d.getMonth() - i;
+      const date = new Date(year, month, 1);
+      const mStr = String(date.getMonth() + 1).padStart(2, '0');
+      const value = `${date.getFullYear()}-${mStr}`;
+      const label = date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+      list.push({ value, label });
+    }
+    return list;
+  };
+
+  const handleDataCleanup = async () => {
+    if (cleanupConfirmText !== 'DELETE') {
+      alert("Please type DELETE to confirm.");
+      return;
+    }
+    setIsCleaningUp(true);
+    setCleanupResult(null);
+    try {
+      const [yearStr, monthStr] = cleanupMonth.split('-');
+      const year = parseInt(yearStr);
+      const monthNum = parseInt(monthStr);
+      const firstDay = `${cleanupMonth}-01`;
+      const lastDay = new Date(year, monthNum, 0).toISOString().split('T')[0];
+
+      // Get staff for selected branch
+      let staffQuery = supabase.from('staff').select('id');
+      if (cleanupBranch !== 'all') {
+        staffQuery = staffQuery.eq('branch_id', cleanupBranch);
+      }
+      const { data: staffData } = await staffQuery;
+      const staffIds = staffData?.map(s => s.id) || [];
+
+      if (staffIds.length === 0 && cleanupBranch !== 'all') {
+        alert("No staff found for the selected branch.");
+        setIsCleaningUp(false);
+        return;
+      }
+
+      // Filter out staff who have locked confirmations for this month
+      const { data: lockedSalaries } = await supabase
+        .from('salary_confirmations')
+        .select('staff_id')
+        .eq('month', cleanupMonth)
+        .eq('is_locked', true);
+      
+      const lockedStaffIds = new Set(lockedSalaries?.map(s => s.staff_id) || []);
+      const allowedStaffIds = staffIds.filter(id => !lockedStaffIds.has(id));
+      const skippedLockedCount = staffIds.length - allowedStaffIds.length;
+
+      let summaryParts = [];
+      if (skippedLockedCount > 0) {
+        summaryParts.push(`${skippedLockedCount} staff skipped (salary locked)`);
+      }
+
+      // 1. Attendance
+      if (cleanupItems.attendance && allowedStaffIds.length > 0) {
+        let attQuery = supabase.from('attendance')
+          .delete()
+          .gte('date', firstDay)
+          .lte('date', lastDay)
+          .in('staff_id', allowedStaffIds);
+        const { data, error } = await attQuery.select();
+        if (error) throw error;
+        summaryParts.push(`${data?.length || 0} attendance records`);
+      }
+
+      // 2. Late Fines (unconfirmed only)
+      if (cleanupItems.fines && allowedStaffIds.length > 0) {
+        let finesQuery = supabase.from('late_fines')
+          .select('id, confirmed')
+          .eq('month', cleanupMonth)
+          .in('staff_id', allowedStaffIds);
+        const { data: finesData } = await finesQuery;
+        
+        const unconfirmedFines = finesData?.filter(f => !f.confirmed).map(f => f.id) || [];
+        const confirmedCount = finesData?.filter(f => f.confirmed).length || 0;
+
+        if (unconfirmedFines.length > 0) {
+          const { error } = await supabase.from('late_fines')
+            .delete()
+            .in('id', unconfirmedFines);
+          if (error) throw error;
+        }
+        summaryParts.push(`${unconfirmedFines.length} late fines (${confirmedCount} skipped confirmed fines)`);
+      }
+
+      // 3. Break Logs
+      if (cleanupItems.breaks && allowedStaffIds.length > 0) {
+        let breakQuery = supabase.from('break_logs')
+          .delete()
+          .gte('date', firstDay)
+          .lte('date', lastDay)
+          .in('staff_id', allowedStaffIds);
+        const { data, error } = await breakQuery.select();
+        if (error) throw error;
+        summaryParts.push(`${data?.length || 0} break logs`);
+      }
+
+      // 4. Wall Events
+      if (cleanupItems.wall && allowedStaffIds.length > 0) {
+        let wallQuery = supabase.from('wall_events')
+          .delete()
+          .gte('created_at', `${firstDay}T00:00:00Z`)
+          .lte('created_at', `${lastDay}T23:59:59Z`)
+          .in('staff_id', allowedStaffIds);
+        const { data, error } = await wallQuery.select();
+        if (error) throw error;
+        summaryParts.push(`${data?.length || 0} wall events`);
+      }
+
+      // 5. Notifications (read only)
+      if (cleanupItems.notifications && allowedStaffIds.length > 0) {
+        let notifQuery = supabase.from('notifications')
+          .select('id, is_read')
+          .gte('created_at', `${firstDay}T00:00:00Z`)
+          .lte('created_at', `${lastDay}T23:59:59Z`)
+          .in('staff_id', allowedStaffIds);
+        const { data: notifData } = await notifQuery;
+        const readIds = notifData?.filter(n => n.is_read).map(n => n.id) || [];
+        const unreadCount = notifData?.filter(n => !n.is_read).length || 0;
+
+        if (readIds.length > 0) {
+          const { error } = await supabase.from('notifications')
+            .delete()
+            .in('id', readIds);
+          if (error) throw error;
+        }
+        summaryParts.push(`${readIds.length} notifications (${unreadCount} skipped unread notifications)`);
+      }
+
+      // 6. Leave Requests
+      if (cleanupItems.leaves && allowedStaffIds.length > 0) {
+        let leaveQuery = supabase.from('leave_requests')
+          .delete()
+          .gte('date', firstDay)
+          .lte('date', lastDay)
+          .in('staff_id', allowedStaffIds);
+        const { data, error } = await leaveQuery.select();
+        if (error) throw error;
+        summaryParts.push(`${data?.length || 0} leave requests`);
+      }
+
+      // 7. Salary Confirmations (unlocked only)
+      if (cleanupItems.salaries && allowedStaffIds.length > 0) {
+        let salQuery = supabase.from('salary_confirmations')
+          .select('id, is_locked')
+          .eq('month', cleanupMonth)
+          .in('staff_id', allowedStaffIds);
+        const { data: salData } = await salQuery;
+        
+        const unlockedSalaries = salData?.filter(s => !s.is_locked).map(s => s.id) || [];
+        const lockedCount = salData?.filter(s => s.is_locked).length || 0;
+
+        if (unlockedSalaries.length > 0) {
+          const { error } = await supabase.from('salary_confirmations')
+            .delete()
+            .in('id', unlockedSalaries);
+          if (error) throw error;
+        }
+        summaryParts.push(`${unlockedSalaries.length} salary confirmations (${lockedCount} skipped locked confirmations)`);
+      }
+
+      setCleanupResult(`Deleted:\n` + summaryParts.map(s => `• ${s}`).join('\n'));
+      setCleanupConfirmText('');
+      showToast("Selected data deleted successfully ✓");
+      fetchData();
+    } catch (err: any) {
+      console.error(err);
+      alert("Failed to delete selected data: " + err.message);
+    } finally {
+      setIsCleaningUp(false);
+    }
+  };
+
   const handleExecuteDangerAction = async () => {
     if (confirmText !== 'DELETE' || !dangerAction) return;
     setExecutingDanger(true);
@@ -282,10 +480,13 @@ export default function SettingsPage() {
 
         for (const table of tables) {
           try {
-            const { error: delErr } = await supabase
-              .from(table)
-              .delete()
-              .neq('id', '00000000-0000-0000-0000-000000000000');
+            let query = supabase.from(table).delete();
+            if (table === 'late_fines') {
+              query = query.eq('confirmed', false);
+            } else {
+              query = query.neq('id', '00000000-0000-0000-0000-000000000000');
+            }
+            const { error: delErr } = await query;
             if (delErr) {
               console.error(`Error clearing ${table}:`, delErr);
               const errMsg = String(delErr.message || '').toLowerCase();
@@ -308,50 +509,83 @@ export default function SettingsPage() {
 
         if (fetchErr) throw fetchErr;
 
-        const inactiveIds = inactiveStaff?.map(s => s.id) || [];
+        let inactiveIds = inactiveStaff?.map(s => s.id) || [];
 
         if (inactiveIds.length > 0) {
-          const tables = [
-            'attendance',
-            'late_fines',
-            'break_logs',
-            'wall_events',
-            'notifications',
-            'leave_requests',
-            'salary_confirmations',
-            'salary_payments',
-            'performance_scores',
-            'staff_fine_exemptions',
-            'attendance_adjustments',
-            'special_fines'
-          ];
+          // Find staff with confirmed late fines
+          const { data: confLate } = await supabase
+            .from('late_fines')
+            .select('staff_id')
+            .in('staff_id', inactiveIds)
+            .eq('confirmed', true);
+          
+          // Find staff with confirmed special fines
+          const { data: confSpec } = await supabase
+            .from('special_fines')
+            .select('staff_id')
+            .in('staff_id', inactiveIds)
+            .eq('confirmed', true);
 
-          for (const table of tables) {
-            try {
-              const { error: delErr } = await supabase
-                .from(table)
-                .delete()
-                .in('staff_id', inactiveIds);
-              if (delErr) {
-                console.error(`Error deleting from ${table} for inactive staff:`, delErr);
-                const errMsg = String(delErr.message || '').toLowerCase();
-                if (!errMsg.includes('does not exist') && !errMsg.includes('not find')) {
-                  throw delErr;
+          // Find staff with locked salary confirmations
+          const { data: lockedSal } = await supabase
+            .from('salary_confirmations')
+            .select('staff_id')
+            .in('staff_id', inactiveIds)
+            .eq('is_locked', true);
+
+          const skipIds = new Set([
+            ...(confLate?.map(x => x.staff_id) || []),
+            ...(confSpec?.map(x => x.staff_id) || []),
+            ...(lockedSal?.map(x => x.staff_id) || [])
+          ]);
+
+          inactiveIds = inactiveIds.filter(id => !skipIds.has(id));
+
+          if (inactiveIds.length > 0) {
+            const tables = [
+              'attendance',
+              'late_fines',
+              'break_logs',
+              'wall_events',
+              'notifications',
+              'leave_requests',
+              'salary_confirmations',
+              'salary_payments',
+              'performance_scores',
+              'staff_fine_exemptions',
+              'attendance_adjustments',
+              'special_fines'
+            ];
+
+            for (const table of tables) {
+              try {
+                const { error: delErr } = await supabase
+                  .from(table)
+                  .delete()
+                  .in('staff_id', inactiveIds);
+                if (delErr) {
+                  console.error(`Error deleting from ${table} for inactive staff:`, delErr);
+                  const errMsg = String(delErr.message || '').toLowerCase();
+                  if (!errMsg.includes('does not exist') && !errMsg.includes('not find')) {
+                    throw delErr;
+                  }
                 }
+              } catch (err: any) {
+                console.error(`Exception deleting from ${table}:`, err);
               }
-            } catch (err: any) {
-              console.error(`Exception deleting from ${table}:`, err);
             }
+
+            // Finally delete the staff records
+            const { error: staffDelErr } = await supabase
+              .from('staff')
+              .delete()
+              .in('id', inactiveIds);
+
+            if (staffDelErr) throw staffDelErr;
+            showToast(`Deleted ${inactiveIds.length} inactive staff profiles.`);
+          } else {
+            showToast('All inactive staff profiles have confirmed fines or locked salary history and were skipped.');
           }
-
-          // Finally delete the staff records
-          const { error: staffDelErr } = await supabase
-            .from('staff')
-            .delete()
-            .in('id', inactiveIds);
-
-          if (staffDelErr) throw staffDelErr;
-          showToast(`Deleted ${inactiveIds.length} inactive staff profiles.`);
         } else {
           showToast('No inactive staff profiles found.');
         }
@@ -997,6 +1231,162 @@ export default function SettingsPage() {
                 >
                   {recalculating ? 'Recalculating...' : 'Recalculate All Fines for Current Month'}
                 </button>
+              </div>
+            </div>
+          )}
+
+          {/* Data Management Section (Admin Only) */}
+          {user?.role === 'admin' && (
+            <div className="space-y-4 pt-6">
+              <div>
+                <h2 className="text-[#1A1A1A] font-extrabold text-sm tracking-wider">
+                  DATA MANAGEMENT
+                </h2>
+                <div className="text-black/10 text-xs font-semibold select-none leading-none my-1">
+                  ─────────────────────────────
+                </div>
+              </div>
+
+              <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-5 shadow-sm space-y-4">
+                <p className="text-[var(--danger)] text-xs font-extrabold flex items-center gap-1">
+                  ⚠️ This permanently deletes data. This cannot be undone.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-[#555555] mb-1">Select Month</label>
+                    <select
+                      value={cleanupMonth}
+                      onChange={(e) => setCleanupMonth(e.target.value)}
+                      className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-xs focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
+                    >
+                      {generateMonthsList().map((m) => (
+                        <option key={m.value} value={m.value}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-[#555555] mb-1">Select Branch</label>
+                    <select
+                      value={cleanupBranch}
+                      onChange={(e) => setCleanupBranch(e.target.value as any)}
+                      className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-xs focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
+                    >
+                      <option value="all">All Branches</option>
+                      <option value="daily">Nearbi Daily</option>
+                      <option value="hypermarket">Nearbi Hypermarket</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="space-y-2 pt-2">
+                  <p className="text-xs font-bold text-[#555555]">Select what to delete:</p>
+                  
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                    <label className="flex items-center space-x-2.5 p-2 bg-[#F8F8F8] rounded-lg cursor-pointer hover:bg-[#F0F0F0]">
+                      <input
+                        type="checkbox"
+                        checked={cleanupItems.attendance}
+                        onChange={(e) => setCleanupItems(prev => ({ ...prev, attendance: e.target.checked }))}
+                        className="rounded text-[#1A1A1A] focus:ring-[#1A1A1A]"
+                      />
+                      <span className="font-semibold text-[#1A1A1A]">Attendance records</span>
+                    </label>
+
+                    <label className="flex items-center space-x-2.5 p-2 bg-[#F8F8F8] rounded-lg cursor-pointer hover:bg-[#F0F0F0]">
+                      <input
+                        type="checkbox"
+                        checked={cleanupItems.fines}
+                        onChange={(e) => setCleanupItems(prev => ({ ...prev, fines: e.target.checked }))}
+                        className="rounded text-[#1A1A1A] focus:ring-[#1A1A1A]"
+                      />
+                      <span className="font-semibold text-[#1A1A1A]">Late fines (unconfirmed only)</span>
+                    </label>
+
+                    <label className="flex items-center space-x-2.5 p-2 bg-[#F8F8F8] rounded-lg cursor-pointer hover:bg-[#F0F0F0]">
+                      <input
+                        type="checkbox"
+                        checked={cleanupItems.breaks}
+                        onChange={(e) => setCleanupItems(prev => ({ ...prev, breaks: e.target.checked }))}
+                        className="rounded text-[#1A1A1A] focus:ring-[#1A1A1A]"
+                      />
+                      <span className="font-semibold text-[#1A1A1A]">Break logs</span>
+                    </label>
+
+                    <label className="flex items-center space-x-2.5 p-2 bg-[#F8F8F8] rounded-lg cursor-pointer hover:bg-[#F0F0F0]">
+                      <input
+                        type="checkbox"
+                        checked={cleanupItems.wall}
+                        onChange={(e) => setCleanupItems(prev => ({ ...prev, wall: e.target.checked }))}
+                        className="rounded text-[#1A1A1A] focus:ring-[#1A1A1A]"
+                      />
+                      <span className="font-semibold text-[#1A1A1A]">Wall events</span>
+                    </label>
+
+                    <label className="flex items-center space-x-2.5 p-2 bg-[#F8F8F8] rounded-lg cursor-pointer hover:bg-[#F0F0F0]">
+                      <input
+                        type="checkbox"
+                        checked={cleanupItems.notifications}
+                        onChange={(e) => setCleanupItems(prev => ({ ...prev, notifications: e.target.checked }))}
+                        className="rounded text-[#1A1A1A] focus:ring-[#1A1A1A]"
+                      />
+                      <span className="font-semibold text-[#1A1A1A]">Notifications (read only)</span>
+                    </label>
+
+                    <label className="flex items-center space-x-2.5 p-2 bg-[#F8F8F8] rounded-lg cursor-pointer hover:bg-[#F0F0F0]">
+                      <input
+                        type="checkbox"
+                        checked={cleanupItems.leaves}
+                        onChange={(e) => setCleanupItems(prev => ({ ...prev, leaves: e.target.checked }))}
+                        className="rounded text-[#1A1A1A] focus:ring-[#1A1A1A]"
+                      />
+                      <span className="font-semibold text-[#1A1A1A]">Leave requests</span>
+                    </label>
+
+                    <label className="flex items-center space-x-2.5 p-2 bg-[#F8F8F8] rounded-lg cursor-pointer hover:bg-[#F0F0F0]">
+                      <input
+                        type="checkbox"
+                        checked={cleanupItems.salaries}
+                        onChange={(e) => setCleanupItems(prev => ({ ...prev, salaries: e.target.checked }))}
+                        className="rounded text-[#1A1A1A] focus:ring-[#1A1A1A]"
+                      />
+                      <span className="font-semibold text-[#1A1A1A]">Salary confirmations (unlocked only)</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-[#E8E8E8] space-y-3">
+                  <div>
+                    <label className="block text-xs font-bold text-[#555555] mb-1">
+                      Type <span className="text-[var(--danger)]">DELETE</span> to confirm
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Type DELETE"
+                      value={cleanupConfirmText}
+                      onChange={(e) => setCleanupConfirmText(e.target.value)}
+                      className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-xs focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleDataCleanup}
+                    disabled={isCleaningUp || cleanupConfirmText !== 'DELETE' || !Object.values(cleanupItems).some(Boolean)}
+                    className="w-full min-h-[44px] bg-[var(--danger)] hover:bg-[#A93226] text-white font-bold text-xs rounded-xl active:scale-95 transition-all shadow-sm disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    {isCleaningUp ? 'Deleting Selected Data...' : 'Delete Selected Data'}
+                  </button>
+                </div>
+
+                {cleanupResult && (
+                  <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3 text-xs font-mono text-[#555555] whitespace-pre-line leading-relaxed">
+                    {cleanupResult}
+                  </div>
+                )}
               </div>
             </div>
           )}

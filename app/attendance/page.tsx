@@ -37,7 +37,7 @@ interface AttendanceRecord {
   date: string;
   check_in_time: string | null;
   check_out_time: string | null;
-  status: 'present' | 'late' | 'absent';
+  status: string;
   color_code: 'green' | 'yellow' | 'orange' | 'red';
   minutes_late: number;
   ot_minutes: number;
@@ -47,6 +47,7 @@ interface AttendanceRecord {
   check_in_photo: string | null;
   check_out_photo: string | null;
   marked_by: string;
+  day_type?: string;
 }
 
 interface LateFine {
@@ -302,7 +303,7 @@ export default function AttendancePage() {
         }
       });
 
-    if (item.record) {
+    if (item.record && item.record.check_in_time) {
       setEditCheckInTime(item.record.check_in_time || '');
       setEditCheckOutTime(item.record.check_out_time || '');
       setEditStatus(item.record.status || 'present');
@@ -319,9 +320,143 @@ export default function AttendancePage() {
       setEditFineAmount(0);
       setEditFineWaived(false);
       setOtApproved(false);
-      setIsAddingRecord(true);
+      setIsAddingRecord(false); // Default to false to show the day type selector first
     }
     setDetailModalOpen(true);
+  };
+
+  const handleMarkDayType = async (type: 'absent' | 'weekly_off' | 'holiday') => {
+    if (!detailRecord) return;
+    const staffId = detailRecord.id;
+    const date = detailRecord.record?.date || addDate || new Date().toISOString().split('T')[0];
+    const monthKey = date.substring(0, 7);
+    
+    // Check if salary is locked for this month
+    const { data: lockRecord } = await supabase
+      .from('salary_confirmations')
+      .select('is_locked, created_at')
+      .eq('staff_id', staffId)
+      .eq('month', monthKey)
+      .eq('is_locked', true)
+      .maybeSingle();
+
+    if (lockRecord) {
+      if (user?.role !== 'admin') {
+        alert(`Attendance for ${monthKey} is locked. Salary was confirmed on ${new Date(lockRecord.created_at).toLocaleDateString()}. Contact admin to unlock.`);
+        return;
+      }
+      const reason = window.prompt(`Attendance for ${monthKey} is locked. To unlock and edit this record, please enter a reason:`);
+      if (!reason || !reason.trim()) return;
+      
+      const { error: unlockErr } = await supabase
+        .from('salary_confirmations')
+        .update({ is_locked: false })
+        .eq('staff_id', staffId)
+        .eq('month', monthKey);
+        
+      if (unlockErr) {
+        alert("Failed to unlock: " + unlockErr.message);
+        return;
+      }
+      
+      await createAuditLog({
+        action: 'unlock_month',
+        table_name: 'salary_confirmations',
+        record_id: staffId + '_' + monthKey,
+        new_value: { is_locked: false },
+        performed_by: user.email,
+        performed_by_role: user.role,
+        reason: reason.trim()
+      });
+    }
+
+    if (type === 'weekly_off') {
+      // 1. Quota Check
+      const firstDay = `${monthKey}-01`;
+      const [yr, mo] = monthKey.split('-').map(Number);
+      const lastDay = new Date(yr, mo, 0).toISOString().split('T')[0];
+
+      const { data: attRecords } = await supabase
+        .from('attendance')
+        .select('check_in_time, day_type')
+        .eq('staff_id', staffId)
+        .gte('date', firstDay)
+        .lte('date', lastDay);
+
+      // Present/late days count (actual worked days)
+      const daysWorked = attRecords?.filter(
+        r => r.check_in_time !== null && r.day_type !== 'weekly_off' && r.day_type !== 'holiday'
+      ).length || 0;
+
+      // Count used weekly offs already this month (excluding this date to avoid self-counting)
+      const usedWeeklyOffs = attRecords?.filter(
+        r => r.day_type === 'weekly_off'
+      ).length || 0;
+
+      const offDaysPerMonth = detailRecord.off_days_per_month || 4;
+      const divisor = offDaysPerMonth === 2 ? 12 : 6;
+      const earned = offDaysPerMonth === 0 ? 0 : Math.min(Math.floor(daysWorked / divisor), offDaysPerMonth);
+
+      if (usedWeeklyOffs >= earned) {
+        alert(`${detailRecord.name} has used all ${earned} earned weekly offs this month. Mark as Absent or Leave instead.`);
+        return;
+      }
+    }
+
+    try {
+      const attendanceData = {
+        staff_id: staffId,
+        date: date,
+        day_type: type,
+        status: type === 'weekly_off' ? 'weekly_off' : type === 'holiday' ? 'holiday' : 'absent',
+        check_in_time: null,
+        check_out_time: null,
+        marked_by: user?.email || 'admin',
+        color_code: 'green' as any, // default
+        minutes_late: 0,
+        actual_hours_worked: 0,
+        ot_minutes: 0,
+        early_leave_minutes: 0,
+        ot_approved: false
+      };
+
+      const { error: attErr } = await supabase
+        .from('attendance')
+        .upsert(attendanceData, { onConflict: 'staff_id,date' });
+
+      if (attErr) throw attErr;
+
+      // Insert wall event for Weekly Off
+      if (type === 'weekly_off') {
+        await supabase.from('wall_events').insert({
+          event_type: 'attendance_edited',
+          staff_id: staffId,
+          staff_name: detailRecord.name,
+          branch_id: detailRecord.branch_id,
+          description: `${detailRecord.name} marked Weekly Off on ${date}`
+        });
+      }
+
+      // Audit Log
+      await createAuditLog({
+        action: 'attendance_edited',
+        table_name: 'attendance',
+        record_id: staffId + '_' + date,
+        old_value: detailRecord.record || null,
+        new_value: attendanceData,
+        performed_by: user?.email || 'admin',
+        performed_by_role: user?.role || 'admin',
+        reason: `Marked as ${type}`
+      });
+
+      showToast(`Marked as ${type === 'weekly_off' ? 'Weekly Off' : type === 'holiday' ? 'Holiday' : 'Absent'} ✓`);
+      setDetailModalOpen(false);
+      setDetailRecord(null);
+      fetchData();
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to save day type: ' + err.message);
+    }
   };
 
   const handleOpenEdit = (item: any) => {
@@ -1796,6 +1931,51 @@ export default function AttendancePage() {
 
     const record = item.record;
     if (record) {
+      if (record.day_type === 'weekly_off') {
+        return {
+          type: 'weekly_off',
+          cardClass: 'bg-[#EFF6FF] border-2 border-[#60A5FA] text-[#1D4ED8]',
+          avatarClass: 'bg-[#60A5FA] text-white',
+          nameClass: 'text-[#1D4ED8]',
+          statusClass: 'text-[#3B82F6] flex items-center gap-1 font-bold',
+          statusContent: (
+            <span className="flex items-center gap-0.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#60A5FA]" />
+              Weekly Off
+            </span>
+          )
+        };
+      }
+      if (record.day_type === 'holiday') {
+        return {
+          type: 'holiday',
+          cardClass: 'bg-[#F5F3FF] border-2 border-[#A78BFA] text-[#6D28D9]',
+          avatarClass: 'bg-[#A78BFA] text-white',
+          nameClass: 'text-[#6D28D9]',
+          statusClass: 'text-[#8B5CF6] flex items-center gap-1 font-bold',
+          statusContent: (
+            <span className="flex items-center gap-0.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#A78BFA]" />
+              Holiday
+            </span>
+          )
+        };
+      }
+      if (record.day_type === 'leave') {
+        return {
+          type: 'leave',
+          cardClass: 'bg-[#FFF7ED] border-2 border-[#FB923C] text-[#C2410C]',
+          avatarClass: 'bg-[#FB923C] text-white',
+          nameClass: 'text-[#C2410C]',
+          statusClass: 'text-[#EA580C] flex items-center gap-1 font-bold',
+          statusContent: (
+            <span className="flex items-center gap-0.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#FB923C]" />
+              Leave
+            </span>
+          )
+        };
+      }
       if (record.status === 'late') {
         if (record.color_code === 'yellow') {
           return {
@@ -1841,6 +2021,48 @@ export default function AttendancePage() {
             )
           };
         }
+      } else if (record.status === 'weekly_off') {
+        return {
+          type: 'weekly_off',
+          cardClass: 'bg-[#EFF6FF] border-2 border-[#60A5FA] text-[#1D4ED8]',
+          avatarClass: 'bg-[#60A5FA] text-white',
+          nameClass: 'text-[#1D4ED8]',
+          statusClass: 'text-[#3B82F6] flex items-center gap-1 font-bold',
+          statusContent: (
+            <span className="flex items-center gap-0.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#60A5FA]" />
+              Weekly Off
+            </span>
+          )
+        };
+      } else if (record.status === 'holiday') {
+        return {
+          type: 'holiday',
+          cardClass: 'bg-[#F5F3FF] border-2 border-[#A78BFA] text-[#6D28D9]',
+          avatarClass: 'bg-[#A78BFA] text-white',
+          nameClass: 'text-[#6D28D9]',
+          statusClass: 'text-[#8B5CF6] flex items-center gap-1 font-bold',
+          statusContent: (
+            <span className="flex items-center gap-0.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#A78BFA]" />
+              Holiday
+            </span>
+          )
+        };
+      } else if (record.status === 'absent') {
+        return {
+          type: 'absent',
+          cardClass: 'bg-[#F5F5F5] border-[1.5px] border-dashed border-[#6B7280]/30 opacity-75 text-[#6B7280]',
+          avatarClass: 'bg-[#E0E0E0] text-[#6B7280] opacity-50',
+          nameClass: 'text-[#6B7280]',
+          statusClass: 'text-[#6B7280] flex items-center gap-1 font-bold',
+          statusContent: (
+            <span className="flex items-center gap-0.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#6B7280]" />
+              Absent
+            </span>
+          )
+        };
       } else {
         // Present on time
         return {
@@ -1885,13 +2107,13 @@ export default function AttendancePage() {
     // Absent
     return {
       type: 'absent',
-      cardClass: 'bg-[#F5F5F5] border-[1.5px] border-dashed border-[#CCCCCC] opacity-75 text-[#AAAAAA]',
-      avatarClass: 'bg-[#E0E0E0] text-[#999999] opacity-50',
-      nameClass: 'text-[#AAAAAA]',
-      statusClass: 'text-[#C0392B] flex items-center gap-1',
+      cardClass: 'bg-[#F5F5F5] border-[1.5px] border-dashed border-[#6B7280]/30 opacity-75 text-[#6B7280]',
+      avatarClass: 'bg-[#E0E0E0] text-[#6B7280] opacity-50',
+      nameClass: 'text-[#6B7280]',
+      statusClass: 'text-[#6B7280] flex items-center gap-1 font-bold',
       statusContent: (
         <span className="flex items-center gap-0.5">
-          <span className="w-1.5 h-1.5 rounded-full bg-[#C0392B]" />
+          <span className="w-1.5 h-1.5 rounded-full bg-[#6B7280]" />
           Absent
         </span>
       )
@@ -1968,9 +2190,36 @@ export default function AttendancePage() {
   }, [combinedData, filteredData, branchFilter, userBranch]);
 
   const getStatusBadge = (record: AttendanceRecord | null) => {
+    if (record) {
+      if (record.day_type === 'weekly_off') {
+        return (
+          <span className="bg-blue-50 text-[#3B82F6] border border-[#60A5FA]/20 text-[10px] font-bold px-2.5 py-1.5 rounded-[20px] uppercase tracking-wider flex items-center space-x-1.5">
+            <CircleCheck size={14} strokeWidth={2} style={{ color: 'currentColor' }} />
+            <span>Weekly Off</span>
+          </span>
+        );
+      }
+      if (record.day_type === 'holiday') {
+        return (
+          <span className="bg-purple-50 text-[#8B5CF6] border border-[#A78BFA]/20 text-[10px] font-bold px-2.5 py-1.5 rounded-[20px] uppercase tracking-wider flex items-center space-x-1.5">
+            <CircleCheck size={14} strokeWidth={2} style={{ color: 'currentColor' }} />
+            <span>Holiday</span>
+          </span>
+        );
+      }
+      if (record.day_type === 'leave') {
+        return (
+          <span className="bg-orange-50 text-[#EA580C] border border-[#FB923C]/20 text-[10px] font-bold px-2.5 py-1.5 rounded-[20px] uppercase tracking-wider flex items-center space-x-1.5">
+            <CircleCheck size={14} strokeWidth={2} style={{ color: 'currentColor' }} />
+            <span>Leave</span>
+          </span>
+        );
+      }
+    }
+    
     if (!record || !record.check_in_time) {
       return (
-        <span className="bg-[var(--danger-bg)] text-[var(--danger)] border border-[var(--danger)]/20 text-[10px] font-bold px-2.5 py-1.5 rounded-[20px] uppercase tracking-wider flex items-center space-x-1.5">
+        <span className="bg-gray-100 text-[#6B7280] border border-gray-300 text-[10px] font-bold px-2.5 py-1.5 rounded-[20px] uppercase tracking-wider flex items-center space-x-1.5">
           <CircleX size={14} strokeWidth={2} style={{ color: 'currentColor' }} />
           <span>Absent</span>
         </span>
@@ -1993,7 +2242,11 @@ export default function AttendancePage() {
   };
 
   const getDotColor = (record: AttendanceRecord | null) => {
-    if (!record || !record.check_in_time) return 'bg-[#999999]';
+    if (!record) return 'bg-[#6B7280]';
+    if (record.day_type === 'weekly_off') return 'bg-[#60A5FA]';
+    if (record.day_type === 'holiday') return 'bg-[#A78BFA]';
+    if (record.day_type === 'leave') return 'bg-[#FB923C]';
+    if (!record.check_in_time) return 'bg-[#6B7280]';
     if (record.color_code === 'green') return 'bg-[#2D7A3A]';
     if (record.color_code === 'yellow') return 'bg-[#B8860B]';
     if (record.color_code === 'orange') return 'bg-[#FB923C]';
@@ -3027,20 +3280,42 @@ export default function AttendancePage() {
                 </div>
               )}
 
-              {!detailRecord.record && !isAddingRecord ? (
-                <div className="py-6 text-center">
-                  <AlertCircle className="mx-auto text-[#999999] mb-2" size={36} strokeWidth={1.5} />
-                  <p className="text-sm font-bold text-[#1A1A1A]">No attendance record found</p>
-                  <p className="text-xs text-[var(--text-muted)] mt-1">
-                    No check-in has been registered for this staff member today.
-                  </p>
+              {(!detailRecord.record || !detailRecord.record.check_in_time) && !isAddingRecord ? (
+                <div className="space-y-4">
+                  <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-4 space-y-3">
+                    <p className="text-xs font-bold text-[#1A1A1A]">Mark this day as:</p>
+                    <div className="space-y-2">
+                      <button
+                        type="button"
+                        onClick={() => handleMarkDayType('absent')}
+                        className="w-full text-left p-3 rounded-lg border border-[#E8E8E8] hover:border-[#1A1A1A] bg-white text-xs font-bold text-[#1A1A1A] flex items-center justify-between active:scale-[0.99] transition-all"
+                      >
+                        <span>Absent (salary deducted)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleMarkDayType('weekly_off')}
+                        className="w-full text-left p-3 rounded-lg border border-[#E8E8E8] hover:border-[#1A1A1A] bg-white text-xs font-bold text-[#1A1A1A] flex items-center justify-between active:scale-[0.99] transition-all"
+                      >
+                        <span>Weekly Off (no deduction — uses quota)</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleMarkDayType('holiday')}
+                        className="w-full text-left p-3 rounded-lg border border-[#E8E8E8] hover:border-[#1A1A1A] bg-white text-xs font-bold text-[#1A1A1A] flex items-center justify-between active:scale-[0.99] transition-all"
+                      >
+                        <span>Holiday (no deduction)</span>
+                      </button>
+                    </div>
+                  </div>
+                  
                   {(user?.role === 'admin' || user?.role === 'ops_manager') && (
                     <button
                       type="button"
                       onClick={() => setIsAddingRecord(true)}
-                      className="mt-4 bg-[#1A1A1A] hover:bg-[#333333] text-white text-xs font-bold px-4 py-2.5 rounded-[12px] active:scale-95 transition-all shadow cursor-pointer"
+                      className="w-full bg-[#1A1A1A] hover:bg-[#333333] text-white text-xs font-bold py-3 rounded-xl transition-all shadow-sm flex items-center justify-center space-x-1.5 cursor-pointer active:scale-95"
                     >
-                      Add Manual Record
+                      <span>Add Manual Check-In/Out Record</span>
                     </button>
                   )}
                 </div>

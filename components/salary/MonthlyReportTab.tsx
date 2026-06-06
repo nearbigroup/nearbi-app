@@ -6,6 +6,7 @@ import { Staff, SalaryConfirmation, SalaryPayment } from './types';
 import { formatCurrency, getPastMonths, formatMonthDisplay } from './utils';
 import { Download } from 'lucide-react';
 import { calculateSalary } from '@/lib/salary';
+import * as XLSX from 'xlsx';
 
 export default function MonthlyReportTab({
   selectedMonth: propMonth,
@@ -37,6 +38,7 @@ export default function MonthlyReportTab({
   const [attendanceRecords, setAttendanceRecords] = useState<any[]>([]);
   const [lateFines, setLateFines] = useState<any[]>([]);
   const [specialFines, setSpecialFines] = useState<any[]>([]);
+  const [leaveRequests, setLeaveRequests] = useState<any[]>([]);
 
   const fetchData = async () => {
     try {
@@ -69,17 +71,7 @@ export default function MonthlyReportTab({
 
       const { data: attData, error: attError } = await supabase
         .from('attendance')
-        .select(`
-          staff_id,
-          date,
-          check_in_time,
-          status,
-          ot_minutes,
-          ot_approved,
-          early_in_minutes,
-          early_in_approved,
-          early_leave_minutes
-        `)
+        .select('*')
         .gte('date', firstDay)
         .lte('date', lastDay);
       if (attError) throw attError;
@@ -96,12 +88,22 @@ export default function MonthlyReportTab({
         .eq('month', selectedMonth);
       if (sfError) throw sfError;
 
+      // Fetch approved leaves
+      const { data: leaveData, error: leaveError } = await supabase
+        .from('leave_requests')
+        .select('*')
+        .eq('status', 'approved')
+        .gte('date', firstDay)
+        .lte('date', lastDay);
+      if (leaveError) throw leaveError;
+
       if (staffData) setStaffList(staffData as unknown as Staff[]);
       if (confData) setConfirmations(confData);
       if (payData) setPayments(payData);
       setAttendanceRecords(attData || []);
       setLateFines(lfData || []);
       setSpecialFines(sfData || []);
+      setLeaveRequests(leaveData || []);
 
     } catch (err) {
       console.error(err);
@@ -119,6 +121,7 @@ export default function MonthlyReportTab({
     const [yearStr, monthStr] = selectedMonth.split('-');
     const year = parseInt(yearStr);
     const monthNum = parseInt(monthStr);
+    const daysInMonth = new Date(year, monthNum, 0).getDate();
 
     const baseRecords = confirmations.length > 0
       ? confirmations
@@ -144,12 +147,45 @@ export default function MonthlyReportTab({
       if (!s) return null;
 
       const staffAtt = attendanceRecords.filter((r) => r.staff_id === s.id);
-      const extraLeaveDays = c.extra_leave_days || 0;
       
-      const daysActuallyWorked = Math.max(
-        0,
-        (staffAtt.filter((r) => r.check_in_time !== null).length || 0) - extraLeaveDays
-      );
+      // Real days worked (present/late, not weekly off or holiday)
+      const daysActuallyWorked = staffAtt.filter(
+        (r) => r.check_in_time !== null &&
+        r.day_type !== 'weekly_off' &&
+        r.day_type !== 'holiday'
+      ).length;
+
+      // Count genuine absent days and approved leave days
+      const staffLeaves = leaveRequests.filter(l => l.staff_id === s.id && l.status === 'approved');
+      let genuineAbsentDays = 0;
+
+      for (let d = 1; d <= daysInMonth; d++) {
+        const dateStr = `${selectedMonth}-${String(d).padStart(2, '0')}`;
+        const att = staffAtt.find(r => r.date === dateStr);
+        const hasLeave = staffLeaves.some(l => l.date === dateStr);
+
+        if (att) {
+          if (att.status === 'absent' && att.day_type !== 'weekly_off' && att.day_type !== 'holiday' && !hasLeave) {
+            genuineAbsentDays++;
+          }
+        } else {
+          if (!hasLeave) {
+            genuineAbsentDays++;
+          }
+        }
+      }
+
+      // Quota logic
+      const offDaysPerMonth = s.off_days_per_month as 0 | 2 | 4;
+      const divisor = offDaysPerMonth === 2 ? 12 : 6;
+      const earnedQuota = offDaysPerMonth === 0 ? 0 : Math.min(Math.floor(daysActuallyWorked / divisor), offDaysPerMonth);
+
+      const weeklyOffCount = staffAtt.filter(r => r.day_type === 'weekly_off').length;
+      const manualExtraLeaves = c.extra_leave_days || 0;
+      const totalLeaves = staffLeaves.length + weeklyOffCount + manualExtraLeaves;
+      const leavesBeyondQuota = Math.max(0, totalLeaves - earnedQuota);
+
+      const missingDays = genuineAbsentDays + leavesBeyondQuota;
 
       const approvedOTMinutes = staffAtt
         .filter((r) => r.ot_approved === true)
@@ -186,7 +222,7 @@ export default function MonthlyReportTab({
       const breakdown = calculateSalary(
         {
           monthlySalary: c.base_salary,
-          offDaysPerMonth: s.off_days_per_month as 0 | 2 | 4,
+          offDaysPerMonth,
           shiftHours,
           year,
           month: monthNum,
@@ -198,6 +234,7 @@ export default function MonthlyReportTab({
           approvedOTMinutes,
           approvedEarlyInMinutes,
           earlyLeaveMinutes,
+          missingDays,
         }
       );
 
@@ -216,7 +253,7 @@ export default function MonthlyReportTab({
         net_salary: Math.max(0, breakdown.netSalary),
       };
     }).filter(Boolean) as SalaryConfirmation[];
-  }, [confirmations, staffList, attendanceRecords, lateFines, specialFines, selectedMonth]);
+  }, [confirmations, staffList, attendanceRecords, lateFines, specialFines, leaveRequests, selectedMonth]);
 
   const getBranchStats = (branchId: string) => {
     const branchStaff = staffList.filter((s) => s.branch_id === branchId);
@@ -245,6 +282,311 @@ export default function MonthlyReportTab({
   const totalOT = reportRecords.reduce((sum, c) => sum + c.ot_pay, 0);
   const totalDed = reportRecords.reduce((sum, c) => sum + c.leave_deduction, 0);
   const netPayroll = reportRecords.reduce((sum, c) => sum + c.net_salary, 0);
+
+  // --- Detailed Export (Daily In/Out) ---
+  const handleDetailedExport = () => {
+    const [yearStr, monthStr] = selectedMonth.split('-');
+    const year = parseInt(yearStr);
+    const monthNum = parseInt(monthStr);
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const daysInMonth = new Date(year, monthNum, 0).getDate();
+
+    const format24h = (timeStr: string | null) => {
+      if (!timeStr) return '';
+      const parts = timeStr.split(':');
+      if (parts.length >= 2) {
+        return `${parts[0].padStart(2, '0')}:${parts[1].padStart(2, '0')}`;
+      }
+      return timeStr;
+    };
+
+    // Build rows: one row per staff per day of the month
+    const rows: Record<string, any>[] = [];
+    const sortedStaff = [...staffList].sort((a, b) => a.name.localeCompare(b.name));
+    let slNo = 0;
+
+    for (const s of sortedStaff) {
+      const staffAtt = attendanceRecords.filter((r) => r.staff_id === s.id);
+      const staffLeaves = leaveRequests.filter(
+        (l: any) => l.staff_id === s.id && l.status === 'approved'
+      );
+
+      for (let d = 1; d <= daysInMonth; d++) {
+        slNo++;
+        const dateStr = `${selectedMonth}-${String(d).padStart(2, '0')}`;
+        const att = staffAtt.find((r: any) => r.date === dateStr);
+        const hasLeave = staffLeaves.find((l: any) => l.date === dateStr);
+
+        const dateObj = new Date(dateStr + 'T00:00:00');
+        const dayName = dayNames[dateObj.getDay()];
+
+        let checkIn = '';
+        let checkOut = '';
+        let actualHours = 0;
+        const shiftHours = s.shift?.hours || 9;
+        let status = 'absent';
+        let colorCode = '';
+        let lateMins = 0;
+        let otMins = 0;
+        let otApproved = 'No';
+        let earlyInMins = 0;
+        let earlyInApproved = 'No';
+        let earlyLeaveMins = 0;
+        let markedBy = '';
+        let dayType = 'present';
+        let shortAttendance = 'No';
+
+        if (att) {
+          checkIn = format24h(att.check_in_time);
+          checkOut = format24h(att.check_out_time);
+          
+          if (att.actual_hours_worked) {
+            actualHours = Math.round(Number(att.actual_hours_worked) * 100) / 100;
+          } else if (checkIn && checkOut) {
+            const [ih, im] = checkIn.split(':').map(Number);
+            const [oh, om] = checkOut.split(':').map(Number);
+            const mins = (oh * 60 + om) - (ih * 60 + im);
+            actualHours = mins > 0 ? Math.round((mins / 60) * 100) / 100 : 0;
+          }
+          status = att.status || '';
+          colorCode = att.color_code || '';
+          lateMins = att.minutes_late || 0;
+          otMins = att.ot_minutes || 0;
+          otApproved = att.ot_approved ? 'Yes' : 'No';
+          earlyInMins = att.early_in_minutes || 0;
+          earlyInApproved = att.early_in_approved ? 'Yes' : 'No';
+          earlyLeaveMins = att.early_leave_minutes || 0;
+          markedBy = att.marked_by || '';
+          dayType = att.day_type || 'present';
+          shortAttendance = att.short_attendance ? 'Yes' : 'No';
+        } else if (hasLeave) {
+          markedBy = 'system';
+          dayType = hasLeave.is_weekly_off ? 'weekly_off' : 'leave';
+        }
+
+        // Find late fine for this date
+        const lf = lateFines.find(
+          (f: any) => f.staff_id === s.id && f.date === dateStr
+        );
+        const lateFineAmt = lf ? Number(lf.fine_amount) : 0;
+        let fineStatus = '';
+        if (lf) {
+          if (lf.waived) fineStatus = 'Waived';
+          else if (lf.confirmed) fineStatus = 'Confirmed';
+          else fineStatus = 'Pending';
+        }
+
+        rows.push({
+          'SL.NO': slNo,
+          'NAME': s.name,
+          'STAFF ID': s.id,
+          'DATE': dateStr,
+          'DAY': dayName,
+          'CHECK IN': checkIn,
+          'CHECK OUT': checkOut,
+          'ACTUAL HOURS': actualHours,
+          'SHIFT HOURS': shiftHours,
+          'STATUS': status,
+          'COLOR CODE': colorCode,
+          'LATE MINS': lateMins,
+          'OT MINS': otMins,
+          'OT APPROVED': otApproved,
+          'EARLY IN MINS': earlyInMins,
+          'EARLY IN APPROVED': earlyInApproved,
+          'EARLY LEAVE MINS': earlyLeaveMins,
+          'MARKED BY': markedBy,
+          'DAY TYPE': dayType,
+          'SHORT ATTENDANCE': shortAttendance,
+          'LATE FINE': lateFineAmt,
+          'FINE STATUS': fineStatus,
+        });
+      }
+    }
+
+    // Totals row
+    const totals: Record<string, any> = {
+      'SL.NO': '',
+      'NAME': 'TOTAL',
+      'STAFF ID': '',
+      'DATE': '',
+      'DAY': '',
+      'CHECK IN': '',
+      'CHECK OUT': '',
+      'ACTUAL HOURS': rows.reduce((sum, r) => sum + (r['ACTUAL HOURS'] || 0), 0),
+      'SHIFT HOURS': rows.reduce((sum, r) => sum + (r['SHIFT HOURS'] || 0), 0),
+      'STATUS': '',
+      'COLOR CODE': '',
+      'LATE MINS': rows.reduce((sum, r) => sum + (r['LATE MINS'] || 0), 0),
+      'OT MINS': rows.reduce((sum, r) => sum + (r['OT MINS'] || 0), 0),
+      'OT APPROVED': '',
+      'EARLY IN MINS': rows.reduce((sum, r) => sum + (r['EARLY IN MINS'] || 0), 0),
+      'EARLY IN APPROVED': '',
+      'EARLY LEAVE MINS': rows.reduce((sum, r) => sum + (r['EARLY LEAVE MINS'] || 0), 0),
+      'MARKED BY': '',
+      'DAY TYPE': '',
+      'SHORT ATTENDANCE': '',
+      'LATE FINE': rows.reduce((sum, r) => sum + (r['LATE FINE'] || 0), 0),
+      'FINE STATUS': '',
+    };
+    // Round decimal totals
+    totals['ACTUAL HOURS'] = Math.round(totals['ACTUAL HOURS'] * 100) / 100;
+    rows.push(totals);
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    // Bold the totals row
+    const totalRowIdx = rows.length; // 1-indexed in sheet (header=1, data starts at 2)
+    const cols = Object.keys(totals);
+    cols.forEach((_, ci) => {
+      const cellRef = XLSX.utils.encode_cell({ r: totalRowIdx, c: ci });
+      if (ws[cellRef]) {
+        ws[cellRef].s = { font: { bold: true } };
+      }
+    });
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Detailed Attendance');
+    XLSX.writeFile(wb, `Nearbi_Detailed_Attendance_${monthStr}_${yearStr}.xlsx`);
+  };
+
+  // --- Monthly Summary Export ---
+  const handleMonthlySummaryExport = () => {
+    const [yearStr, monthStr] = selectedMonth.split('-');
+    const year = parseInt(yearStr);
+    const monthNum = parseInt(monthStr);
+    const daysInMonth = new Date(year, monthNum, 0).getDate();
+
+    const rows: Record<string, any>[] = [];
+    const sortedStaff = [...staffList].filter(s => s.active).sort((a, b) => a.name.localeCompare(b.name));
+    let slNo = 0;
+
+    for (const s of sortedStaff) {
+      slNo++;
+      const staffAtt = attendanceRecords.filter((r) => r.staff_id === s.id);
+      const staffLeaves = leaveRequests.filter((l: any) => l.staff_id === s.id && l.status === 'approved');
+
+      // Use same logic as reportRecords useMemo
+      const daysActuallyWorked = staffAtt.filter(
+        (r) => r.check_in_time !== null && r.day_type !== 'weekly_off' && r.day_type !== 'holiday'
+      ).length;
+
+      let genuineAbsentDays = 0;
+      for (let d = 1; d <= daysInMonth; d++) {
+        const dateStr = `${selectedMonth}-${String(d).padStart(2, '0')}`;
+        const att = staffAtt.find((r: any) => r.date === dateStr);
+        const hasLeave = staffLeaves.some((l: any) => l.date === dateStr);
+        if (att) {
+          if (att.status === 'absent' && att.day_type !== 'weekly_off' && att.day_type !== 'holiday' && !hasLeave) {
+            genuineAbsentDays++;
+          }
+        } else {
+          if (!hasLeave) genuineAbsentDays++;
+        }
+      }
+
+      const offDaysPerMonth = s.off_days_per_month as 0 | 2 | 4;
+      const divisor = offDaysPerMonth === 2 ? 12 : 6;
+      const earnedQuota = offDaysPerMonth === 0 ? 0 : Math.min(Math.floor(daysActuallyWorked / divisor), offDaysPerMonth);
+
+      // Find confirmation for this staff if exists
+      const conf = confirmations.find(c => c.staff_id === s.id);
+      const weeklyOffCount = staffAtt.filter(r => r.day_type === 'weekly_off').length;
+      const manualExtraLeaves = conf?.extra_leave_days || 0;
+      const totalLeaves = staffLeaves.length + weeklyOffCount + manualExtraLeaves;
+      const leavesBeyondQuota = Math.max(0, totalLeaves - earnedQuota);
+      const missingDays = genuineAbsentDays + leavesBeyondQuota;
+
+      const approvedOTMinutes = staffAtt
+        .filter((r: any) => r.ot_approved === true)
+        .reduce((sum: number, r: any) => sum + (r.ot_minutes || 0), 0) || 0;
+
+      const approvedEarlyInMinutes = staffAtt
+        .filter((r: any) => r.early_in_approved === true)
+        .reduce((sum: number, r: any) => sum + (r.early_in_minutes || 0), 0) || 0;
+
+      const earlyLeaveMinutes = staffAtt.reduce(
+        (sum: number, r: any) => sum + (r.early_leave_minutes || 0), 0
+      ) || 0;
+
+      const staffLateFines = lateFines.filter(
+        (lf: any) => lf.staff_id === s.id && lf.confirmed
+      );
+      const totalLateFinesAmt = staffLateFines.reduce((sum: number, lf: any) => {
+        const amt = Number(lf.fine_amount);
+        const waivedAmt = Number(lf.waived_amount || 0);
+        return sum + (lf.waived ? 0 : Math.max(0, amt - waivedAmt));
+      }, 0);
+
+      const staffSpecialFinesArr = specialFines.filter(
+        (sf: any) => sf.staff_id === s.id && sf.confirmed
+      );
+      const totalSpecialFinesAmt = staffSpecialFinesArr.reduce((sum: number, sf: any) => {
+        const amt = Number(sf.edited_amount ?? sf.amount);
+        const waivedAmt = Number(sf.waived_amount || 0);
+        return sum + (sf.waived ? 0 : Math.max(0, amt - waivedAmt));
+      }, 0);
+
+      const shiftHours = s.shift?.hours || 9;
+      const baseSalary = conf?.base_salary ?? s.monthly_salary;
+
+      const breakdown = calculateSalary(
+        { monthlySalary: baseSalary, offDaysPerMonth, shiftHours, year, month: monthNum },
+        { daysActuallyWorked, confirmedLateFines: totalLateFinesAmt, confirmedSpecialFines: totalSpecialFinesAmt, approvedOTMinutes, approvedEarlyInMinutes, earlyLeaveMinutes, missingDays }
+      );
+
+      const branchName = s.branch?.name || s.branch_id || '';
+
+      rows.push({
+        'SL.NO': slNo,
+        'NAME': s.name,
+        'BRANCH': branchName,
+        'DEPARTMENT': s.department || '',
+        'MONTHLY SALARY': baseSalary,
+        'CALENDAR DAYS': breakdown.calendarDays,
+        'REQUIRED DAYS': breakdown.requiredWorkingDays,
+        'DAYS WORKED': daysActuallyWorked,
+        'EXTRA DAYS': breakdown.extraDaysWorked,
+        'MISSING DAYS': breakdown.missingDays,
+        'PAID DAYS': breakdown.paidDays,
+        'DAILY RATE': breakdown.dailyRate,
+        'GROSS PAY': breakdown.grossPay,
+        'OT MINUTES': approvedOTMinutes,
+        'OT PAY': breakdown.otPay,
+        'EARLY IN PAY': breakdown.earlyInPay,
+        'EARLY LEAVE DEDUCTION': breakdown.earlyLeaveDeduction,
+        'LATE FINES': totalLateFinesAmt,
+        'SPECIAL FINES': totalSpecialFinesAmt,
+        'NET SALARY': Math.max(0, breakdown.netSalary),
+      });
+    }
+
+    // Totals row
+    const numericKeys = [
+      'MONTHLY SALARY', 'CALENDAR DAYS', 'REQUIRED DAYS', 'DAYS WORKED',
+      'EXTRA DAYS', 'MISSING DAYS', 'PAID DAYS', 'DAILY RATE', 'GROSS PAY',
+      'OT MINUTES', 'OT PAY', 'EARLY IN PAY', 'EARLY LEAVE DEDUCTION',
+      'LATE FINES', 'SPECIAL FINES', 'NET SALARY',
+    ];
+    const totals: Record<string, any> = { 'SL.NO': '', 'NAME': 'TOTAL', 'BRANCH': '', 'DEPARTMENT': '' };
+    numericKeys.forEach((k) => {
+      const sum = rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
+      totals[k] = Math.round(sum * 100) / 100;
+    });
+    rows.push(totals);
+
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const totalRowIdx = rows.length;
+    const cols = Object.keys(totals);
+    cols.forEach((_, ci) => {
+      const cellRef = XLSX.utils.encode_cell({ r: totalRowIdx, c: ci });
+      if (ws[cellRef]) {
+        ws[cellRef].s = { font: { bold: true } };
+      }
+    });
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Monthly Summary');
+    XLSX.writeFile(wb, `Nearbi_Monthly_Summary_${monthStr}_${yearStr}.xlsx`);
+  };
 
   if (loading) {
     return (
@@ -277,6 +619,22 @@ export default function MonthlyReportTab({
             </select>
           </div>
         )}
+
+        <button
+          onClick={handleDetailedExport}
+          className="w-full min-h-[44px] bg-emerald-600 text-white font-bold text-xs rounded-xl flex items-center justify-center space-x-1.5 active:scale-95 transition-all shadow hover:bg-emerald-700 cursor-pointer"
+        >
+          <Download size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
+          <span>Detailed Export (Daily In/Out)</span>
+        </button>
+
+        <button
+          onClick={handleMonthlySummaryExport}
+          className="w-full min-h-[44px] bg-blue-600 text-white font-bold text-xs rounded-xl flex items-center justify-center space-x-1.5 active:scale-95 transition-all shadow hover:bg-blue-700 cursor-pointer"
+        >
+          <Download size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
+          <span>Monthly Summary</span>
+        </button>
 
         <button
           onClick={() => window.print()}

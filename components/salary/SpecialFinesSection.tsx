@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
+import { createAuditLog } from '@/lib/audit';
 import { useAuth } from '@/lib/auth-context';
 import { Edit2, Check, X, ShieldAlert, Trash2 } from 'lucide-react';
 import { formatCurrency } from './utils';
@@ -130,6 +131,17 @@ export default function SpecialFinesSection({
 
       if (error) throw error;
 
+      await createAuditLog({
+        action: 'waive_special_fine',
+        table_name: 'special_fines',
+        record_id: selectedFineForWaive.id,
+        old_value: { amount: selectedFineForWaive.originalAmount, waived: false },
+        new_value: { waived_amount: inputVal, waived: isFullyWaived },
+        performed_by: user?.email || 'System',
+        performed_by_role: 'admin',
+        reason: `Waived ₹${inputVal} from special fine of ₹${selectedFineForWaive.originalAmount} (${selectedFineForWaive.reason || 'no reason'})`
+      });
+
       setWaiveModalOpen(false);
       setSelectedFineForWaive(null);
       await fetchFines();
@@ -155,6 +167,17 @@ export default function SpecialFinesSection({
         .eq('id', id);
 
       if (error) throw error;
+
+      await createAuditLog({
+        action: 'confirm_special_fine',
+        table_name: 'special_fines',
+        record_id: id,
+        new_value: { confirmed: true },
+        performed_by: user?.email || 'System',
+        performed_by_role: 'admin',
+        reason: 'Confirmed special fine'
+      });
+
       await fetchFines();
       onFinesChanged();
     } catch (e) {
@@ -179,6 +202,16 @@ export default function SpecialFinesSection({
         .in('id', pendingIds);
 
       if (error) throw error;
+
+      await createAuditLog({
+        action: 'bulk_confirm_special_fines',
+        table_name: 'special_fines',
+        new_value: { confirmed: true, count: pendingIds.length },
+        performed_by: user?.email || 'System',
+        performed_by_role: 'admin',
+        reason: `Bulk confirmed ${pendingIds.length} special fines`
+      });
+
       await fetchFines();
       onFinesChanged();
     } catch (e) {

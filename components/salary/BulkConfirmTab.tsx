@@ -21,6 +21,7 @@ export default function BulkConfirmTab({ selectedMonth }: { selectedMonth?: stri
   const [lateFines, setLateFines] = useState<any[]>([]);
   const [specialFines, setSpecialFines] = useState<any[]>([]);
   const [attendanceRecords, setAttendanceRecords] = useState<any[]>([]);
+  const [leaveRequests, setLeaveRequests] = useState<any[]>([]);
   
   const [salaryData, setSalaryData] = useState<Record<string, any>>({});
   const [extraLeaves, setExtraLeaves] = useState<Record<string, number>>({});
@@ -61,13 +62,25 @@ export default function BulkConfirmTab({ selectedMonth }: { selectedMonth?: stri
           ot_approved,
           early_in_minutes,
           early_in_approved,
-          early_leave_minutes
+          early_leave_minutes,
+          day_type
         `)
         .gte('date', startDate)
         .lte('date', endDate);
 
       if (attError) throw attError;
       setAttendanceRecords(attData || []);
+
+      // Fetch approved leaves
+      const { data: leaveData, error: leaveError } = await supabase
+        .from('leave_requests')
+        .select('*')
+        .eq('status', 'approved')
+        .gte('date', startDate)
+        .lte('date', endDate);
+
+      if (leaveError) throw leaveError;
+      setLeaveRequests(leaveData || []);
 
       // Aggregate OT minutes
       const otMap: Record<string, number> = {};
@@ -132,17 +145,51 @@ export default function BulkConfirmTab({ selectedMonth }: { selectedMonth?: stri
       
       const year = parseInt(month.split('-')[0]);
       const monthNum = parseInt(month.split('-')[1]);
+      const daysInMonth = new Date(year, monthNum, 0).getDate();
       
       // Filter attendance records for current staff
       const staffAtt = attendanceRecords.filter((r) => r.staff_id === s.id);
       
-      const extraLeaveDays = extraLeaves[s.id] || 0;
-      
-      // Real days worked
-      const daysActuallyWorked = Math.max(
-        0,
-        (staffAtt.filter((r) => r.check_in_time !== null).length || 0) - extraLeaveDays
-      );
+      // Real days worked (present/late, not weekly off or holiday)
+      const daysActuallyWorked = staffAtt.filter(
+        (r) => r.check_in_time !== null &&
+        r.day_type !== 'weekly_off' &&
+        r.day_type !== 'holiday'
+      ).length;
+
+      // Count genuine absent days and approved leave days
+      const staffLeaves = leaveRequests.filter(l => l.staff_id === s.id && l.status === 'approved');
+      let genuineAbsentDays = 0;
+
+      for (let d = 1; d <= daysInMonth; d++) {
+        const dateStr = `${month}-${String(d).padStart(2, '0')}`;
+        const att = staffAtt.find(r => r.date === dateStr);
+        const hasLeave = staffLeaves.some(l => l.date === dateStr);
+
+        if (att) {
+          // If record exists, is it status absent, and not weekly off, not holiday, and no approved leave?
+          if (att.status === 'absent' && att.day_type !== 'weekly_off' && att.day_type !== 'holiday' && !hasLeave) {
+            genuineAbsentDays++;
+          }
+        } else {
+          // If no record exists, and no approved leave exists, it is absent
+          if (!hasLeave) {
+            genuineAbsentDays++;
+          }
+        }
+      }
+
+      // Quota logic
+      const offDaysPerMonth = s.off_days_per_month as 0 | 2 | 4;
+      const divisor = offDaysPerMonth === 2 ? 12 : 6;
+      const earnedQuota = offDaysPerMonth === 0 ? 0 : Math.min(Math.floor(daysActuallyWorked / divisor), offDaysPerMonth);
+
+      const weeklyOffCount = staffAtt.filter(r => r.day_type === 'weekly_off').length;
+      const manualExtraLeaves = extraLeaves[s.id] || 0;
+      const totalLeaves = staffLeaves.length + weeklyOffCount + manualExtraLeaves;
+      const leavesBeyondQuota = Math.max(0, totalLeaves - earnedQuota);
+
+      const missingDays = genuineAbsentDays + leavesBeyondQuota;
 
       // Approved OT minutes only
       const approvedOTMinutes = staffAtt
@@ -184,7 +231,7 @@ export default function BulkConfirmTab({ selectedMonth }: { selectedMonth?: stri
       const breakdown = calculateSalary(
         {
           monthlySalary: s.monthly_salary,
-          offDaysPerMonth: s.off_days_per_month as 0 | 2 | 4,
+          offDaysPerMonth,
           shiftHours,
           year,
           month: monthNum,
@@ -196,6 +243,7 @@ export default function BulkConfirmTab({ selectedMonth }: { selectedMonth?: stri
           approvedOTMinutes,
           approvedEarlyInMinutes,
           earlyLeaveMinutes,
+          missingDays,
         }
       );
 
@@ -216,7 +264,7 @@ export default function BulkConfirmTab({ selectedMonth }: { selectedMonth?: stri
     });
     
     setSalaryData(newSalaryData);
-  }, [staffList, attendanceRecords, extraLeaves, lateFines, specialFines]);
+  }, [staffList, attendanceRecords, extraLeaves, lateFines, specialFines, leaveRequests]);
 
   const handleUpdateLeave = (staffId: string, delta: number) => {
     setExtraLeaves((prev) => {

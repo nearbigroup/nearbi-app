@@ -19,6 +19,8 @@ interface AttendanceRecord {
   actual_hours_worked?: number | null;
   ot_minutes: number;
   ot_approved: boolean;
+  day_type?: string;
+  early_leave_minutes?: number;
 }
 
 interface FineItem {
@@ -384,7 +386,16 @@ export default function StaffAttendancePage() {
             if (isFuture) {
               cellClass += "bg-gray-50/50 border-gray-100 text-gray-300 opacity-50 cursor-not-allowed";
             } else if (record) {
-              if (record.status === 'present' || record.status === 'late') {
+              if (record.day_type === 'weekly_off') {
+                cellClass += "bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100";
+                dotColor = "bg-[#60A5FA]";
+              } else if (record.day_type === 'holiday') {
+                cellClass += "bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100";
+                dotColor = "bg-[#A78BFA]";
+              } else if (record.day_type === 'leave') {
+                cellClass += "bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100";
+                dotColor = "bg-[#FB923C]";
+              } else if (record.status === 'present' || record.status === 'late') {
                 if (record.color_code === 'green') {
                   cellClass += "bg-[var(--success-bg)] border-[var(--success)]/20 text-[var(--success)] hover:bg-[var(--success-bg)]/80";
                   dotColor = "bg-[var(--success)]";
@@ -399,8 +410,8 @@ export default function StaffAttendancePage() {
                   dotColor = "bg-red-500";
                 }
               } else {
-                cellClass += "bg-gray-100 border-gray-200 text-gray-500 hover:bg-gray-200";
-                dotColor = "bg-gray-600";
+                cellClass += "bg-gray-100 border-gray-200 text-[#6B7280] hover:bg-gray-200";
+                dotColor = "bg-[#6B7280]";
               }
             } else {
               const isLeaveApproved = leaves.some(l => l.date === dateStr);

@@ -45,6 +45,7 @@ export default function LeavePage() {
     staffName: string;
     earnedQuota: number;
     deductionAmount: number;
+    approveAsWeeklyOff?: boolean;
   } | null>(null);
 
   const fetchRequests = async () => {
@@ -176,7 +177,15 @@ export default function LeavePage() {
       .gte('date', firstDay)
       .lte('date', lastDay);
 
-    const usedCount = usedLeaves || 0;
+    const { count: usedWeeklyOffs } = await supabase
+      .from('attendance')
+      .select('*', { count: 'exact', head: true })
+      .eq('staff_id', staffId)
+      .eq('day_type', 'weekly_off')
+      .gte('date', firstDay)
+      .lte('date', lastDay);
+
+    const usedCount = (usedLeaves || 0) + (usedWeeklyOffs || 0);
     const remaining = earnedQuota - usedCount;
 
     return { earnedQuota, usedLeaves: usedCount, remaining };
@@ -196,6 +205,12 @@ export default function LeavePage() {
       }
     }
 
+    // Check if they want to approve as Weekly Off
+    let approveAsWeeklyOff = false;
+    if (req.staff?.off_days_per_month > 0) {
+      approveAsWeeklyOff = confirm(`Do you want to approve this leave request as a WEEKLY OFF day?\n\n(Click Cancel to approve as a standard Leave request)`);
+    }
+
     try {
       setLoading(true);
       const { earnedQuota, remaining } = await checkLeaveQuota(req.staff_id);
@@ -203,7 +218,7 @@ export default function LeavePage() {
 
       if (remaining > 0) {
         // Approve within quota
-        await executeApproval(req.id, true);
+        await executeApproval(req.id, true, approveAsWeeklyOff);
       } else {
         // Show warning modal
         const monthlySalary = req.staff.monthly_salary || 0;
@@ -214,6 +229,7 @@ export default function LeavePage() {
           staffName: req.staff.name,
           earnedQuota,
           deductionAmount: dailyRate,
+          approveAsWeeklyOff,
         });
       }
     } catch (err) {
@@ -223,29 +239,54 @@ export default function LeavePage() {
     }
   };
 
-  const executeApproval = async (id: string, isWithinQuota: boolean) => {
-    const approverName = isWithinQuota ? 'system_auto' : (user?.email || 'Admin');
+  const executeApproval = async (id: string, isWithinQuota: boolean, isWeeklyOff: boolean = false) => {
+    const req = requests.find((r) => r.id === id);
+    const isWeekend = req?.requires_ops_approval;
+    const approverName = (isWithinQuota && !isWeekend) ? 'system_auto' : (user?.name || user?.email || 'Admin');
     try {
       const { error } = await supabase
         .from('leave_requests')
         .update({
           status: 'approved',
           approved_by: approverName,
-          is_quota_leave: isWithinQuota,
+          is_quota_leave: isWithinQuota && !isWeekend,
+          is_weekly_off: isWeeklyOff,
         })
         .eq('id', id);
 
       if (error) throw error;
 
-      const req = requests.find((r) => r.id === id);
       if (req) {
+        // Upsert attendance record for the leave day to keep attendance register in sync
+        const { error: attErr } = await supabase
+          .from('attendance')
+          .upsert({
+            staff_id: req.staff_id,
+            date: req.date,
+            day_type: isWeeklyOff ? 'weekly_off' : 'leave',
+            status: isWeeklyOff ? 'weekly_off' : 'absent', // absent status is standard for leave days
+            check_in_time: null,
+            check_out_time: null,
+            marked_by: approverName,
+            color_code: 'green',
+            minutes_late: 0,
+            actual_hours_worked: 0,
+            ot_minutes: 0,
+            early_leave_minutes: 0,
+            ot_approved: false
+          }, { onConflict: 'staff_id,date' });
+
+        if (attErr) {
+          console.error('Failed to upsert attendance record for approved leave:', attErr);
+        }
+
         try {
           await supabase.from('wall_events').insert({
             event_type: 'leave_approved',
             staff_id: req.staff_id,
             staff_name: req.staff?.name,
             branch_id: req.staff?.branch_id,
-            description: `${req.staff?.name}'s leave request for ${new Date(req.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} was approved by ${approverName}`
+            description: `${req.staff?.name}'s leave request for ${new Date(req.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} was approved by ${approverName}${isWeeklyOff ? ' as Weekly Off' : ''}`
           });
         } catch (e) {
           console.error('Silent insert wall event failed:', e);
@@ -255,7 +296,7 @@ export default function LeavePage() {
           action: 'approve_leave',
           table_name: 'leave_requests',
           record_id: id,
-          new_value: { status: 'approved', approved_by: approverName, is_quota_leave: isWithinQuota },
+          new_value: { status: 'approved', approved_by: approverName, is_quota_leave: isWithinQuota, is_weekly_off: isWeeklyOff },
           performed_by: user?.email || 'admin',
           performed_by_role: user?.role || 'admin',
           reason: isWithinQuota ? 'Approved (within quota)' : 'Approved (salary deduction impact)'
@@ -541,7 +582,7 @@ export default function LeavePage() {
               </button>
               <button
                 type="button"
-                onClick={() => executeApproval(quotaWarning.id, false)}
+                onClick={() => executeApproval(quotaWarning.id, false, quotaWarning.approveAsWeeklyOff)}
                 className="flex-1 min-h-[40px] bg-[#1A1A1A] text-white hover:bg-[#333333] font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
               >
                 Approve with Deduction

@@ -344,6 +344,15 @@ export default function KioskPage() {
         const shiftMins = sh * 60 + sm;
         const currentMins = now.getHours() * 60 + now.getMinutes();
 
+        // Block check-in if more than 2 hours past shift start
+        const blockAfterMins = shiftMins + 120; // shift start + 2 hours
+        if (currentMins > blockAfterMins) {
+          setErrorMsg(`Check-in blocked. Current time is more than 2 hours past shift start (${shiftStartStr}).`);
+          setKioskState('ERROR');
+          setTimeout(() => resetKiosk(), 3000);
+          return;
+        }
+
         // Calculate early in
         let earlyInMinutes = 0;
         if (currentMins < shiftMins) {
@@ -610,6 +619,18 @@ export default function KioskPage() {
           return;
         }
 
+        // Block checkout at the same time as check-in
+        const nowForCheckout = new Date();
+        const actualOutPreCheck =
+          String(nowForCheckout.getHours()).padStart(2, '0') + ':' +
+          String(nowForCheckout.getMinutes()).padStart(2, '0');
+        if (actualOutPreCheck === record.check_in_time) {
+          setErrorMsg('Cannot check out at the same time as check-in');
+          setKioskState('ERROR');
+          setTimeout(() => resetKiosk(), 2500);
+          return;
+        }
+
         let photoUrl: string | null = null;
         let photoUploadFailed = false;
         try {
@@ -661,6 +682,23 @@ export default function KioskPage() {
           early_leave_minutes: earlyLeaveMins,
           check_out_photo: photoUrl || null,
         };
+
+        // Warn on short attendance (< 30 minutes)
+        const [ciH, ciM] = record.check_in_time.split(':').map(Number);
+        const ciTotalMins = ciH * 60 + ciM;
+        const coTotalMins = actualOutH * 60 + actualOutM;
+        const durationMins = coTotalMins - ciTotalMins;
+
+        if (durationMins > 0 && durationMins < 30) {
+          const proceed = window.confirm(
+            `Short attendance warning: Only ${durationMins} minutes worked. Continue checkout?`
+          );
+          if (!proceed) {
+            resetKiosk();
+            return;
+          }
+          checkoutRecord.short_attendance = true;
+        }
 
         if (otMins > 0) {
           checkoutRecord.ot_approved = false; // pending approval
