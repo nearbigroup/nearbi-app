@@ -311,6 +311,9 @@ export default function StaffLeavePage() {
       {/* Apply Leave Section */}
       <div className="bg-white border border-[#E8E8E8] rounded-[16px] p-4 shadow-sm space-y-4">
         <h3 className="text-xs font-extrabold text-[#1A1A1A] uppercase tracking-wider border-b border-[var(--border)] pb-2">Apply for Leave</h3>
+        <p className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200/50 p-2.5 rounded-lg font-bold leading-normal">
+          ⚠️ Note: All approved leaves are unpaid. Taking a leave day will result in a 1-day salary deduction.
+        </p>
         
         <form onSubmit={handleSubmit} className="space-y-3.5">
           {error && (
@@ -439,15 +442,9 @@ export default function StaffLeavePage() {
                 {/* Quota Impact Notes */}
                 {l.status === 'approved' && (
                   <div className="mt-0.5 text-[9.5px] font-bold">
-                    {l.is_quota_leave ? (
-                      <span className="text-emerald-700 bg-emerald-50 border border-emerald-100/50 px-2 py-0.5 rounded">
-                        Within quota — no deduction
-                      </span>
-                    ) : (
-                      <span className="text-amber-700 bg-amber-50 border border-amber-100/50 px-2 py-0.5 rounded">
-                        Approved — 1 day salary impact
-                      </span>
-                    )}
+                    <span className="text-amber-700 bg-amber-50 border border-amber-100/50 px-2 py-0.5 rounded">
+                      Unpaid leave — 1 day salary deduction
+                    </span>
                   </div>
                 )}
                 

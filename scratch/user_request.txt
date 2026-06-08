@@ -1,0 +1,154 @@
+<USER_REQUEST>
+Fix and add these features to the Nearbi Staff app.
+Do not break any existing features.
+
+## SQL TO RUN IN SUPABASE FIRST
+
+ALTER TABLE attendance
+  ADD COLUMN IF NOT EXISTS
+  day_type text DEFAULT 'present';
+
+ALTER TABLE leave_requests
+  ADD COLUMN IF NOT EXISTS
+  is_weekly_off boolean DEFAULT false;
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  action text NOT NULL,
+  table_name text NOT NULL,
+  record_id text,
+  old_value jsonb,
+  new_value jsonb,
+  performed_by text NOT NULL,
+  performed_by_role text NOT NULL,
+  reason text,
+  created_at timestamptz DEFAULT now()
+);
+ALTER TABLE audit_logs DISABLE ROW LEVEL SECURITY;
+
+ALTER TABLE staff
+  ADD COLUMN IF NOT EXISTS
+  advance_balance numeric DEFAULT 0;
+
+## FIX 1 — LIVE SALARY MID-MONTH CALCULATION
+
+This is the most critical fix.
+Currently showing massive wrong deductions
+mid-month because it compares days worked
+against full month required days.
+
+In app/salary/page.tsx live salary card:
+
+CORRECT FORMULA — days worked so far only:
+
+const today = new Date()
+const isCurrentMonth =
+  selectedYear === today.getFullYear() &&
+  selectedMonth === today.getMonth() + 1
+
+const isPastMonth =
+  selectedYear < today.getFullYear() ||
+  (selectedYear === today.getFullYear() &&
+   selectedMonth < today.getMonth() + 1)
+
+If isCurrentMonth (mid-month live view):
+  // Only count days worked so far
+  // NO future day deductions
+  // NO comparison against full month required days
+
+  const daysWorkedSoFar = attRecords.filter(
+    r => r.check_in_time !== null
+  ).length
+
+  // Off bonus earned so far
+  let offBonusEarned = 0
+  if (offDaysPerMonth === 4) {
+    offBonusEarned = Math.min(
+      Math.floor(daysWorkedSoFar / 6), 4
+    )
+  } else if (offDaysPerMonth === 2) {
+    offBonusEarned = Math.min(
+      Math.floor(daysWorkedSoFar / 12), 2
+    )
+  }
+
+  // Paid days = worked + bonus earned so far
+  const paidDaysSoFar = daysWorkedSoFar + offBonusEarned
+
+  // Daily rate uses actual calendar days
+  const calendarDays = getDaysIn
+<truncated 11510 bytes>
+ a holiday
+These are genuine absent days → deduct
+
+Days with approved leave within quota:
+→ no deduction (quota days)
+
+Days with approved leave beyond quota:
+→ deduct daily rate
+
+## IMPORTANT RULES
+
+1. Live salary = days worked so far ONLY
+   No future day deductions ever
+   Off bonus = floor(worked/6) capped at offDays
+
+2. Past month = full month calculation
+   Use complete attendance data
+
+3. Weekly off = neutral in salary
+   Neither worked nor missing
+   Uses quota system
+
+4. Data cleanup:
+   Never delete confirmed fines
+   Never delete locked salary confirmations
+   Always require typing DELETE to confirm
+
+5. Monthly summary Excel:
+   Column order matches manual sheet EXACTLY
+   Times in 24hr format
+   Decimal hours (1.5 not 1h 30min)
+   Totals row at bottom bold
+
+6. Detailed Excel:
+   One row per staff per day
+   Times in 24hr format
+   All fields from attendance table
+
+7. Kiosk validations:
+   Block same-time checkout
+   Warn on under 30 min attendance
+   Block check-in after shift + 2hrs
+
+8. Audit logs on all admin actions:
+   Attendance edits
+   Salary confirmations
+   OT approvals
+   Fine waivers
+
+9. Advance shown in staff portal
+   Display only — no request feature
+
+10. Monthly report shows pending state
+    clearly before confirmation
+
+11. Files to modify:
+    app/salary/page.tsx
+    app/attendance/page.tsx
+    app/settings/page.tsx
+    app/kiosk/page.tsx
+    app/my/page.tsx
+    app/leave/page.tsx
+    components/salary/BulkConfirmTab.tsx
+    lib/salary.ts
+
+12. Run npm run build after all changes
+    Fix all TypeScript errors. some ar alredy done remainign do it fastly and psuh all code to repo
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-06-06T18:31:03+05:30.
+</ADDITIONAL_METADATA>
+<USER_SETTINGS_CHANGE>
+The user changed setting `Model Selection` from None to Claude Opus 4.6 (Thinking). No need to comment on this change if the user doesn't ask about it. If reporting what model you are, please use a human readable name instead of the exact string.
+</USER_SETTINGS_CHANGE>

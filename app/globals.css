@@ -217,3 +217,60 @@ button:active, a:active {
   border-radius: 50%;
   pointer-events: none;
 }
+
+/* Page Transitions & Animations */
+.page-fade-enter {
+  opacity: 0;
+  transform: translateY(10px);
+}
+.page-fade-enter-active {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1), transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Slide Up Animation for Bottom Sheets */
+@keyframes slideUp {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+.animate-slide-up {
+  animation: slideUp 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Scale effect for buttons and cards */
+.active-scale {
+  transition: transform 0.1s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.active-scale:active {
+  transform: scale(0.97);
+}
+
+/* Success overlay check bounce animation */
+@keyframes checkBounce {
+  0% { transform: scale(0.3); opacity: 0; }
+  50% { transform: scale(1.05); }
+  70% { transform: scale(0.9); }
+  100% { transform: scale(1); opacity: 1; }
+}
+.animate-check-bounce {
+  animation: checkBounce 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Card entrance staggered classes */
+.card-entry {
+  opacity: 0;
+  transform: translateY(16px);
+  animation: cardEnter 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+@keyframes cardEnter {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+

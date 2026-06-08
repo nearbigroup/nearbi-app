@@ -21,6 +21,62 @@ try {
 }
 
 const sql = `
+ALTER TABLE attendance
+  ADD COLUMN IF NOT EXISTS
+  day_type text DEFAULT 'present';
+
+ALTER TABLE attendance
+  ADD COLUMN IF NOT EXISTS
+  short_attendance boolean DEFAULT false;
+
+ALTER TABLE attendance
+  ADD COLUMN IF NOT EXISTS
+  early_leave_minutes integer DEFAULT 0;
+
+ALTER TABLE leave_requests
+  ADD COLUMN IF NOT EXISTS
+  is_weekly_off boolean DEFAULT false;
+
+ALTER TABLE leave_requests
+  ADD COLUMN IF NOT EXISTS
+  requires_ops_approval boolean DEFAULT false;
+
+ALTER TABLE leave_requests
+  ADD COLUMN IF NOT EXISTS
+  day_of_week text;
+
+ALTER TABLE late_fines
+  ADD COLUMN IF NOT EXISTS
+  waived_amount numeric DEFAULT 0;
+
+ALTER TABLE late_fines
+  ADD COLUMN IF NOT EXISTS
+  waived_reason text;
+
+ALTER TABLE special_fines
+  ADD COLUMN IF NOT EXISTS
+  waived_amount numeric DEFAULT 0;
+
+ALTER TABLE special_fines
+  ADD COLUMN IF NOT EXISTS
+  waived_reason text;
+
+ALTER TABLE staff
+  ADD COLUMN IF NOT EXISTS
+  advance_balance numeric DEFAULT 0;
+
+ALTER TABLE staff
+  ADD COLUMN IF NOT EXISTS
+  profile_pending boolean DEFAULT true;
+
+ALTER TABLE staff_accounts
+  ADD COLUMN IF NOT EXISTS
+  profile_completed boolean DEFAULT false;
+
+ALTER TABLE salary_confirmations
+  ADD COLUMN IF NOT EXISTS
+  is_locked boolean DEFAULT false;
+
 CREATE TABLE IF NOT EXISTS audit_logs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   action text NOT NULL,
@@ -34,35 +90,6 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   created_at timestamptz DEFAULT now()
 );
 ALTER TABLE audit_logs DISABLE ROW LEVEL SECURITY;
-
-CREATE TABLE IF NOT EXISTS staff_announcements (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  title text NOT NULL,
-  message text NOT NULL,
-  created_by text NOT NULL,
-  branch_id text REFERENCES branches(id),
-  target text DEFAULT 'all'
-    CHECK (target IN ('all','daily','hypermarket')),
-  created_at timestamptz DEFAULT now()
-);
-ALTER TABLE staff_announcements DISABLE ROW LEVEL SECURITY;
-
-ALTER TABLE salary_confirmations
-  ADD COLUMN IF NOT EXISTS is_locked boolean DEFAULT false;
-
-ALTER TABLE staff
-  ADD COLUMN IF NOT EXISTS advance_balance numeric DEFAULT 0;
-
-CREATE TABLE IF NOT EXISTS staff_accounts (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  staff_id uuid REFERENCES staff(id) ON DELETE CASCADE,
-  mobile_number text NOT NULL UNIQUE,
-  password text NOT NULL,
-  must_change_password boolean DEFAULT true,
-  last_login timestamptz,
-  created_at timestamptz DEFAULT now()
-);
-ALTER TABLE staff_accounts DISABLE ROW LEVEL SECURITY;
 `;
 
 async function run() {
@@ -71,7 +98,6 @@ async function run() {
     process.exit(1);
   }
 
-  // pg connection string parser handles encoded characters automatically
   const client = new Client({
     connectionString: databaseUrl,
     ssl: {

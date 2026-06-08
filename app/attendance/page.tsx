@@ -81,6 +81,47 @@ export default function AttendancePage() {
   const [viewMode, setViewMode] = useState<'list' | 'floor'>('list');
   const [breakLogs, setBreakLogs] = useState<any[]>([]);
 
+  const [selectedDate, setSelectedDate] = useState<string>(() => {
+    const today = new Date();
+    return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  });
+
+  const todayStr = useMemo(() => {
+    const today = new Date();
+    return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  }, []);
+
+  const getMinDateStr = () => {
+    const d = new Date();
+    const prevMonth = new Date(d.getFullYear(), d.getMonth() - 1, 1);
+    return `${prevMonth.getFullYear()}-${String(prevMonth.getMonth() + 1).padStart(2, '0')}-01`;
+  };
+
+  const handleDateChange = (newDateStr: string) => {
+    const minDateStr = getMinDateStr();
+    
+    if (newDateStr > todayStr) return;
+    if (newDateStr < minDateStr) {
+      alert("Attendance editing only available for current and previous month");
+      return;
+    }
+    setSelectedDate(newDateStr);
+  };
+
+  const handlePrevDay = () => {
+    const d = new Date(selectedDate + 'T00:00:00');
+    d.setDate(d.getDate() - 1);
+    const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    handleDateChange(dateStr);
+  };
+
+  const handleNextDay = () => {
+    const d = new Date(selectedDate + 'T00:00:00');
+    d.setDate(d.getDate() + 1);
+    const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    handleDateChange(dateStr);
+  };
+
   useEffect(() => {
     const saved = localStorage.getItem('nearbi_attendance_view');
     if (saved === 'list' || saved === 'floor') {
@@ -1689,8 +1730,7 @@ export default function AttendancePage() {
 
   const fetchData = async () => {
     try {
-      const today = new Date();
-      const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      const todayStr = selectedDate;
 
       // 1. Fetch staff
       try {
@@ -1836,7 +1876,7 @@ export default function AttendancePage() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [userBranch]);
+  }, [userBranch, selectedDate]);
 
   // Combine staff with today's metrics (FIX 2 - Step 3)
   const combinedData = staff.map((s) => {
@@ -2260,11 +2300,43 @@ export default function AttendancePage() {
 
   return (
     <div className="space-y-5">
+      {/* Date Navigation Picker */}
+      <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-3 shadow-sm flex items-center justify-between select-none">
+        <div className="flex items-center space-x-2 bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl px-3 py-1.5">
+          <button
+            onClick={handlePrevDay}
+            className="p-1 rounded hover:bg-[#EBEBEB] active:scale-95 transition-all text-[#1A1A1A] font-bold cursor-pointer"
+          >
+            ←
+          </button>
+          <input
+            type="date"
+            value={selectedDate}
+            min={getMinDateStr()}
+            max={todayStr}
+            onChange={(e) => handleDateChange(e.target.value)}
+            className="bg-transparent border-none p-0 focus:ring-0 text-xs font-bold text-[#1A1A1A] cursor-pointer text-center w-28 focus:outline-none focus:box-shadow-none"
+            style={{ padding: '0px', border: 'none', background: 'transparent', fontSize: '12px', minHeight: '0px', height: 'auto', width: '130px', boxShadow: 'none' }}
+          />
+          <button
+            onClick={handleNextDay}
+            disabled={selectedDate >= todayStr}
+            className="p-1 rounded hover:bg-[#EBEBEB] active:scale-95 transition-all text-[#1A1A1A] font-bold cursor-pointer disabled:opacity-30 disabled:pointer-events-none"
+          >
+            →
+          </button>
+        </div>
+        
+        <span className="text-xs font-extrabold text-white font-mono bg-[#1A1A1A] border border-white/10 px-3 py-1.5 rounded-xl uppercase tracking-wider">
+          {new Date(selectedDate + 'T00:00:00').toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' })}
+        </span>
+      </div>
+
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-[#1A1A1A] text-2xl font-bold">Attendance</h1>
-          <p className="text-[var(--text-muted)] text-xs font-semibold">Today's register</p>
+          <p className="text-[var(--text-muted)] text-xs font-semibold">Daily register</p>
         </div>
         <div className="flex items-center space-x-2">
           <div className="bg-[#F2F2F2] rounded-[10px] p-[3px] inline-flex items-center">
@@ -3820,6 +3892,23 @@ export default function AttendancePage() {
             </div>
           </div>
         </div>
+      )}
+      {/* Floating Action Button */}
+      {(user?.role === 'admin' || user?.role === 'ops_manager') && (
+        <button
+          onClick={() => {
+            setAddStaffId('');
+            setAddDate(selectedDate);
+            setAddCheckIn('');
+            setAddCheckOut('');
+            setAddStatus('present');
+            setAddReason('');
+            setAddModalOpen(true);
+          }}
+          className="fixed bottom-[90px] right-4 w-14 h-14 bg-black hover:bg-[#333] active:scale-95 text-white rounded-full flex items-center justify-center shadow-[0_4px_12px_rgba(0,0,0,0.2)] z-[10000] transition-all cursor-pointer"
+        >
+          <Plus size={24} strokeWidth={2.5} />
+        </button>
       )}
     </div>
   );

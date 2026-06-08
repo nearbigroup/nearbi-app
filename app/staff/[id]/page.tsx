@@ -29,7 +29,8 @@ import {
 } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import { formatTime12hr } from '@/lib/utils';
-import { calculateEarlyLeaveDeduction } from '@/lib/salary';
+import { calculateEarlyLeaveDeduction, calculateActualHours, calculateOTMinutes, calculateEarlyLeaveMinutes } from '@/lib/salary';
+import { createAuditLog } from '@/lib/audit';
 
 interface StaffMember {
   id: string;
@@ -96,11 +97,15 @@ interface SpecialFine {
 
 interface LeaveRequest {
   id: string;
+  staff_id?: string;
   date: string;
   reason: string;
   status: 'pending' | 'approved' | 'rejected';
   is_quota_leave: boolean;
   approved_by: string | null;
+  is_weekly_off?: boolean;
+  requires_ops_approval?: boolean;
+  day_of_week?: string;
 }
 
 interface BreakLog {
@@ -178,6 +183,20 @@ export default function StaffProfilePage() {
   const [selectedPhoto, setSelectedPhoto] = useState<{ url: string; title: string } | null>(null);
   const [toastMsg, setToastMsg] = useState('');
 
+  // Editing past attendance states
+  const [isEditingAttendance, setIsEditingAttendance] = useState(false);
+  const [editCheckIn, setEditCheckIn] = useState('');
+  const [editCheckOut, setEditCheckOut] = useState('');
+  const [editStatus, setEditStatus] = useState<'present' | 'late' | 'absent'>('present');
+  const [editDayType, setEditDayType] = useState('present');
+  const [isSavingAttendance, setIsSavingAttendance] = useState(false);
+
+  // Pending Actions states
+  const [pendingOT, setPendingOT] = useState<AttendanceRecord[]>([]);
+  const [pendingLateFines, setPendingLateFines] = useState<LateFine[]>([]);
+  const [pendingSpecialFines, setPendingSpecialFines] = useState<SpecialFine[]>([]);
+  const [pendingLeaves, setPendingLeaves] = useState<LeaveRequest[]>([]);
+
   // Toast Helper
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -245,6 +264,496 @@ export default function StaffProfilePage() {
       alert('Failed to save waiver: ' + err.message);
     } finally {
       setIsSavingWaive(false);
+    }
+  };
+
+  const fetchPendingActions = async () => {
+    try {
+      const { data: otData } = await supabase
+        .from('attendance')
+        .select('*')
+        .eq('staff_id', id)
+        .gt('ot_minutes', 0)
+        .eq('ot_approved', false);
+      setPendingOT(otData || []);
+
+      const { data: lfData } = await supabase
+        .from('late_fines')
+        .select('*')
+        .eq('staff_id', id)
+        .eq('confirmed', false)
+        .eq('waived', false);
+      setPendingLateFines(lfData || []);
+
+      const { data: sfData } = await supabase
+        .from('special_fines')
+        .select('*')
+        .eq('staff_id', id)
+        .eq('confirmed', false)
+        .eq('waived', false);
+      setPendingSpecialFines(sfData || []);
+
+      const { data: lvData } = await supabase
+        .from('leave_requests')
+        .select('*')
+        .eq('staff_id', id)
+        .eq('status', 'pending');
+      setPendingLeaves(lvData || []);
+    } catch (err) {
+      console.error('Error fetching pending actions:', err);
+    }
+  };
+
+  const handleSaveAttendance = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedDayDetail || !staff) return;
+
+    const d = new Date(selectedDayDetail.dateStr + 'T00:00:00');
+    const today = new Date();
+    const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+    const previousMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+
+    const isCurrentMonth = d >= currentMonthStart;
+    const isPreviousMonth = d >= previousMonthStart && d < currentMonthStart;
+    const isFuture = d > today;
+
+    if (isFuture) {
+      alert('Cannot mark attendance for future dates.');
+      return;
+    }
+
+    const isAdminOps = user?.role === 'admin' || user?.role === 'ops_manager';
+    const isHR = user?.role === 'staff_executive';
+
+    const canEdit = isAdminOps ? (isCurrentMonth || isPreviousMonth) : (isHR && isCurrentMonth);
+
+    if (!canEdit) {
+      alert('You do not have permission to edit attendance for this date.');
+      return;
+    }
+
+    setIsSavingAttendance(true);
+    try {
+      const dateStr = selectedDayDetail.dateStr;
+      
+      let finalCheckIn = editCheckIn ? editCheckIn : null;
+      let finalCheckOut = editCheckOut ? editCheckOut : null;
+      let finalStatus: 'present' | 'late' | 'absent' = editStatus;
+      let finalDayType = editDayType;
+
+      let minutesLate = 0;
+      let otMinutes = 0;
+      let earlyLeaveMinutes = 0;
+      let colorCode: 'green' | 'yellow' | 'orange' | 'red' = 'green';
+      let actualHours = 0;
+      let shortAttendance = false;
+
+      if (finalDayType === 'weekly_off' || finalDayType === 'holiday' || finalDayType === 'leave') {
+        finalCheckIn = null;
+        finalCheckOut = null;
+        finalStatus = 'present';
+        colorCode = 'green';
+      } else {
+        if (!finalCheckIn) {
+          finalStatus = 'absent';
+          colorCode = 'red';
+        } else {
+          const shiftStartStr = staff.shift?.start_time || '09:00';
+          const [sh, sm] = shiftStartStr.split(':').map(Number);
+          const shiftMins = sh * 60 + sm;
+
+          const [ih, im] = finalCheckIn.split(':').map(Number);
+          const checkInMins = ih * 60 + im;
+
+          if (checkInMins > shiftMins) {
+            minutesLate = checkInMins - shiftMins;
+            finalStatus = 'late';
+            if (minutesLate <= 15) colorCode = 'yellow';
+            else if (minutesLate <= 30) colorCode = 'orange';
+            else colorCode = 'red';
+          } else {
+            finalStatus = 'present';
+            colorCode = 'green';
+          }
+
+          if (finalCheckOut) {
+            if (finalCheckOut === finalCheckIn) {
+              alert('Check-out time cannot be equal to check-in time.');
+              setIsSavingAttendance(false);
+              return;
+            }
+            
+            actualHours = calculateActualHours(finalCheckIn, finalCheckOut);
+            const [oh, om] = finalCheckOut.split(':').map(Number);
+            const checkOutMins = oh * 60 + om;
+            const diffMins = checkOutMins - checkInMins;
+            if (diffMins > 0 && diffMins < 30) {
+              shortAttendance = true;
+            }
+
+            const shiftEndStr = staff.shift?.end_time || '18:00';
+            otMinutes = calculateOTMinutes(shiftEndStr, finalCheckOut);
+            earlyLeaveMinutes = calculateEarlyLeaveMinutes(shiftEndStr, finalCheckOut);
+          }
+        }
+      }
+
+      const { data: oldRecord } = await supabase
+        .from('attendance')
+        .select('*')
+        .eq('staff_id', staff.id)
+        .eq('date', dateStr)
+        .maybeSingle();
+
+      const attendanceId = oldRecord?.id || undefined;
+      const { data: newRecord, error: attError } = await supabase
+        .from('attendance')
+        .upsert({
+          id: attendanceId,
+          staff_id: staff.id,
+          date: dateStr,
+          check_in_time: finalCheckIn,
+          check_out_time: finalCheckOut,
+          status: finalStatus,
+          day_type: finalDayType,
+          color_code: colorCode,
+          minutes_late: minutesLate,
+          ot_minutes: otMinutes,
+          ot_approved: false,
+          early_leave_minutes: earlyLeaveMinutes,
+          actual_hours_worked: actualHours,
+          short_attendance: shortAttendance,
+          marked_by: user?.name || user?.email || 'admin'
+        }, { onConflict: 'staff_id,date' })
+        .select()
+        .single();
+
+      if (attError) throw attError;
+
+      let fineAmount = 0;
+      if (finalStatus === 'late') {
+        const { data: exemption } = await supabase
+          .from('staff_fine_exemptions')
+          .select('id')
+          .eq('staff_id', staff.id)
+          .maybeSingle();
+
+        if (!exemption) {
+          const { data: fineSettings } = await supabase.from('fine_settings').select('*').limit(1).maybeSingle();
+          const settings = fineSettings || {
+            yellow_fine: 50,
+            orange_fine: 100,
+            red_fine: 200,
+            yellow_free_passes: 4
+          };
+
+          if (colorCode === 'yellow') {
+            const [y, m] = dateStr.split('-');
+            const firstDayOfMonth = `${y}-${m}-01`;
+            const { count, error: countErr } = await supabase
+              .from('attendance')
+              .select('*', { count: 'exact', head: true })
+              .eq('staff_id', staff.id)
+              .eq('color_code', 'yellow')
+              .gte('date', firstDayOfMonth)
+              .lte('date', dateStr);
+
+            if (!countErr && count !== null && count >= settings.yellow_free_passes) {
+              fineAmount = Number(settings.yellow_fine);
+            }
+          } else if (colorCode === 'orange') {
+            fineAmount = Number(settings.orange_fine);
+          } else if (colorCode === 'red') {
+            fineAmount = Number(settings.red_fine);
+          }
+        }
+      }
+
+      if (fineAmount > 0) {
+        const [y, m] = dateStr.split('-');
+        const monthStr = `${y}-${m}`;
+        const { error: fineErr } = await supabase.from('late_fines').upsert({
+          staff_id: staff.id,
+          date: dateStr,
+          late_minutes: minutesLate,
+          color_code: colorCode,
+          fine_amount: fineAmount,
+          waived: false,
+          month: monthStr
+        }, { onConflict: 'staff_id,date' });
+        if (fineErr) throw fineErr;
+      } else {
+        await supabase
+          .from('late_fines')
+          .delete()
+          .eq('staff_id', staff.id)
+          .eq('date', dateStr)
+          .eq('confirmed', false);
+      }
+
+      await createAuditLog({
+        action: oldRecord ? 'UPDATE_ATTENDANCE' : 'CREATE_ATTENDANCE',
+        table_name: 'attendance',
+        record_id: newRecord.id,
+        old_value: oldRecord || null,
+        new_value: newRecord,
+        performed_by: user?.name || user?.email || 'admin',
+        performed_by_role: user?.role || 'admin',
+        reason: 'Manual attendance edit via staff profile calendar'
+      });
+
+      showToast('Attendance saved ✓');
+      setIsEditingAttendance(false);
+      setSelectedDayDetail(null);
+      fetchMonthData();
+      fetchPendingActions();
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to save attendance: ' + err.message);
+    } finally {
+      setIsSavingAttendance(false);
+    }
+  };
+
+  const startEditing = () => {
+    if (!selectedDayDetail) return;
+    const r = selectedDayDetail.record;
+    setEditCheckIn(r?.check_in_time || '');
+    setEditCheckOut(r?.check_out_time || '');
+    setEditStatus(r?.status || 'present');
+    setEditDayType(r?.day_type || 'present');
+    setIsEditingAttendance(true);
+  };
+
+  const handleDeleteAttendance = async () => {
+    if (!selectedDayDetail || !staff) return;
+    if (!window.confirm('Are you sure you want to delete this attendance record? This will also delete any related late fines.')) return;
+
+    try {
+      const dateStr = selectedDayDetail.dateStr;
+
+      const { data: oldRecord } = await supabase
+        .from('attendance')
+        .select('*')
+        .eq('staff_id', staff.id)
+        .eq('date', dateStr)
+        .maybeSingle();
+
+      if (!oldRecord) return;
+
+      await supabase
+        .from('late_fines')
+        .delete()
+        .eq('staff_id', staff.id)
+        .eq('date', dateStr);
+
+      const { error: deleteErr } = await supabase
+        .from('attendance')
+        .delete()
+        .eq('id', oldRecord.id);
+
+      if (deleteErr) throw deleteErr;
+
+      await createAuditLog({
+        action: 'DELETE_ATTENDANCE',
+        table_name: 'attendance',
+        record_id: oldRecord.id,
+        old_value: oldRecord,
+        new_value: null,
+        performed_by: user?.name || user?.email || 'admin',
+        performed_by_role: user?.role || 'admin',
+        reason: 'Manual attendance delete via staff profile calendar'
+      });
+
+      showToast('Attendance record deleted ✓');
+      setIsEditingAttendance(false);
+      setSelectedDayDetail(null);
+      fetchMonthData();
+      fetchPendingActions();
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to delete attendance: ' + err.message);
+    }
+  };
+
+  const handleApproveOT = async (record: AttendanceRecord) => {
+    if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(50);
+    try {
+      const { error } = await supabase
+        .from('attendance')
+        .update({ ot_approved: true })
+        .eq('id', record.id);
+      if (error) throw error;
+      
+      await createAuditLog({
+        action: 'APPROVE_OT',
+        table_name: 'attendance',
+        record_id: record.id,
+        old_value: { ot_approved: false },
+        new_value: { ot_approved: true },
+        performed_by: user?.name || user?.email || 'Admin',
+        performed_by_role: user?.role || 'admin',
+        reason: `Approved OT of ${record.ot_minutes} mins for date ${record.date}`
+      });
+
+      showToast('OT Approved ✓');
+      fetchPendingActions();
+      fetchMonthData();
+    } catch (err: any) {
+      alert('Failed to approve OT: ' + err.message);
+    }
+  };
+
+  const handleRejectOT = async (record: AttendanceRecord) => {
+    if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(50);
+    try {
+      const { error } = await supabase
+        .from('attendance')
+        .update({ ot_minutes: 0, ot_approved: false })
+        .eq('id', record.id);
+      if (error) throw error;
+
+      await createAuditLog({
+        action: 'REJECT_OT',
+        table_name: 'attendance',
+        record_id: record.id,
+        old_value: { ot_minutes: record.ot_minutes, ot_approved: false },
+        new_value: { ot_minutes: 0, ot_approved: false },
+        performed_by: user?.name || user?.email || 'Admin',
+        performed_by_role: user?.role || 'admin',
+        reason: `Rejected OT for date ${record.date}`
+      });
+
+      showToast('OT Rejected');
+      fetchPendingActions();
+      fetchMonthData();
+    } catch (err: any) {
+      alert('Failed to reject OT: ' + err.message);
+    }
+  };
+
+  const handleConfirmLateFine = async (fine: LateFine) => {
+    if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(50);
+    try {
+      const { error } = await supabase
+        .from('late_fines')
+        .update({ confirmed: true })
+        .eq('id', fine.id);
+      if (error) throw error;
+
+      await createAuditLog({
+        action: 'CONFIRM_FINE',
+        table_name: 'late_fines',
+        record_id: fine.id,
+        old_value: { confirmed: false },
+        new_value: { confirmed: true },
+        performed_by: user?.name || user?.email || 'Admin',
+        performed_by_role: user?.role || 'admin',
+        reason: `Confirmed late fine of ₹${fine.fine_amount} for date ${fine.date}`
+      });
+
+      showToast('Fine Confirmed ✓');
+      fetchPendingActions();
+      fetchMonthData();
+    } catch (err: any) {
+      alert('Failed to confirm fine: ' + err.message);
+    }
+  };
+
+  const handleConfirmSpecialFine = async (fine: SpecialFine) => {
+    if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(50);
+    try {
+      const { error } = await supabase
+        .from('special_fines')
+        .update({ confirmed: true })
+        .eq('id', fine.id);
+      if (error) throw error;
+
+      await createAuditLog({
+        action: 'CONFIRM_SPECIAL_FINE',
+        table_name: 'special_fines',
+        record_id: fine.id,
+        old_value: { confirmed: false },
+        new_value: { confirmed: true },
+        performed_by: user?.name || user?.email || 'Admin',
+        performed_by_role: user?.role || 'admin',
+        reason: `Confirmed special fine of ₹${fine.amount} for date ${fine.date}`
+      });
+
+      showToast('Special Fine Confirmed ✓');
+      fetchPendingActions();
+      fetchMonthData();
+    } catch (err: any) {
+      alert('Failed to confirm special fine: ' + err.message);
+    }
+  };
+
+  const handleApproveLeave = async (req: LeaveRequest) => {
+    if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(50);
+    try {
+      const { error } = await supabase
+        .from('leave_requests')
+        .update({ status: 'approved', approved_by: user?.name || user?.email || 'HR' })
+        .eq('id', req.id);
+      if (error) throw error;
+
+      const { error: attError } = await supabase
+        .from('attendance')
+        .upsert({
+          staff_id: req.staff_id || id,
+          date: req.date,
+          status: 'absent',
+          day_type: 'leave',
+          marked_by: 'admin_leave_approval'
+        }, { onConflict: 'staff_id,date' });
+
+      if (attError) throw attError;
+
+      await createAuditLog({
+        action: 'APPROVE_LEAVE',
+        table_name: 'leave_requests',
+        record_id: req.id,
+        old_value: { status: 'pending' },
+        new_value: { status: 'approved' },
+        performed_by: user?.name || user?.email || 'HR',
+        performed_by_role: user?.role || 'staff_executive',
+        reason: `Approved leave request for date ${req.date}`
+      });
+
+      showToast('Leave Approved ✓');
+      fetchPendingActions();
+      fetchLogs();
+      fetchMonthData();
+    } catch (err: any) {
+      alert('Failed to approve leave: ' + err.message);
+    }
+  };
+
+  const handleRejectLeave = async (req: LeaveRequest) => {
+    if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(50);
+    try {
+      const { error } = await supabase
+        .from('leave_requests')
+        .update({ status: 'rejected' })
+        .eq('id', req.id);
+      if (error) throw error;
+
+      await createAuditLog({
+        action: 'REJECT_LEAVE',
+        table_name: 'leave_requests',
+        record_id: req.id,
+        old_value: { status: 'pending' },
+        new_value: { status: 'rejected' },
+        performed_by: user?.name || user?.email || 'HR',
+        performed_by_role: user?.role || 'staff_executive',
+        reason: `Rejected leave request for date ${req.date}`
+      });
+
+      showToast('Leave Rejected');
+      fetchPendingActions();
+      fetchLogs();
+    } catch (err: any) {
+      alert('Failed to reject leave: ' + err.message);
     }
   };
 
@@ -387,8 +896,35 @@ export default function StaffProfilePage() {
     if (staff) {
       fetchMonthData();
       fetchLogs();
+      fetchPendingActions();
     }
   }, [staff, selectedMonth]);
+
+  // Swipe Gestures for Month Navigation
+  const [touchStart, setTouchStart] = useState<number | null>(null);
+  const [touchEnd, setTouchEnd] = useState<number | null>(null);
+  const minSwipeDistance = 50;
+
+  const onTouchStart = (e: React.TouchEvent) => {
+    setTouchStart(e.targetTouches[0].clientX);
+    setTouchEnd(null);
+  };
+
+  const onTouchMove = (e: React.TouchEvent) => {
+    setTouchEnd(e.targetTouches[0].clientX);
+  };
+
+  const onTouchEnd = () => {
+    if (!touchStart || !touchEnd) return;
+    const distance = touchStart - touchEnd;
+    const isLeftSwipe = distance > minSwipeDistance;
+    const isRightSwipe = distance < -minSwipeDistance;
+    if (isLeftSwipe) {
+      handleNextMonth();
+    } else if (isRightSwipe) {
+      handlePrevMonth();
+    }
+  };
 
   // Navigate Calendar Months
   const handlePrevMonth = () => {
@@ -479,6 +1015,28 @@ export default function StaffProfilePage() {
     return { present, late, absent, otHours };
   }, [attendance]);
 
+  // Weekly off balance calculations
+  const weeklyOffStats = useMemo(() => {
+    if (!staff) return { earnedQuota: 0, weeklyOffsUsed: 0, weeklyOffsRemaining: 0 };
+    const daysActuallyWorked = attendance.filter(a => a.check_in_time !== null && a.day_type !== 'weekly_off' && a.day_type !== 'holiday').length;
+    const offDaysPerMonth = staff.off_days_per_month as 0 | 2 | 4;
+    
+    let earnedQuota = 0;
+    if (offDaysPerMonth === 4) {
+      earnedQuota = Math.min(Math.floor(daysActuallyWorked / 6), 4);
+    } else if (offDaysPerMonth === 2) {
+      earnedQuota = Math.min(Math.floor(daysActuallyWorked / 12), 2);
+    }
+
+    const weeklyOffsTaken = attendance.filter(a => a.day_type === 'weekly_off').length + 
+      leaves.filter(l => l.status === 'approved' && l.is_weekly_off && l.date.substring(0, 7) === selectedMonth).length;
+
+    const weeklyOffsUsed = Math.min(weeklyOffsTaken, earnedQuota);
+    const weeklyOffsRemaining = earnedQuota - weeklyOffsUsed;
+
+    return { earnedQuota, weeklyOffsUsed, weeklyOffsRemaining };
+  }, [attendance, leaves, staff, selectedMonth]);
+
   // Performance Score Grade Calculator
   const getPerfGrade = (score: number) => {
     if (score >= 90) return { label: 'Excellent', color: 'text-[#4ADE80]', bg: 'bg-[#4ADE80]/10', bar: 'bg-[#4ADE80]' };
@@ -551,6 +1109,135 @@ export default function StaffProfilePage() {
         </div>
       </div>
 
+      {/* Pending Actions Panel */}
+      {(pendingOT.length > 0 || pendingLateFines.length > 0 || pendingSpecialFines.length > 0 || pendingLeaves.length > 0) && (
+        <div className="bg-[rgba(251,191,36,0.06)] border border-[rgba(251,191,36,0.18)] rounded-[18px] p-4 space-y-3.5 card-entry">
+          <div className="flex items-center space-x-2 border-b border-[rgba(251,191,36,0.15)] pb-2">
+            <AlertTriangle size={18} className="text-[#FBBF24] animate-pulse" />
+            <h2 className="text-sm font-extrabold text-[#FBBF24] uppercase tracking-wider">Pending Actions Required</h2>
+          </div>
+
+          <div className="space-y-3 max-h-[280px] overflow-y-auto pr-1">
+            {/* Pending OT */}
+            {pendingOT.map(ot => (
+              <div key={ot.id} className="bg-black/20 border border-white/5 rounded-xl p-3 flex justify-between items-center text-xs">
+                <div>
+                  <p className="font-bold text-white">Overtime Request ({ot.ot_minutes} mins)</p>
+                  <p className="text-[10px] text-[var(--text-muted)] mt-0.5">{new Date(ot.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
+                </div>
+                <div className="flex space-x-1.5">
+                  <button 
+                    onClick={() => handleApproveOT(ot)}
+                    className="h-8 min-h-0 px-3 bg-[#4ADE80] text-black font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
+                  >
+                    Approve
+                  </button>
+                  <button 
+                    onClick={() => handleRejectOT(ot)}
+                    className="h-8 min-h-0 px-3 bg-[#F87171]/10 border border-[#F87171]/20 text-[#F87171] font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
+                  >
+                    Reject
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            {/* Pending Late Fines */}
+            {pendingLateFines.map(lf => (
+              <div key={lf.id} className="bg-black/20 border border-white/5 rounded-xl p-3 flex justify-between items-center text-xs">
+                <div>
+                  <p className="font-bold text-white">Late Fine Confirmation (₹{lf.fine_amount})</p>
+                  <p className="text-[10px] text-[var(--text-muted)] mt-0.5">{new Date(lf.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} • {lf.late_minutes} mins late</p>
+                </div>
+                <div className="flex space-x-1.5">
+                  <button 
+                    onClick={() => handleConfirmLateFine(lf)}
+                    className="h-8 min-h-0 px-3 bg-[#4ADE80] text-black font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
+                  >
+                    Confirm
+                  </button>
+                  <button 
+                    onClick={() => {
+                      setSelectedFineForWaive({
+                        id: lf.id,
+                        type: 'late',
+                        date: lf.date,
+                        originalAmount: lf.fine_amount,
+                        waivedAmount: lf.waived_amount || 0
+                      });
+                      setWaivedAmountInput(String(lf.waived_amount || 0));
+                      setWaiveModalOpen(true);
+                    }}
+                    className="h-8 min-h-0 px-3 bg-[#FBBF24]/10 border border-[#FBBF24]/20 text-[#FBBF24] font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
+                  >
+                    Waive
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            {/* Pending Special Fines */}
+            {pendingSpecialFines.map(sf => (
+              <div key={sf.id} className="bg-black/20 border border-white/5 rounded-xl p-3 flex justify-between items-center text-xs">
+                <div>
+                  <p className="font-bold text-white">Special Fine Confirmation (₹{sf.amount})</p>
+                  <p className="text-[10px] text-[var(--text-muted)] mt-0.5">{new Date(sf.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} • "{sf.reason}"</p>
+                </div>
+                <div className="flex space-x-1.5">
+                  <button 
+                    onClick={() => handleConfirmSpecialFine(sf)}
+                    className="h-8 min-h-0 px-3 bg-[#4ADE80] text-black font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
+                  >
+                    Confirm
+                  </button>
+                  <button 
+                    onClick={() => {
+                      setSelectedFineForWaive({
+                        id: sf.id,
+                        type: 'special',
+                        date: sf.date,
+                        originalAmount: sf.amount,
+                        waivedAmount: sf.waived_amount || 0,
+                        reason: sf.reason
+                      });
+                      setWaivedAmountInput(String(sf.waived_amount || 0));
+                      setWaiveModalOpen(true);
+                    }}
+                    className="h-8 min-h-0 px-3 bg-[#FBBF24]/10 border border-[#FBBF24]/20 text-[#FBBF24] font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
+                  >
+                    Waive
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            {/* Pending Leaves */}
+            {pendingLeaves.map(lv => (
+              <div key={lv.id} className="bg-black/20 border border-white/5 rounded-xl p-3 flex justify-between items-center text-xs">
+                <div>
+                  <p className="font-bold text-white">Leave Request ({new Date(lv.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })})</p>
+                  <p className="text-[10px] text-[var(--text-muted)] mt-0.5">Reason: "{lv.reason || 'No reason provided'}"</p>
+                </div>
+                <div className="flex space-x-1.5">
+                  <button 
+                    onClick={() => handleApproveLeave(lv)}
+                    className="h-8 min-h-0 px-3 bg-[#4ADE80] text-black font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
+                  >
+                    Approve
+                  </button>
+                  <button 
+                    onClick={() => handleRejectLeave(lv)}
+                    className="h-8 min-h-0 px-3 bg-[#F87171]/10 border border-[#F87171]/20 text-[#F87171] font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
+                  >
+                    Reject
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Profile summary block */}
       <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[18px] p-5 shadow-sm space-y-4">
         <div className="flex items-center space-x-4">
@@ -614,6 +1301,14 @@ export default function StaffProfilePage() {
             <span className="text-xs font-bold text-[#60A5FA] font-mono leading-none">{monthStats.otHours}h</span>
             <span className="text-[8px] text-[var(--text-muted)] font-bold uppercase tracking-wider mt-1.5 leading-none">OT Hours</span>
           </div>
+        </div>
+
+        {/* Weekly Off Balance Banner */}
+        <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-3 flex justify-between items-center text-xs font-bold text-[var(--text-secondary)]">
+          <span className="uppercase text-[9px] tracking-wider text-[var(--text-muted)]">Weekly Off Balance</span>
+          <span className="text-white font-mono">
+            {weeklyOffStats.earnedQuota} Earned | {weeklyOffStats.weeklyOffsUsed} Used | {weeklyOffStats.weeklyOffsRemaining} Remaining
+          </span>
         </div>
 
         {/* Performance Score Bar (ops_manager and Head HR staff_executive only, hidden for admin) */}
@@ -680,7 +1375,12 @@ export default function StaffProfilePage() {
         {/* Tab 1: Attendance Grid */}
         {activeTab === 'attendance' && (
           <div className="space-y-4">
-            <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[18px] p-4">
+            <div 
+              className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[18px] p-4"
+              onTouchStart={onTouchStart}
+              onTouchMove={onTouchMove}
+              onTouchEnd={onTouchEnd}
+            >
               <div className="grid grid-cols-7 gap-1.5 text-center mb-3">
                 {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((h, i) => (
                   <span key={i} className="text-[9px] font-black uppercase text-[var(--text-muted)] tracking-wider">
@@ -735,14 +1435,11 @@ export default function StaffProfilePage() {
                       dotColor = "bg-[#6B7280]";
                     }
                   } else {
-                    // No attendance record. Check leave or off day
+                    // No attendance record. Check leave
                     const isLeaveApproved = leaves.some(l => l.date === dateStr && l.status === 'approved');
-                    const isSunday = new Date(dateStr + 'T00:00:00').getDay() === 0;
 
                     if (isLeaveApproved) {
                       cellClass += "bg-[rgba(96,165,250,0.1)] border-[rgba(96,165,250,0.2)] text-[#60A5FA] hover:bg-[rgba(96,165,250,0.15)]";
-                    } else if (isSunday && staff.off_days_per_month > 0) {
-                      cellClass += "bg-transparent border-dashed border-[var(--border-strong)] text-[var(--text-muted)] hover:border-white/20";
                     } else {
                       // Past day with no check-in -> Absent
                       cellClass += "bg-[rgba(248,113,113,0.06)] border-[rgba(248,113,113,0.12)] text-[var(--text-muted)] hover:bg-[rgba(248,113,113,0.12)]";
@@ -1301,161 +1998,291 @@ export default function StaffProfilePage() {
       />
 
       {/* Calendar Day Detail Dialog Overlay */}
-      {selectedDayDetail && (
-        <div className="fixed inset-0 z-[12000] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/75 backdrop-blur-xs" onClick={() => setSelectedDayDetail(null)} />
-          <div className="bg-[var(--bg-surface)] border border-[var(--border-strong)] rounded-2xl p-5 shadow-2xl relative z-10 w-full max-w-sm space-y-4 max-h-[85vh] overflow-y-auto">
-            
-            <div className="flex justify-between items-start border-b border-[var(--border-strong)] pb-3">
-              <div>
-                <span className="text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Check-in detail</span>
-                <h4 className="text-sm font-extrabold text-white">
-                  {new Date(selectedDayDetail.dateStr + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', day: 'numeric', month: 'long' })}
-                </h4>
-              </div>
-              <button onClick={() => setSelectedDayDetail(null)} className="text-[var(--text-secondary)] hover:text-white p-1">
-                <X size={18} />
-              </button>
-            </div>
+      {selectedDayDetail && (() => {
+        const d = new Date(selectedDayDetail.dateStr + 'T00:00:00');
+        const today = new Date();
+        const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+        const previousMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
 
-            {selectedDayDetail.record ? (
-              <div className="space-y-4">
-                
-                {/* Times & Photos */}
-                <div className="grid grid-cols-2 gap-3">
-                  {/* IN Info */}
-                  <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-3 flex flex-col items-center">
-                    <span className="text-[8px] text-[var(--text-muted)] font-black uppercase tracking-wider">CHECK IN</span>
-                    <span className="text-base font-extrabold text-[#4ADE80] font-mono mt-1">
-                      {formatTime12hr(selectedDayDetail.record.check_in_time) || '—'}
-                    </span>
-                    {selectedDayDetail.record.check_in_photo ? (
-                      <button 
-                        onClick={() => setSelectedPhoto({ url: selectedDayDetail.record!.check_in_photo!, title: 'Check In Selfie' })}
-                        className="w-10 h-10 rounded-full overflow-hidden mt-2 border border-[#4ADE80]/30 cursor-pointer hover:border-white transition-all active:scale-90"
-                      >
-                        <img src={selectedDayDetail.record.check_in_photo} alt="IN" className="w-full h-full object-cover" />
-                      </button>
-                    ) : (
-                      <span className="text-[9px] text-[var(--text-muted)] italic mt-2.5">No photo</span>
-                    )}
-                  </div>
-                  {/* OUT Info */}
-                  <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-3 flex flex-col items-center">
-                    <span className="text-[8px] text-[var(--text-muted)] font-black uppercase tracking-wider">CHECK OUT</span>
-                    <span className="text-base font-extrabold text-[#60A5FA] font-mono mt-1">
-                      {formatTime12hr(selectedDayDetail.record.check_out_time) || '—'}
-                    </span>
-                    {selectedDayDetail.record.check_out_photo ? (
-                      <button 
-                        onClick={() => setSelectedPhoto({ url: selectedDayDetail.record!.check_out_photo!, title: 'Check Out Selfie' })}
-                        className="w-10 h-10 rounded-full overflow-hidden mt-2 border border-[#60A5FA]/30 cursor-pointer hover:border-white transition-all active:scale-90"
-                      >
-                        <img src={selectedDayDetail.record.check_out_photo} alt="OUT" className="w-full h-full object-cover" />
-                      </button>
-                    ) : (
-                      <span className="text-[9px] text-[var(--text-muted)] italic mt-2.5">No photo</span>
-                    )}
-                  </div>
+        const isCurrentMonth = d >= currentMonthStart;
+        const isPreviousMonth = d >= previousMonthStart && d < currentMonthStart;
+        const isFuture = d > today;
+
+        const isAdminOps = user?.role === 'admin' || user?.role === 'ops_manager';
+        const isHR = user?.role === 'staff_executive';
+
+        const canEdit = !isFuture && (isAdminOps ? (isCurrentMonth || isPreviousMonth) : (isHR && isCurrentMonth));
+
+        return (
+          <div className="fixed inset-0 z-[12000] flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/75 backdrop-blur-xs" onClick={() => { setSelectedDayDetail(null); setIsEditingAttendance(false); }} />
+            <div className="bg-[var(--bg-surface)] border border-[var(--border-strong)] rounded-2xl p-5 shadow-2xl relative z-10 w-full max-w-sm space-y-4 max-h-[85vh] overflow-y-auto">
+              
+              <div className="flex justify-between items-start border-b border-[var(--border-strong)] pb-3">
+                <div>
+                  <span className="text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider">
+                    {isEditingAttendance ? 'Edit Attendance' : 'Check-in detail'}
+                  </span>
+                  <h4 className="text-sm font-extrabold text-white">
+                    {new Date(selectedDayDetail.dateStr + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', day: 'numeric', month: 'long' })}
+                  </h4>
                 </div>
+                <button onClick={() => { setSelectedDayDetail(null); setIsEditingAttendance(false); }} className="text-[var(--text-secondary)] hover:text-white p-1">
+                  <X size={18} />
+                </button>
+              </div>
 
-                {/* Performance stats */}
-                <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-3.5 space-y-2 text-xs font-semibold text-[var(--text-secondary)]">
-                  <div className="flex justify-between">
-                    <span>Status Badge:</span>
-                    <span className={`capitalize font-bold ${
-                      selectedDayDetail.record.status === 'present' 
-                        ? 'text-[#4ADE80]' 
-                        : selectedDayDetail.record.status === 'late' 
-                          ? 'text-[#FBBF24]' 
-                          : 'text-[#F87171]'
-                    }`}>
-                      {selectedDayDetail.record.status}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Late Minutes:</span>
-                    <span className="text-white font-mono">{selectedDayDetail.record.minutes_late} mins</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Actual Hours Worked:</span>
-                    <span className="text-white font-mono">{selectedDayDetail.record.actual_hours_worked} hours</span>
-                  </div>
-                  <div className="flex justify-between border-t border-[var(--border-strong)] pt-2 mt-1">
-                    <span>OT Minutes:</span>
-                    <span className="text-white font-mono">{selectedDayDetail.record.ot_minutes} mins ({selectedDayDetail.record.ot_approved ? 'Approved' : 'Pending'})</span>
-                  </div>
-                  {(selectedDayDetail.record.early_leave_minutes ?? 0) > 0 && (
-                    <>
-                      <div className="flex justify-between border-t border-[var(--border-strong)] pt-2 mt-1 text-[#F87171]">
-                        <span>Early Leave Duration:</span>
-                        <span className="font-mono">{selectedDayDetail.record.early_leave_minutes} mins</span>
+              {isEditingAttendance ? (
+                <form onSubmit={handleSaveAttendance} className="space-y-4 text-xs font-semibold text-white">
+                  <div className="space-y-3">
+                    {isHR && (
+                      <div className="bg-[rgba(251,191,36,0.08)] border border-[rgba(251,191,36,0.18)] text-[#FBBF24] p-2.5 rounded-lg text-[10px] leading-relaxed">
+                        Note: Branch HR can only mark weekly offs. Time inputs are locked.
                       </div>
-                      <div className="flex justify-between text-[#F87171]">
-                        <span>Early Leave Deduction:</span>
-                        <span className="font-mono">
-                          -₹{(() => {
-                            const salary = staff?.monthly_salary || 0;
-                            const shiftHours = staff?.shift?.hours || 9;
-                            const [yr, mo] = selectedDayDetail.dateStr.split('-').map(Number);
-                            const calendarDays = new Date(yr, mo, 0).getDate();
-                            const dailyRate = salary / calendarDays;
-                            return calculateEarlyLeaveDeduction(selectedDayDetail.record.early_leave_minutes ?? 0, dailyRate, shiftHours);
-                          })()}
-                        </span>
+                    )}
+
+                    <div>
+                      <label className="block text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider mb-1">Day Type</label>
+                      <select
+                        value={editDayType}
+                        onChange={(e) => {
+                          setEditDayType(e.target.value);
+                          if (e.target.value !== 'present') {
+                            setEditCheckIn('');
+                            setEditCheckOut('');
+                          }
+                        }}
+                        className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-xl p-2.5 text-xs focus:outline-none focus:border-white/30 text-white"
+                      >
+                        <option value="present">Present / Shift Day</option>
+                        <option value="weekly_off">Weekly Off</option>
+                        <option value="holiday">Public Holiday</option>
+                        <option value="leave">Approved Leave</option>
+                      </select>
+                    </div>
+
+                    {editDayType === 'present' && (
+                      <>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider mb-1">Check In Time</label>
+                            <input
+                              type="time"
+                              value={editCheckIn}
+                              onChange={(e) => setEditCheckIn(e.target.value)}
+                              disabled={isHR}
+                              className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-white/30 disabled:opacity-50"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider mb-1">Check Out Time</label>
+                            <input
+                              type="time"
+                              value={editCheckOut}
+                              onChange={(e) => setEditCheckOut(e.target.value)}
+                              disabled={isHR}
+                              className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-white/30 disabled:opacity-50"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider mb-1">Status Override</label>
+                          <select
+                            value={editStatus}
+                            onChange={(e: any) => setEditStatus(e.target.value)}
+                            disabled={isHR}
+                            className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-xl p-2.5 text-xs focus:outline-none focus:border-white/30 text-white"
+                          >
+                            <option value="present">Present</option>
+                            <option value="late">Late</option>
+                            <option value="absent">Absent</option>
+                          </select>
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="flex space-x-2 pt-2 border-t border-[var(--border-strong)]">
+                    <button
+                      type="submit"
+                      disabled={isSavingAttendance}
+                      className="flex-1 min-h-[38px] bg-white text-[#1E2028] hover:bg-white/95 font-bold text-[11px] rounded-lg active:scale-95 transition-all flex items-center justify-center cursor-pointer"
+                    >
+                      {isSavingAttendance ? 'Saving...' : 'Save Changes'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingAttendance(false)}
+                      className="flex-1 min-h-[38px] bg-[var(--bg-elevated)] border border-[var(--border-strong)] text-white hover:bg-white/5 font-bold text-[11px] rounded-lg active:scale-95 transition-all flex items-center justify-center cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <div className="space-y-4">
+                  {selectedDayDetail.record ? (
+                    <div className="space-y-4">
+                      {/* Times & Photos */}
+                      <div className="grid grid-cols-2 gap-3">
+                        {/* IN Info */}
+                        <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-3 flex flex-col items-center">
+                          <span className="text-[8px] text-[var(--text-muted)] font-black uppercase tracking-wider">CHECK IN</span>
+                          <span className="text-base font-extrabold text-[#4ADE80] font-mono mt-1">
+                            {formatTime12hr(selectedDayDetail.record.check_in_time) || '—'}
+                          </span>
+                          {selectedDayDetail.record.check_in_photo ? (
+                            <button 
+                              onClick={() => setSelectedPhoto({ url: selectedDayDetail.record!.check_in_photo!, title: 'Check In Selfie' })}
+                              className="w-10 h-10 rounded-full overflow-hidden mt-2 border border-[#4ADE80]/30 cursor-pointer hover:border-white transition-all active:scale-90"
+                            >
+                              <img src={selectedDayDetail.record.check_in_photo} alt="IN" className="w-full h-full object-cover" />
+                            </button>
+                          ) : (
+                            <span className="text-[9px] text-[var(--text-muted)] italic mt-2.5">No photo</span>
+                          )}
+                        </div>
+                        {/* OUT Info */}
+                        <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-3 flex flex-col items-center">
+                          <span className="text-[8px] text-[var(--text-muted)] font-black uppercase tracking-wider">CHECK OUT</span>
+                          <span className="text-base font-extrabold text-[#60A5FA] font-mono mt-1">
+                            {formatTime12hr(selectedDayDetail.record.check_out_time) || '—'}
+                          </span>
+                          {selectedDayDetail.record.check_out_photo ? (
+                            <button 
+                              onClick={() => setSelectedPhoto({ url: selectedDayDetail.record!.check_out_photo!, title: 'Check Out Selfie' })}
+                              className="w-10 h-10 rounded-full overflow-hidden mt-2 border border-[#60A5FA]/30 cursor-pointer hover:border-white transition-all active:scale-90"
+                            >
+                              <img src={selectedDayDetail.record.check_out_photo} alt="OUT" className="w-full h-full object-cover" />
+                            </button>
+                          ) : (
+                            <span className="text-[9px] text-[var(--text-muted)] italic mt-2.5">No photo</span>
+                          )}
+                        </div>
                       </div>
-                    </>
+
+                      {/* Performance stats */}
+                      <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-3.5 space-y-2 text-xs font-semibold text-[var(--text-secondary)]">
+                        <div className="flex justify-between">
+                          <span>Status Badge:</span>
+                          <span className={`capitalize font-bold ${
+                            selectedDayDetail.record.status === 'present' 
+                              ? 'text-[#4ADE80]' 
+                              : selectedDayDetail.record.status === 'late' 
+                                ? 'text-[#FBBF24]' 
+                                : 'text-[#F87171]'
+                          }`}>
+                            {selectedDayDetail.record.status}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Day Type:</span>
+                          <span className="text-white capitalize">{selectedDayDetail.record.day_type || 'present'}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Late Minutes:</span>
+                          <span className="text-white font-mono">{selectedDayDetail.record.minutes_late} mins</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Actual Hours Worked:</span>
+                          <span className="text-white font-mono">{selectedDayDetail.record.actual_hours_worked} hours</span>
+                        </div>
+                        <div className="flex justify-between border-t border-[var(--border-strong)] pt-2 mt-1">
+                          <span>OT Minutes:</span>
+                          <span className="text-white font-mono">{selectedDayDetail.record.ot_minutes} mins ({selectedDayDetail.record.ot_approved ? 'Approved' : 'Pending'})</span>
+                        </div>
+                        {(selectedDayDetail.record.early_leave_minutes ?? 0) > 0 && (
+                          <>
+                            <div className="flex justify-between border-t border-[var(--border-strong)] pt-2 mt-1 text-[#F87171]">
+                              <span>Early Leave Duration:</span>
+                              <span className="font-mono">{selectedDayDetail.record.early_leave_minutes} mins</span>
+                            </div>
+                            <div className="flex justify-between text-[#F87171]">
+                              <span>Early Leave Deduction:</span>
+                              <span className="font-mono">
+                                -₹{(() => {
+                                  const salary = staff?.monthly_salary || 0;
+                                  const shiftHours = staff?.shift?.hours || 9;
+                                  const [yr, mo] = selectedDayDetail.dateStr.split('-').map(Number);
+                                  const calendarDays = new Date(yr, mo, 0).getDate();
+                                  const dailyRate = salary / calendarDays;
+                                  return calculateEarlyLeaveDeduction(selectedDayDetail.record.early_leave_minutes ?? 0, dailyRate, shiftHours);
+                                })()}
+                              </span>
+                            </div>
+                          </>
+                        )}
+                      </div>
+
+                      {/* Day Breaks */}
+                      {selectedDayDetail.dayBreaks.length > 0 && (
+                        <div className="space-y-2">
+                          <span className="text-[9px] font-black uppercase text-[var(--text-muted)] tracking-wider">Breaks taken</span>
+                          <div className="space-y-1.5">
+                            {selectedDayDetail.dayBreaks.map(db => (
+                              <div key={db.id} className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-lg p-2 flex justify-between items-center text-[10px] font-bold text-[var(--text-secondary)]">
+                                <span className="capitalize">{db.break_type.replace('_', ' ')}</span>
+                                <span className="font-mono text-white">{db.duration_minutes ?? '—'} mins {db.over_minutes > 0 && `(⚠️ +${db.over_minutes}m)`}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Day Fines */}
+                      {selectedDayDetail.dayFines.length > 0 && (
+                        <div className="space-y-2">
+                          <span className="text-[9px] font-black uppercase text-[var(--text-muted)] tracking-wider font-mono text-[#F87171]">Fines Issued</span>
+                          <div className="space-y-1.5">
+                            {selectedDayDetail.dayFines.map((df: any) => (
+                              <div key={df.id} className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-lg p-2.5 flex justify-between items-center text-[10px] font-bold">
+                                <span className="text-white flex-1 truncate pr-2">{df.reason ? `Special Fine: ${df.reason}` : `Late fine (${df.late_minutes}m)`}</span>
+                                <span className="font-mono text-[#F87171] font-extrabold flex-shrink-0">₹{df.fine_amount ?? df.amount} {df.waived && '(Waived)'}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-center py-6">
+                      <FileMinus size={32} className="text-[var(--text-muted)] mx-auto mb-2" />
+                      <p className="text-xs font-bold text-[var(--text-secondary)]">No attendance check-ins logged for this date.</p>
+                      {leaves.some(l => l.date === selectedDayDetail.dateStr && l.status === 'approved') ? (
+                        <p className="text-[10px] text-[#60A5FA] font-bold mt-1 uppercase tracking-wide">Approved Leave day</p>
+                      ) : (
+                        <p className="text-[10px] text-[#F87171] font-bold mt-1 uppercase tracking-wide">Marked Absent</p>
+                      )}
+                    </div>
                   )}
+
+                  {/* Actions bottom bar */}
+                  <div className="flex flex-col gap-2 pt-3 border-t border-[var(--border-strong)]">
+                    {canEdit && (
+                      <button
+                        onClick={startEditing}
+                        className="w-full min-h-[38px] bg-white text-[#1E2028] hover:bg-white/90 font-bold text-xs rounded-xl active:scale-95 transition-all flex items-center justify-center cursor-pointer"
+                      >
+                        {selectedDayDetail.record ? 'Edit Attendance' : 'Add Attendance'}
+                      </button>
+                    )}
+                    {isAdminOps && selectedDayDetail.record && (
+                      <button
+                        onClick={handleDeleteAttendance}
+                        className="w-full min-h-[38px] bg-[#F87171]/10 border border-[#F87171]/20 text-[#F87171] hover:bg-[#F87171]/20 font-bold text-xs rounded-xl active:scale-95 transition-all flex items-center justify-center cursor-pointer"
+                      >
+                        Delete Record
+                      </button>
+                    )}
+                  </div>
                 </div>
+              )}
 
-                {/* Day Breaks */}
-                {selectedDayDetail.dayBreaks.length > 0 && (
-                  <div className="space-y-2">
-                    <span className="text-[9px] font-black uppercase text-[var(--text-muted)] tracking-wider">Breaks taken</span>
-                    <div className="space-y-1.5">
-                      {selectedDayDetail.dayBreaks.map(db => (
-                        <div key={db.id} className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-lg p-2 flex justify-between items-center text-[10px] font-bold text-[var(--text-secondary)]">
-                          <span className="capitalize">{db.break_type.replace('_', ' ')}</span>
-                          <span className="font-mono text-white">{db.duration_minutes ?? '—'} mins {db.over_minutes > 0 && `(⚠️ +${db.over_minutes}m)`}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Day Fines */}
-                {selectedDayDetail.dayFines.length > 0 && (
-                  <div className="space-y-2">
-                    <span className="text-[9px] font-black uppercase text-[var(--text-muted)] tracking-wider font-mono text-[#F87171]">Fines Issued</span>
-                    <div className="space-y-1.5">
-                      {selectedDayDetail.dayFines.map((df: any) => (
-                        <div key={df.id} className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-lg p-2.5 flex justify-between items-center text-[10px] font-bold">
-                          <span className="text-white flex-1 truncate pr-2">{df.reason ? `Special Fine: ${df.reason}` : `Late fine (${df.late_minutes}m)`}</span>
-                          <span className="font-mono text-[#F87171] font-extrabold flex-shrink-0">₹{df.fine_amount ?? df.amount} {df.waived && '(Waived)'}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-              </div>
-            ) : (
-              <div className="text-center py-6">
-                <FileMinus size={32} className="text-[var(--text-muted)] mx-auto mb-2" />
-                <p className="text-xs font-bold text-[var(--text-secondary)]">No attendance check-ins logged for this date.</p>
-                {leaves.some(l => l.date === selectedDayDetail.dateStr && l.status === 'approved') ? (
-                  <p className="text-[10px] text-[#60A5FA] font-bold mt-1 uppercase tracking-wide">Approved Leave day</p>
-                ) : new Date(selectedDayDetail.dateStr + 'T00:00:00').getDay() === 0 && staff.off_days_per_month > 0 ? (
-                  <p className="text-[10px] text-[var(--text-muted)] font-bold mt-1 uppercase tracking-wide">Weekly OFF day</p>
-                ) : (
-                  <p className="text-[10px] text-[#F87171] font-bold mt-1 uppercase tracking-wide">Marked Absent</p>
-                )}
-              </div>
-            )}
-
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Selfie Zoom Modal */}
       {selectedPhoto && (

@@ -6,7 +6,7 @@ import { Staff, SalaryConfirmation, SalaryPayment } from './types';
 import { formatCurrency, getPastMonths, formatMonthDisplay } from './utils';
 import { Download } from 'lucide-react';
 import { calculateSalary } from '@/lib/salary';
-import * as XLSX from 'xlsx';
+import XLSX from 'xlsx-js-style';
 
 export default function MonthlyReportTab({
   selectedMonth: propMonth,
@@ -177,15 +177,29 @@ export default function MonthlyReportTab({
 
       // Quota logic
       const offDaysPerMonth = s.off_days_per_month as 0 | 2 | 4;
-      const divisor = offDaysPerMonth === 2 ? 12 : 6;
-      const earnedQuota = offDaysPerMonth === 0 ? 0 : Math.min(Math.floor(daysActuallyWorked / divisor), offDaysPerMonth);
+      let earnedQuota = 0;
+      if (offDaysPerMonth === 4) {
+        earnedQuota = Math.min(Math.floor(daysActuallyWorked / 6), 4);
+      } else if (offDaysPerMonth === 2) {
+        earnedQuota = Math.min(Math.floor(daysActuallyWorked / 12), 2);
+      }
 
-      const weeklyOffCount = staffAtt.filter(r => r.day_type === 'weekly_off').length;
+      // Weekly offs taken (unique dates marked as weekly off in attendance, or as a weekly off leave request)
+      const weeklyOffDates = new Set([
+        ...staffAtt.filter(r => r.day_type === 'weekly_off').map(r => r.date),
+        ...staffLeaves.filter(l => l.is_weekly_off === true).map(l => l.date)
+      ]);
+      const weeklyOffsTaken = weeklyOffDates.size;
+      const weeklyOffsUsed = Math.min(weeklyOffsTaken, earnedQuota);
+
+      // absences = calendarDays - daysActuallyWorked
+      const absences = daysInMonth - daysActuallyWorked;
+
+      // deductedDays = absences - weeklyOffsUsed + manualExtraLeaves
       const manualExtraLeaves = c.extra_leave_days || 0;
-      const totalLeaves = staffLeaves.length + weeklyOffCount + manualExtraLeaves;
-      const leavesBeyondQuota = Math.max(0, totalLeaves - earnedQuota);
+      const deductedDays = Math.max(0, absences - weeklyOffsUsed) + manualExtraLeaves;
 
-      const missingDays = genuineAbsentDays + leavesBeyondQuota;
+      const missingDays = deductedDays;
 
       const approvedOTMinutes = staffAtt
         .filter((r) => r.ot_approved === true)
@@ -300,19 +314,146 @@ export default function MonthlyReportTab({
       return timeStr;
     };
 
-    // Build rows: one row per staff per day of the month
-    const rows: Record<string, any>[] = [];
-    const sortedStaff = [...staffList].sort((a, b) => a.name.localeCompare(b.name));
-    let slNo = 0;
+    const wb = XLSX.utils.book_new();
 
-    for (const s of sortedStaff) {
+    // -------------------------------------------------------------
+    // SHEET 1: Summary of All Staff
+    // -------------------------------------------------------------
+    const summaryHeaders = [
+      "SL.NO", "NAME", "BRANCH", "DEPARTMENT", "BASE SALARY",
+      "PAID DAYS", "DEDUCTIONS", "OT PAY", "NET SALARY", "STATUS"
+    ];
+
+    const summaryRows: any[][] = [summaryHeaders];
+    const sortedStaff = [...staffList].sort((a, b) => a.name.localeCompare(b.name));
+
+    sortedStaff.forEach((s, idx) => {
+      const conf = reportRecords.find(c => c.staff_id === s.id);
+      const isPaid = payments.find(p => p.staff_id === s.id);
+
+      const baseSalary = conf?.base_salary ?? s.monthly_salary;
+      const netSalary = conf?.net_salary ?? 0;
+      const otPay = conf?.ot_pay ?? 0;
+      const deductions = conf?.leave_deduction ?? 0;
+      const paidDays = conf?.paid_days ?? 30;
+
+      let status = "Not Confirmed";
+      if (confirmations.length > 0) {
+        status = isPaid ? "Paid" : "Pending";
+      }
+
+      summaryRows.push([
+        idx + 1,
+        s.name,
+        s.branch?.name || s.branch_id || '',
+        s.department || '',
+        Number(baseSalary),
+        Number(paidDays),
+        Number(deductions),
+        Number(otPay),
+        Number(netSalary),
+        status
+      ]);
+    });
+
+    // Totals Row
+    const totalBase = summaryRows.slice(1).reduce((sum, r) => sum + Number(r[4] || 0), 0);
+    const totalDeductions = summaryRows.slice(1).reduce((sum, r) => sum + Number(r[6] || 0), 0);
+    const totalOTPay = summaryRows.slice(1).reduce((sum, r) => sum + Number(r[7] || 0), 0);
+    const totalNetPayroll = summaryRows.slice(1).reduce((sum, r) => sum + Number(r[8] || 0), 0);
+
+    summaryRows.push([
+      "",
+      "TOTAL",
+      "",
+      "",
+      totalBase,
+      "",
+      totalDeductions,
+      totalOTPay,
+      totalNetPayroll,
+      ""
+    ]);
+
+    const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+
+    // Styling Summary Sheet
+    const headerStyle = {
+      fill: { fgColor: { rgb: "1E2028" } },
+      font: { bold: true, color: { rgb: "FFFFFF" }, sz: 11 },
+      alignment: { horizontal: "center", vertical: "center" }
+    };
+    const rowStyleEven = {
+      fill: { fgColor: { rgb: "FFFFFF" } },
+      font: { sz: 10 }
+    };
+    const rowStyleOdd = {
+      fill: { fgColor: { rgb: "F8F8F8" } },
+      font: { sz: 10 }
+    };
+    const totalStyle = {
+      fill: { fgColor: { rgb: "E8E8E8" } },
+      font: { bold: true, sz: 10 }
+    };
+
+    for (let r = 0; r < summaryRows.length; r++) {
+      for (let c = 0; c < summaryRows[r].length; c++) {
+        const cellRef = XLSX.utils.encode_cell({ r, c });
+        if (!wsSummary[cellRef]) continue;
+
+        if (r === 0) {
+          wsSummary[cellRef].s = headerStyle;
+        } else if (r === summaryRows.length - 1) {
+          wsSummary[cellRef].s = totalStyle;
+        } else {
+          wsSummary[cellRef].s = r % 2 === 0 ? rowStyleEven : rowStyleOdd;
+        }
+      }
+    }
+
+    XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
+
+    // -------------------------------------------------------------
+    // SHEET 2 ONWARDS: Individual Staff Attendance
+    // -------------------------------------------------------------
+    sortedStaff.forEach((s) => {
       const staffAtt = attendanceRecords.filter((r) => r.staff_id === s.id);
       const staffLeaves = leaveRequests.filter(
         (l: any) => l.staff_id === s.id && l.status === 'approved'
       );
+      const conf = reportRecords.find(c => c.staff_id === s.id);
 
+      const baseSalary = conf?.base_salary ?? s.monthly_salary;
+      const netSalary = conf?.net_salary ?? 0;
+      const otPay = conf?.ot_pay ?? 0;
+      const deductions = conf?.leave_deduction ?? 0;
+
+      // Metadata Block
+      const sheetAOA: any[][] = [
+        ["STAFF ATTENDANCE DETAIL - " + formatMonthDisplay(selectedMonth)],
+        ["Name:", s.name, "Department:", s.department || ''],
+        ["Branch:", s.branch?.name || s.branch_id || '', "Shift:", s.shift?.label || 'N/A'],
+        ["Base Salary:", Number(baseSalary), "Net Salary:", Number(netSalary)],
+        ["OT Pay:", Number(otPay), "Deductions:", Number(deductions)],
+        [], // Empty row
+        [
+          "DATE", "DAY", "CHECK IN", "CHECK OUT", "ACTUAL HOURS", "SHIFT HOURS",
+          "STATUS", "DAY TYPE", "LATE MINS", "OT MINS", "OT APPROVED",
+          "EARLY IN MINS", "EARLY LEAVE MINS", "LATE FINE", "FINE STATUS"
+        ]
+      ];
+
+      const startDataRow = 7;
+      let actualWorkedSum = 0;
+      let shiftHoursSum = 0;
+      let lateMinsSum = 0;
+      let otMinsSum = 0;
+      let earlyInMinsSum = 0;
+      let earlyLeaveMinsSum = 0;
+      let lateFineSum = 0;
+
+      // Fill in daily data
       for (let d = 1; d <= daysInMonth; d++) {
-        slNo++;
         const dateStr = `${selectedMonth}-${String(d).padStart(2, '0')}`;
         const att = staffAtt.find((r: any) => r.date === dateStr);
         const hasLeave = staffLeaves.find((l: any) => l.date === dateStr);
@@ -332,9 +473,7 @@ export default function MonthlyReportTab({
         let earlyInMins = 0;
         let earlyInApproved = 'No';
         let earlyLeaveMins = 0;
-        let markedBy = '';
         let dayType = 'present';
-        let shortAttendance = 'No';
 
         if (att) {
           checkIn = format24h(att.check_in_time);
@@ -356,18 +495,12 @@ export default function MonthlyReportTab({
           earlyInMins = att.early_in_minutes || 0;
           earlyInApproved = att.early_in_approved ? 'Yes' : 'No';
           earlyLeaveMins = att.early_leave_minutes || 0;
-          markedBy = att.marked_by || '';
           dayType = att.day_type || 'present';
-          shortAttendance = att.short_attendance ? 'Yes' : 'No';
         } else if (hasLeave) {
-          markedBy = 'system';
           dayType = hasLeave.is_weekly_off ? 'weekly_off' : 'leave';
         }
 
-        // Find late fine for this date
-        const lf = lateFines.find(
-          (f: any) => f.staff_id === s.id && f.date === dateStr
-        );
+        const lf = lateFines.find((f: any) => f.staff_id === s.id && f.date === dateStr);
         const lateFineAmt = lf ? Number(lf.fine_amount) : 0;
         let fineStatus = '';
         if (lf) {
@@ -376,75 +509,147 @@ export default function MonthlyReportTab({
           else fineStatus = 'Pending';
         }
 
-        rows.push({
-          'SL.NO': slNo,
-          'NAME': s.name,
-          'STAFF ID': s.id,
-          'DATE': dateStr,
-          'DAY': dayName,
-          'CHECK IN': checkIn,
-          'CHECK OUT': checkOut,
-          'ACTUAL HOURS': actualHours,
-          'SHIFT HOURS': shiftHours,
-          'STATUS': status,
-          'COLOR CODE': colorCode,
-          'LATE MINS': lateMins,
-          'OT MINS': otMins,
-          'OT APPROVED': otApproved,
-          'EARLY IN MINS': earlyInMins,
-          'EARLY IN APPROVED': earlyInApproved,
-          'EARLY LEAVE MINS': earlyLeaveMins,
-          'MARKED BY': markedBy,
-          'DAY TYPE': dayType,
-          'SHORT ATTENDANCE': shortAttendance,
-          'LATE FINE': lateFineAmt,
-          'FINE STATUS': fineStatus,
-        });
-      }
-    }
+        actualWorkedSum += actualHours;
+        shiftHoursSum += shiftHours;
+        lateMinsSum += lateMins;
+        otMinsSum += otMins;
+        earlyInMinsSum += earlyInMins;
+        earlyLeaveMinsSum += earlyLeaveMins;
+        lateFineSum += lateFineAmt;
 
-    // Totals row
-    const totals: Record<string, any> = {
-      'SL.NO': '',
-      'NAME': 'TOTAL',
-      'STAFF ID': '',
-      'DATE': '',
-      'DAY': '',
-      'CHECK IN': '',
-      'CHECK OUT': '',
-      'ACTUAL HOURS': rows.reduce((sum, r) => sum + (r['ACTUAL HOURS'] || 0), 0),
-      'SHIFT HOURS': rows.reduce((sum, r) => sum + (r['SHIFT HOURS'] || 0), 0),
-      'STATUS': '',
-      'COLOR CODE': '',
-      'LATE MINS': rows.reduce((sum, r) => sum + (r['LATE MINS'] || 0), 0),
-      'OT MINS': rows.reduce((sum, r) => sum + (r['OT MINS'] || 0), 0),
-      'OT APPROVED': '',
-      'EARLY IN MINS': rows.reduce((sum, r) => sum + (r['EARLY IN MINS'] || 0), 0),
-      'EARLY IN APPROVED': '',
-      'EARLY LEAVE MINS': rows.reduce((sum, r) => sum + (r['EARLY LEAVE MINS'] || 0), 0),
-      'MARKED BY': '',
-      'DAY TYPE': '',
-      'SHORT ATTENDANCE': '',
-      'LATE FINE': rows.reduce((sum, r) => sum + (r['LATE FINE'] || 0), 0),
-      'FINE STATUS': '',
-    };
-    // Round decimal totals
-    totals['ACTUAL HOURS'] = Math.round(totals['ACTUAL HOURS'] * 100) / 100;
-    rows.push(totals);
-
-    const ws = XLSX.utils.json_to_sheet(rows);
-    // Bold the totals row
-    const totalRowIdx = rows.length; // 1-indexed in sheet (header=1, data starts at 2)
-    const cols = Object.keys(totals);
-    cols.forEach((_, ci) => {
-      const cellRef = XLSX.utils.encode_cell({ r: totalRowIdx, c: ci });
-      if (ws[cellRef]) {
-        ws[cellRef].s = { font: { bold: true } };
+        sheetAOA.push([
+          dateStr,
+          dayName,
+          checkIn,
+          checkOut,
+          actualHours,
+          shiftHours,
+          status,
+          dayType,
+          lateMins,
+          otMins,
+          otApproved,
+          earlyInMins,
+          earlyLeaveMins,
+          lateFineAmt,
+          fineStatus
+        ]);
       }
+
+      // Add Totals row
+      sheetAOA.push([
+        "TOTAL", "", "", "",
+        Math.round(actualWorkedSum * 100) / 100,
+        Math.round(shiftHoursSum * 100) / 100,
+        "", "",
+        lateMinsSum,
+        otMinsSum,
+        "",
+        earlyInMinsSum,
+        earlyLeaveMinsSum,
+        lateFineSum,
+        ""
+      ]);
+
+      const wsStaff = XLSX.utils.aoa_to_sheet(sheetAOA);
+
+      // Apply styling to Metadata (First 5 rows)
+      const titleStyle = { font: { bold: true, sz: 14, color: { rgb: "1E2028" } } };
+      const metaLabelStyle = { font: { bold: true, sz: 10, color: { rgb: "555555" } } };
+      const metaValStyle = { font: { sz: 10, bold: false } };
+      const metaValBoldStyle = { font: { sz: 10, bold: true, color: { rgb: "1E2028" } } };
+
+      for (let r = 0; r < 5; r++) {
+        for (let c = 0; c < 15; c++) {
+          const cellRef = XLSX.utils.encode_cell({ r, c });
+          if (!wsStaff[cellRef]) continue;
+
+          if (r === 0) {
+            wsStaff[cellRef].s = titleStyle;
+          } else {
+            if (c % 2 === 0) {
+              wsStaff[cellRef].s = metaLabelStyle;
+            } else {
+              const isBoldVal = (r === 3 && c === 3) || (r === 4 && c === 1);
+              wsStaff[cellRef].s = isBoldVal ? metaValBoldStyle : metaValStyle;
+            }
+          }
+        }
+      }
+
+      // Apply styling to Table Headers (Row 6)
+      const tableHeaderStyle = {
+        fill: { fgColor: { rgb: "1E2028" } },
+        font: { bold: true, color: { rgb: "FFFFFF" }, sz: 10 },
+        alignment: { horizontal: "center", vertical: "center" }
+      };
+      for (let c = 0; c < 15; c++) {
+        const cellRef = XLSX.utils.encode_cell({ r: 6, c });
+        if (wsStaff[cellRef]) {
+          wsStaff[cellRef].s = tableHeaderStyle;
+        }
+      }
+
+      // Apply styling to Table Data
+      const presentRowStyle = { fill: { fgColor: { rgb: "E6F4EA" } }, font: { sz: 9 } };
+      const lateRowStyle = { fill: { fgColor: { rgb: "FEF3C7" } }, font: { sz: 9 } };
+      const absentRowStyle = { fill: { fgColor: { rgb: "FCE8E6" } }, font: { sz: 9 } };
+      const weeklyOffRowStyle = { fill: { fgColor: { rgb: "E8F0FE" } }, font: { sz: 9 } };
+      const holidayRowStyle = { fill: { fgColor: { rgb: "F3E8FF" } }, font: { sz: 9 } };
+      const defaultDataStyle = { fill: { fgColor: { rgb: "FFFFFF" } }, font: { sz: 9 } };
+
+      for (let d = 0; d < daysInMonth; d++) {
+        const rIdx = startDataRow + d;
+        const rowData = sheetAOA[rIdx];
+        const statusVal = rowData[6];
+        const dayTypeVal = rowData[7];
+        const otMinsVal = rowData[9];
+
+        let dayStyle = defaultDataStyle;
+        if (dayTypeVal === 'weekly_off') {
+          dayStyle = weeklyOffRowStyle;
+        } else if (dayTypeVal === 'holiday') {
+          dayStyle = holidayRowStyle;
+        } else if (statusVal === 'late') {
+          dayStyle = lateRowStyle;
+        } else if (statusVal === 'absent') {
+          dayStyle = absentRowStyle;
+        } else if (statusVal === 'present') {
+          dayStyle = presentRowStyle;
+        }
+
+        for (let c = 0; c < 15; c++) {
+          const cellRef = XLSX.utils.encode_cell({ r: rIdx, c });
+          if (!wsStaff[cellRef]) continue;
+
+          if (c === 9 && Number(otMinsVal) > 0) {
+            wsStaff[cellRef].s = {
+              fill: dayStyle.fill,
+              font: { sz: 9, bold: true, color: { rgb: "10B981" } }
+            };
+          } else {
+            wsStaff[cellRef].s = dayStyle;
+          }
+        }
+      }
+
+      // Style Totals Row
+      const totalsRowIdx = startDataRow + daysInMonth;
+      const wsTotalsStyle = {
+        fill: { fgColor: { rgb: "E8E8E8" } },
+        font: { bold: true, sz: 9 }
+      };
+      for (let c = 0; c < 15; c++) {
+        const cellRef = XLSX.utils.encode_cell({ r: totalsRowIdx, c });
+        if (wsStaff[cellRef]) {
+          wsStaff[cellRef].s = wsTotalsStyle;
+        }
+      }
+
+      const cleanedName = s.name.replace(/[\\\/\?\*\[\]]/g, '').substring(0, 30);
+      XLSX.utils.book_append_sheet(wb, wsStaff, cleanedName);
     });
 
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Detailed Attendance');
     XLSX.writeFile(wb, `Nearbi_Detailed_Attendance_${monthStr}_${yearStr}.xlsx`);
   };
 
@@ -484,16 +689,32 @@ export default function MonthlyReportTab({
       }
 
       const offDaysPerMonth = s.off_days_per_month as 0 | 2 | 4;
-      const divisor = offDaysPerMonth === 2 ? 12 : 6;
-      const earnedQuota = offDaysPerMonth === 0 ? 0 : Math.min(Math.floor(daysActuallyWorked / divisor), offDaysPerMonth);
+      let earnedQuota = 0;
+      if (offDaysPerMonth === 4) {
+        earnedQuota = Math.min(Math.floor(daysActuallyWorked / 6), 4);
+      } else if (offDaysPerMonth === 2) {
+        earnedQuota = Math.min(Math.floor(daysActuallyWorked / 12), 2);
+      }
 
       // Find confirmation for this staff if exists
       const conf = confirmations.find(c => c.staff_id === s.id);
-      const weeklyOffCount = staffAtt.filter(r => r.day_type === 'weekly_off').length;
+      
+      // Weekly offs taken (unique dates marked as weekly off in attendance, or as a weekly off leave request)
+      const weeklyOffDates = new Set([
+        ...staffAtt.filter(r => r.day_type === 'weekly_off').map(r => r.date),
+        ...staffLeaves.filter(l => l.is_weekly_off === true).map(l => l.date)
+      ]);
+      const weeklyOffsTaken = weeklyOffDates.size;
+      const weeklyOffsUsed = Math.min(weeklyOffsTaken, earnedQuota);
+
+      // absences = calendarDays - daysActuallyWorked
+      const absences = daysInMonth - daysActuallyWorked;
+
+      // deductedDays = absences - weeklyOffsUsed + manualExtraLeaves
       const manualExtraLeaves = conf?.extra_leave_days || 0;
-      const totalLeaves = staffLeaves.length + weeklyOffCount + manualExtraLeaves;
-      const leavesBeyondQuota = Math.max(0, totalLeaves - earnedQuota);
-      const missingDays = genuineAbsentDays + leavesBeyondQuota;
+      const deductedDays = Math.max(0, absences - weeklyOffsUsed) + manualExtraLeaves;
+
+      const missingDays = deductedDays;
 
       const approvedOTMinutes = staffAtt
         .filter((r: any) => r.ot_approved === true)

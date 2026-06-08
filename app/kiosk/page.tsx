@@ -10,7 +10,7 @@ import { calculateOTMinutes, calculateActualHours, calculateActualHoursWithBreak
 import { formatTime12hr } from '@/lib/utils';
 
 
-type KioskState = 'IDLE' | 'LOADING' | 'STAFF_FOUND' | 'CAMERA' | 'RESULT' | 'ERROR';
+type KioskState = 'IDLE' | 'LOADING' | 'STAFF_FOUND' | 'CAMERA' | 'RESULT' | 'ERROR' | 'SHORT_ATTENDANCE_WARNING';
 type FlowType = 'CHECK_IN' | 'CHECK_OUT' | null;
 
 export default function KioskPage() {
@@ -23,6 +23,7 @@ export default function KioskPage() {
   const [staff, setStaff] = useState<any>(null);
   const [flow, setFlow] = useState<FlowType>(null);
   const [errorMsg, setErrorMsg] = useState('');
+  const [pendingCheckout, setPendingCheckout] = useState<any>(null);
   const [cameraError, setCameraError] = useState(false);
   const [stats, setStats] = useState({ checkedIn: 0, late: 0, checkedOut: 0, onBreak: 0 });
   const [effectiveBranch, setEffectiveBranch] = useState<string | null>(null);
@@ -237,6 +238,32 @@ export default function KioskPage() {
   };
 
   const startCamera = async (type: FlowType) => {
+    if (type === 'CHECK_IN' && staff) {
+      const now = new Date();
+      const todayStr = now.toISOString().split('T')[0];
+      const shiftEnd = staff.shift?.end_time || staff.shifts?.end_time || '18:00';
+      const [seH, seM] = shiftEnd.split(':').map(Number);
+      
+      const shiftEndToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), seH, seM, 0);
+      const blockTime = new Date(shiftEndToday.getTime() + 2 * 60 * 60 * 1000);
+      
+      if (now.getTime() > blockTime.getTime()) {
+        const { data: record, error } = await supabase
+          .from('attendance')
+          .select('check_in_time')
+          .eq('staff_id', staff.id)
+          .eq('date', todayStr)
+          .maybeSingle();
+          
+        if (!error && (!record || !record.check_in_time)) {
+          setErrorMsg(`Check-in is blocked. Your shift ended at ${formatTime12hr(shiftEnd)}, and check-in is only allowed up to 2 hours after shift end.`);
+          setKioskState('ERROR');
+          setTimeout(() => resetKiosk(), 5000);
+          return;
+        }
+      }
+    }
+
     setFlow(type);
     setCameraError(false);
     try {
@@ -245,7 +272,6 @@ export default function KioskPage() {
       });
       streamRef.current = stream;
       setKioskState('CAMERA');
-      // Wait for video element ref to populate
       setTimeout(() => {
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
@@ -314,6 +340,179 @@ export default function KioskPage() {
 
     const { data } = supabase.storage.from('attendance-photos').getPublicUrl(filename);
     return data.publicUrl;
+  };
+
+  const saveCheckout = async (record: any, blob: Blob, now: Date, durationMins: number, isShortAttendance: boolean) => {
+    setKioskState('LOADING');
+    try {
+      const todayStr = new Date().toISOString().split('T')[0];
+      let photoUrl: string | null = null;
+      let photoUploadFailed = false;
+      try {
+        const fileName = `${staff.id}/${todayStr}_checkout_${Date.now()}.jpg`;
+        photoUrl = await uploadPhoto(blob, fileName);
+      } catch (uploadErr) {
+        console.error('Check-out photo upload failed:', uploadErr);
+        photoUploadFailed = true;
+      }
+
+      const actualOut =
+        String(now.getHours()).padStart(2, '0') + ':' +
+        String(now.getMinutes()).padStart(2, '0');
+
+      const shiftEnd = staff.shift?.end_time || staff.shifts?.end_time || '18:00';
+      const otMins = calculateOTMinutes(shiftEnd, actualOut);
+
+      const [shiftEndH, shiftEndM] = shiftEnd.split(':').map(Number);
+      const [actualOutH, actualOutM] = actualOut.split(':').map(Number);
+      const shiftEndMins = shiftEndH * 60 + shiftEndM;
+      const actualOutMins = actualOutH * 60 + actualOutM;
+
+      let earlyLeaveMins = 0;
+      const [ih, im] = record.check_in_time.split(':').map(Number);
+      const actualMins = (actualOutH * 60 + actualOutM) - (ih * 60 + im);
+      const actualHrs = Math.round((actualMins / 60) * 100) / 100;
+
+      const shiftHours = Number(staff.shift?.hours || staff.shifts?.hours || 9);
+
+      if (actualOutMins < shiftEndMins) {
+        const shortHours = Math.max(0, shiftHours - actualHrs);
+        earlyLeaveMins = Math.round(shortHours * 60);
+      }
+
+      const isEarlyLeave = earlyLeaveMins > 0;
+      const earlyLeaveMinutes = earlyLeaveMins;
+
+      // Update attendance dynamically
+      const checkoutRecord: any = {
+        check_out_time: actualOut,
+        ot_minutes: otMins,
+        actual_hours_worked: actualHrs,
+        early_leave_minutes: earlyLeaveMins,
+        check_out_photo: photoUrl || null,
+        short_attendance: isShortAttendance
+      };
+
+      if (otMins > 0) {
+        checkoutRecord.ot_approved = false; // pending approval
+      }
+
+      const { error: checkoutErr } = await supabase
+        .from('attendance')
+        .update(checkoutRecord)
+        .eq('id', record.id);
+
+      if (checkoutErr) {
+        console.error('Check-out save error:', checkoutErr);
+      }
+
+      try {
+        await supabase.from('wall_events').insert({
+          event_type: 'check_out',
+          staff_id: staff.id,
+          staff_name: staff.name,
+          branch_id: staff.branch_id,
+          description: `${staff.name} checked out at ${actualOut} (${actualHrs}h worked)`
+        });
+      } catch (e) {
+        console.error('Silent insert wall event failed:', e);
+      }
+
+      // Create OT adjustments and notifications if OT is > 0
+      if (otMins > 0) {
+        await supabase.from('attendance_adjustments').insert({
+          staff_id: staff.id,
+          date: todayStr,
+          type: 'ot',
+          minutes: otMins,
+          status: 'pending',
+        });
+
+        await createNotification({
+          type: 'ot_pending',
+          title: 'OT Approval Required',
+          message: `${staff.name} completed ${otMins}m Overtime.`,
+          branchId: effectiveBranch,
+          staffId: staff.id,
+          relatedId: todayStr,
+          targetRole: 'staff_executive',
+        });
+      }
+
+      let resMsg = 'Checked out successfully!';
+      let resDetails = '';
+
+      if (otMins > 0) {
+        const h = Math.floor(otMins / 60);
+        const m = otMins % 60;
+        resDetails = `OT pending approval: ${h > 0 ? h + 'h ' : ''}${m}m`;
+      } else if (isEarlyLeave) {
+        const h = Math.floor(earlyLeaveMinutes / 60);
+        const m = earlyLeaveMinutes % 60;
+        resDetails = `Left early: ${h > 0 ? h + 'h ' : ''}${m}m (deduction applies)`;
+      }
+
+      if (photoUploadFailed) {
+        resDetails = resDetails 
+          ? `${resDetails} | Check-out saved. Photo could not be uploaded.` 
+          : 'Check-out saved. Photo could not be uploaded.';
+      }
+
+      // Check kiosk announcements
+      let pending: any[] = [];
+      try {
+        const { data: announcements } = await supabase
+          .from('staff_announcements')
+          .select('*')
+          .eq('show_on_kiosk', true)
+          .or(`target.eq.all,target.eq.${staff.branch_id},target_staff_id.eq.${staff.id}`);
+
+        const { data: reads } = await supabase
+          .from('announcement_reads')
+          .select('*')
+          .eq('staff_id', staff.id);
+
+        const readMap = new Map(reads?.map(r => [r.announcement_id, r]) || []);
+
+        pending = announcements?.filter(a => {
+          const read = readMap.get(a.id);
+          if (!read) return true;
+          if (read.read_on_kiosk) return false;
+          if (a.is_important) {
+            const createdTime = new Date(a.created_at).getTime();
+            const hours = (now.getTime() - createdTime) / (1000 * 60 * 60);
+            if (hours >= 24) return true;
+          }
+          return false;
+        }) || [];
+      } catch (e) {
+        console.error('Failed to fetch kiosk announcements:', e);
+      }
+
+      setResultData({
+        status: isShortAttendance ? 'orange' : 'blue',
+        title: isShortAttendance ? 'SHORT ATTENDANCE' : 'CHECKED OUT',
+        message: resMsg,
+        details: resDetails,
+      });
+
+      setKioskState('RESULT');
+      setTimeout(() => {
+        if (pending.length > 0) {
+          setPendingAnnouncements(pending);
+          setActiveAnnouncement(pending[0]);
+        } else {
+          resetKiosk();
+        }
+        fetchStats();
+      }, 4000);
+
+    } catch (err: any) {
+      console.error(err);
+      setErrorMsg(err.message || 'An error occurred during submission.');
+      setKioskState('ERROR');
+      setTimeout(() => resetKiosk(), 3000);
+    }
   };
 
   const handleCapture = async () => {
@@ -399,21 +598,21 @@ export default function KioskPage() {
             yellow_fine: 50,
             orange_fine: 100,
             red_fine: 200,
-            yellow_free_passes: 4,
+            yellow_free_passes: 4
           };
 
           if (colorCode === 'yellow') {
-            // Check free passes count in current month
-            const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
-            const { count, error: countErr } = await supabase
+            // Count yellow passes
+            const startOfMonth = `${todayStr.substring(0, 8)}01`;
+            const { count } = await supabase
               .from('attendance')
               .select('*', { count: 'exact', head: true })
               .eq('staff_id', staff.id)
               .eq('color_code', 'yellow')
-              .gte('date', firstDayOfMonth)
-              .lte('date', todayStr);
+              .gte('date', startOfMonth);
 
-            if (!countErr && count !== null && count >= settings.yellow_free_passes) {
+            const passesUsed = count || 0;
+            if (passesUsed >= settings.yellow_free_passes) {
               fineAmount = Number(settings.yellow_fine);
             }
           } else if (colorCode === 'orange') {
@@ -423,37 +622,22 @@ export default function KioskPage() {
           }
         }
 
-        // Upsert attendance dynamically
-        const attendanceRecord: any = {
+        const currentMonthStr = todayStr.substring(0, 7);
+
+        // Upsert attendance record for check_in
+        const { error: upsertErr } = await supabase.from('attendance').upsert({
           staff_id: staff.id,
           date: todayStr,
           check_in_time: checkInTimeStr,
-          check_in_photo: photoUrl || null,
           status,
-          marked_by: 'kiosk'
-        };
+          color_code: colorCode,
+          minutes_late: minutesLate,
+          early_in_minutes: earlyInMinutes,
+          check_in_photo: photoUrl || null,
+          marked_by: 'kiosk',
+        }, { onConflict: 'staff_id,date' });
 
-        if (earlyInMinutes > 0) {
-          attendanceRecord.early_in_minutes = earlyInMinutes;
-          attendanceRecord.early_in_approved = false;
-        }
-
-        // Only add late columns if columns exist in target table
-        try {
-          if (minutesLate > 0) attendanceRecord.minutes_late = minutesLate;
-          if (colorCode) attendanceRecord.color_code = colorCode;
-        } catch(e) {
-          console.error('Failed to set late columns:', e);
-        }
-
-        const { error: attendanceErr } = await supabase
-          .from('attendance')
-          .upsert(attendanceRecord, { onConflict: 'staff_id,date' });
-
-        if (attendanceErr) {
-          console.error('Check-in save error:', attendanceErr);
-          // Still show success to staff but log the error
-        }
+        if (upsertErr) throw upsertErr;
 
         try {
           await supabase.from('wall_events').insert({
@@ -461,16 +645,15 @@ export default function KioskPage() {
             staff_id: staff.id,
             staff_name: staff.name,
             branch_id: staff.branch_id,
-            description: `${staff.name} checked in at ${checkInTimeStr} (${status === 'late' ? `${minutesLate}m late` : 'on time'})`
+            description: `${staff.name} checked in at ${checkInTimeStr} (${minutesLate > 0 ? minutesLate + 'm late' : 'on time'})`
           });
         } catch (e) {
           console.error('Silent insert wall event failed:', e);
         }
 
-        // Insert late fines if any
+        // Insert late fine if any
         if (fineAmount > 0) {
-          const currentMonthStr = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}`;
-          await supabase.from('late_fines').insert({
+          await supabase.from('late_fines').upsert({
             staff_id: staff.id,
             date: todayStr,
             late_minutes: minutesLate,
@@ -595,7 +778,6 @@ export default function KioskPage() {
         }, 4000);
 
       } else if (flow === 'CHECK_OUT') {
-        // Query today's attendance record
         const { data: record, error: recError } = await supabase
           .from('attendance')
           .select('*')
@@ -631,189 +813,18 @@ export default function KioskPage() {
           return;
         }
 
-        let photoUrl: string | null = null;
-        let photoUploadFailed = false;
-        try {
-          const fileName = `${staff.id}/${todayStr}_checkout_${Date.now()}.jpg`;
-          photoUrl = await uploadPhoto(blob, fileName);
-        } catch (uploadErr) {
-          console.error('Check-out photo upload failed:', uploadErr);
-          photoUploadFailed = true;
-        }
-
-        // Run in Supabase SQL editor to fix wrong OT:
-        // UPDATE attendance SET ot_minutes = 0,
-        // ot_approved = false
-        // WHERE ot_minutes > 600;
-
-        const now = new Date();
-        const actualOut =
-          String(now.getHours()).padStart(2, '0') + ':' +
-          String(now.getMinutes()).padStart(2, '0');
-
-        const shiftEnd = staff.shift?.end_time || staff.shifts?.end_time || '18:00';
-        const otMins = calculateOTMinutes(shiftEnd, actualOut);
-
-        const [shiftEndH, shiftEndM] = shiftEnd.split(':').map(Number);
-        const [actualOutH, actualOutM] = actualOut.split(':').map(Number);
-        const shiftEndMins = shiftEndH * 60 + shiftEndM;
-        const actualOutMins = actualOutH * 60 + actualOutM;
-
-        let earlyLeaveMins = 0;
-        const [ih, im] = record.check_in_time.split(':').map(Number);
-        const actualMins = (actualOutH * 60 + actualOutM) - (ih * 60 + im);
-        const actualHrs = Math.round((actualMins / 60) * 100) / 100;
-
-        const shiftHours = Number(staff.shift?.hours || staff.shifts?.hours || 9);
-
-        if (actualOutMins < shiftEndMins) {
-          const shortHours = Math.max(0, shiftHours - actualHrs);
-          earlyLeaveMins = Math.round(shortHours * 60);
-        }
-
-        const isEarlyLeave = earlyLeaveMins > 0;
-        const earlyLeaveMinutes = earlyLeaveMins;
-
-        // Update attendance dynamically
-        const checkoutRecord: any = {
-          check_out_time: actualOut,
-          ot_minutes: otMins,
-          actual_hours_worked: actualHrs,
-          early_leave_minutes: earlyLeaveMins,
-          check_out_photo: photoUrl || null,
-        };
-
         // Warn on short attendance (< 30 minutes)
         const [ciH, ciM] = record.check_in_time.split(':').map(Number);
         const ciTotalMins = ciH * 60 + ciM;
-        const coTotalMins = actualOutH * 60 + actualOutM;
+        const coTotalMins = nowForCheckout.getHours() * 60 + nowForCheckout.getMinutes();
         const durationMins = coTotalMins - ciTotalMins;
 
         if (durationMins > 0 && durationMins < 30) {
-          const proceed = window.confirm(
-            `Short attendance warning: Only ${durationMins} minutes worked. Continue checkout?`
-          );
-          if (!proceed) {
-            resetKiosk();
-            return;
-          }
-          checkoutRecord.short_attendance = true;
+          setPendingCheckout({ record, blob, nowForCheckout, durationMins });
+          setKioskState('SHORT_ATTENDANCE_WARNING');
+        } else {
+          await saveCheckout(record, blob, nowForCheckout, durationMins, false);
         }
-
-        if (otMins > 0) {
-          checkoutRecord.ot_approved = false; // pending approval
-        }
-
-        const { error: checkoutErr } = await supabase
-          .from('attendance')
-          .update(checkoutRecord)
-          .eq('id', record.id);
-
-        if (checkoutErr) {
-          console.error('Check-out save error:', checkoutErr);
-          // Still show success to staff but log the error
-        }
-
-        try {
-          await supabase.from('wall_events').insert({
-            event_type: 'check_out',
-            staff_id: staff.id,
-            staff_name: staff.name,
-            branch_id: staff.branch_id,
-            description: `${staff.name} checked out at ${actualOut} (${actualHrs}h worked)`
-          });
-        } catch (e) {
-          console.error('Silent insert wall event failed:', e);
-        }
-
-        // Create OT adjustments and notifications if OT is > 0
-        if (otMins > 0) {
-          await supabase.from('attendance_adjustments').insert({
-            staff_id: staff.id,
-            date: todayStr,
-            type: 'ot',
-            minutes: otMins,
-            status: 'pending',
-          });
-
-          await createNotification({
-            type: 'ot_pending',
-            title: 'OT Approval Required',
-            message: `${staff.name} completed ${otMins}m Overtime.`,
-            branchId: effectiveBranch,
-            staffId: staff.id,
-            relatedId: todayStr,
-            targetRole: 'staff_executive',
-          });
-        }
-
-        let resMsg = 'Checked out successfully!';
-        let resDetails = '';
-
-        if (otMins > 0) {
-          const h = Math.floor(otMins / 60);
-          const m = otMins % 60;
-          resDetails = `OT pending approval: ${h > 0 ? h + 'h ' : ''}${m}m`;
-        } else if (isEarlyLeave) {
-          const h = Math.floor(earlyLeaveMinutes / 60);
-          const m = earlyLeaveMinutes % 60;
-          resDetails = `Left early: ${h > 0 ? h + 'h ' : ''}${m}m (deduction applies)`;
-        }
-
-        if (photoUploadFailed) {
-          resDetails = resDetails 
-            ? `${resDetails} | Check-out saved. Photo could not be uploaded.` 
-            : 'Check-out saved. Photo could not be uploaded.';
-        }
-
-        // Check kiosk announcements
-        let pending: any[] = [];
-        try {
-          const { data: announcements } = await supabase
-            .from('staff_announcements')
-            .select('*')
-            .eq('show_on_kiosk', true)
-            .or(`target.eq.all,target.eq.${staff.branch_id},target_staff_id.eq.${staff.id}`);
-
-          const { data: reads } = await supabase
-            .from('announcement_reads')
-            .select('*')
-            .eq('staff_id', staff.id);
-
-          const readMap = new Map(reads?.map(r => [r.announcement_id, r]) || []);
-
-          pending = announcements?.filter(a => {
-            const read = readMap.get(a.id);
-            if (!read) return true;
-            if (read.read_on_kiosk) return false;
-            if (a.is_important) {
-              const createdTime = new Date(a.created_at).getTime();
-              const hours = (now.getTime() - createdTime) / (1000 * 60 * 60);
-              if (hours >= 24) return true;
-            }
-            return false;
-          }) || [];
-        } catch (e) {
-          console.error('Failed to fetch kiosk announcements:', e);
-        }
-
-        setResultData({
-          status: 'blue',
-          title: 'CHECKED OUT',
-          message: resMsg,
-          details: resDetails,
-        });
-
-        setKioskState('RESULT');
-        setTimeout(() => {
-          if (pending.length > 0) {
-            setPendingAnnouncements(pending);
-            setActiveAnnouncement(pending[0]);
-          } else {
-            resetKiosk();
-          }
-          fetchStats();
-        }, 4000);
       }
     } catch (err: any) {
       console.error(err);
@@ -1408,6 +1419,51 @@ export default function KioskPage() {
             <div className="bg-[#222222] border border-[#333333] text-white p-6 rounded-[14px] max-w-[280px] w-full text-center shadow-lg flex flex-col items-center">
               <AlertCircle size={48} strokeWidth={1.5} className="text-[#C0392B] mb-3" />
               <h3 className="text-base font-black leading-tight">{errorMsg}</h3>
+            </div>
+          </div>
+        )}
+
+        {/* Short Attendance Warning Modal */}
+        {kioskState === 'SHORT_ATTENDANCE_WARNING' && pendingCheckout && (
+          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-6">
+            <div className="bg-[#222222] border border-[#333333] rounded-[20px] max-w-sm w-full p-6 flex flex-col justify-between shadow-2xl min-h-[280px]">
+              <div className="space-y-4 text-center flex flex-col items-center">
+                <AlertTriangle size={48} strokeWidth={1.5} className="text-[#B8860B] mb-2" />
+                <h3 className="text-white text-lg font-black leading-tight">
+                  Short Attendance Warning
+                </h3>
+                <p className="text-gray-300 text-sm font-medium leading-relaxed">
+                  You have only worked <span className="text-amber-500 font-extrabold">{pendingCheckout.durationMins} minutes</span> today. Checking out now will mark your attendance as short attendance.
+                </p>
+                <p className="text-[#999999] text-xs font-semibold">
+                  Do you still wish to continue?
+                </p>
+              </div>
+
+              <div className="flex gap-3 mt-6">
+                <button
+                  type="button"
+                  onClick={() => resetKiosk()}
+                  className="flex-1 min-h-[44px] bg-transparent border border-[#333333] text-white font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
+                >
+                  Cancel Checkout
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await saveCheckout(
+                      pendingCheckout.record,
+                      pendingCheckout.blob,
+                      pendingCheckout.nowForCheckout,
+                      pendingCheckout.durationMins,
+                      true
+                    );
+                  }}
+                  className="flex-1 min-h-[44px] bg-[#B8860B] hover:bg-[#9E720A] text-white font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
+                >
+                  Continue Checkout
+                </button>
+              </div>
             </div>
           </div>
         )}

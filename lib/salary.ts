@@ -35,6 +35,7 @@ export function calculateSalary(
     approvedEarlyInMinutes: number;
     earlyLeaveMinutes: number;
     missingDays?: number;
+    weeklyOffsTaken?: number;
   }
 ) {
   const {
@@ -65,29 +66,31 @@ export function calculateSalary(
   const requiredWorkingDays = calendarDays - offDaysPerMonth;
 
   // Maximum paid days cap
-  const maxPaidDays = calendarDays + offDaysPerMonth;
+  const maxPaidDays = calendarDays;
 
-  // Paid days calculation
+  // Weekly off calculations
+  let earnedQuota = 0;
+  if (offDaysPerMonth === 4) {
+    earnedQuota = Math.min(Math.floor(daysActuallyWorked / 6), 4);
+  } else if (offDaysPerMonth === 2) {
+    earnedQuota = Math.min(Math.floor(daysActuallyWorked / 12), 2);
+  }
+
+  // Calculate paid days and missing days
   let paidDays: number;
-  let extraDaysWorked = 0;
-  let missingDays = 0;
+  let missingDays: number;
 
   if (attendance.missingDays !== undefined) {
+    // If missingDays (deductedDays) is explicitly passed (e.g. from BulkConfirmTab or MonthlyReportTab)
     missingDays = attendance.missingDays;
-    extraDaysWorked = Math.max(0, daysActuallyWorked - requiredWorkingDays);
-    paidDays = Math.max(0, calendarDays + extraDaysWorked - missingDays);
-    paidDays = Math.min(paidDays, maxPaidDays);
+    paidDays = Math.max(0, calendarDays - missingDays);
   } else {
-    if (daysActuallyWorked >= requiredWorkingDays) {
-      extraDaysWorked = daysActuallyWorked - requiredWorkingDays;
-      paidDays = Math.min(
-        calendarDays + extraDaysWorked,
-        maxPaidDays
-      );
-    } else {
-      missingDays = requiredWorkingDays - daysActuallyWorked;
-      paidDays = calendarDays - missingDays;
-    }
+    // Default dynamic calculation (e.g. from calculator tab or mobile screen)
+    const weeklyOffsTaken = attendance.weeklyOffsTaken ?? 0;
+    const weeklyOffsUsed = Math.min(weeklyOffsTaken, earnedQuota);
+    paidDays = daysActuallyWorked + weeklyOffsUsed;
+    paidDays = Math.min(paidDays, maxPaidDays);
+    missingDays = calendarDays - paidDays;
   }
 
   // Gross pay
@@ -121,7 +124,7 @@ export function calculateSalary(
     requiredWorkingDays,
     maxPaidDays,
     daysActuallyWorked,
-    extraDaysWorked,
+    extraDaysWorked: 0,
     missingDays,
     paidDays,
     grossPay: Math.round(grossPay * 100) / 100,
@@ -131,6 +134,7 @@ export function calculateSalary(
     confirmedLateFines,
     confirmedSpecialFines,
     netSalary: Math.round(netSalary * 100) / 100,
+    earnedQuota,
   };
 }
 

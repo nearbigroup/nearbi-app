@@ -13,6 +13,57 @@ import { formatCurrency, getPastMonths, formatMonthDisplay, getCurrentMonthStr }
 
 type Tab = 'bulk_confirm' | 'payslip' | 'payments' | 'report' | 'calculator';
 
+function CountUp({
+  value,
+  duration = 600,
+  prefix = '',
+  suffix = '',
+  decimals = 0,
+}: {
+  value: number;
+  duration?: number;
+  prefix?: string;
+  suffix?: string;
+  decimals?: number;
+}) {
+  const [current, setCurrent] = useState(0);
+
+  useEffect(() => {
+    let startTimestamp: number | null = null;
+    const endValue = value;
+    const startValue = 0;
+
+    const step = (timestamp: number) => {
+      if (!startTimestamp) startTimestamp = timestamp;
+      const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+      const easeProgress = 1 - Math.pow(1 - progress, 3); // easeOutCubic
+      const currentVal = easeProgress * (endValue - startValue) + startValue;
+      setCurrent(currentVal);
+      if (progress < 1) {
+        window.requestAnimationFrame(step);
+      } else {
+        setCurrent(endValue);
+      }
+    };
+
+    const animFrame = window.requestAnimationFrame(step);
+    return () => window.cancelAnimationFrame(animFrame);
+  }, [value, duration]);
+
+  const displayVal = current.toLocaleString('en-IN', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+
+  return (
+    <span>
+      {prefix}
+      {displayVal}
+      {suffix}
+    </span>
+  );
+}
+
 export default function SalaryPage() {
   const { canSeeSalaryBreakdown, isLoading } = useAuth();
   const [activeTab, setActiveTab] = useState<Tab>('bulk_confirm');
@@ -629,15 +680,15 @@ function SalaryCalculatorTab({
                 <div className="space-y-2.5 text-xs text-white/90">
                   <div className="flex justify-between">
                     <span className="text-white/50">Days worked:</span>
-                    <span className="font-extrabold">{displayData.daysWorked} days</span>
+                    <span className="font-extrabold"><CountUp value={displayData.daysWorked} suffix=" days" /></span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-white/50">Off bonus earned:</span>
-                    <span className="font-extrabold text-[var(--success)]">+{displayData.offBonusEarned} days</span>
+                    <span className="font-extrabold text-[var(--success)]">+<CountUp value={displayData.offBonusEarned} suffix=" days" /></span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-white/50">Paid days so far:</span>
-                    <span className="font-extrabold">{displayData.paidDays} days</span>
+                    <span className="font-extrabold"><CountUp value={displayData.paidDays} suffix=" days" /></span>
                   </div>
                   <div className="flex justify-between border-b border-dashed border-white/10 pb-2.5">
                     <span className="text-white/50">Daily rate:</span>
@@ -646,24 +697,24 @@ function SalaryCalculatorTab({
 
                   <div className="flex justify-between pt-1">
                     <span className="text-white/50">Gross so far:</span>
-                    <span className="font-extrabold">{formatCurrency(displayData.grossPay)}</span>
+                    <span className="font-extrabold"><CountUp value={displayData.grossPay} prefix="₹" /></span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-white/50">OT earned:</span>
-                    <span className="font-extrabold text-[var(--success)]">+{formatCurrency(displayData.otEarned)}</span>
+                    <span className="font-extrabold text-[var(--success)]">+<CountUp value={displayData.otEarned} prefix="₹" /></span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-white/50">Early leave:</span>
-                    <span className="font-extrabold text-[var(--danger)]">-{formatCurrency(displayData.earlyLeaveDeduction)}</span>
+                    <span className="font-extrabold text-[var(--danger)]">-<CountUp value={displayData.earlyLeaveDeduction} prefix="₹" /></span>
                   </div>
                   <div className="flex justify-between border-b border-white/15 pb-2.5">
                     <span className="text-white/50">Late fines:</span>
-                    <span className="font-extrabold text-[var(--danger)]">-{formatCurrency(displayData.finesSoFar)}</span>
+                    <span className="font-extrabold text-[var(--danger)]">-<CountUp value={displayData.finesSoFar} prefix="₹" /></span>
                   </div>
 
                   <div className="flex justify-between items-end pt-1">
                     <span className="text-[10px] font-black uppercase text-white/50 tracking-wider">SALARY SO FAR:</span>
-                    <span className="text-xl font-black text-white">{formatCurrency(displayData.netSalary)}</span>
+                    <span className="text-xl font-black text-white"><CountUp value={displayData.netSalary} prefix="₹" /></span>
                   </div>
                 </div>
 

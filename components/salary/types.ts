@@ -39,6 +39,7 @@ export interface SalaryConfirmation {
   confirmed_special_fines?: number;
   confirmed_at: string;
   confirmed_by: string;
+  paid_days?: number;
 }
 
 export interface SalaryPayment {

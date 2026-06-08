@@ -181,15 +181,29 @@ export default function BulkConfirmTab({ selectedMonth }: { selectedMonth?: stri
 
       // Quota logic
       const offDaysPerMonth = s.off_days_per_month as 0 | 2 | 4;
-      const divisor = offDaysPerMonth === 2 ? 12 : 6;
-      const earnedQuota = offDaysPerMonth === 0 ? 0 : Math.min(Math.floor(daysActuallyWorked / divisor), offDaysPerMonth);
+      let earnedQuota = 0;
+      if (offDaysPerMonth === 4) {
+        earnedQuota = Math.min(Math.floor(daysActuallyWorked / 6), 4);
+      } else if (offDaysPerMonth === 2) {
+        earnedQuota = Math.min(Math.floor(daysActuallyWorked / 12), 2);
+      }
 
-      const weeklyOffCount = staffAtt.filter(r => r.day_type === 'weekly_off').length;
+      // Weekly offs taken (unique dates marked as weekly off in attendance, or as a weekly off leave request)
+      const weeklyOffDates = new Set([
+        ...staffAtt.filter(r => r.day_type === 'weekly_off').map(r => r.date),
+        ...staffLeaves.filter(l => l.is_weekly_off === true).map(l => l.date)
+      ]);
+      const weeklyOffsTaken = weeklyOffDates.size;
+      const weeklyOffsUsed = Math.min(weeklyOffsTaken, earnedQuota);
+
+      // absences = calendarDays - daysActuallyWorked
+      const absences = daysInMonth - daysActuallyWorked;
+
+      // deductedDays = absences - weeklyOffsUsed + manualExtraLeaves
       const manualExtraLeaves = extraLeaves[s.id] || 0;
-      const totalLeaves = staffLeaves.length + weeklyOffCount + manualExtraLeaves;
-      const leavesBeyondQuota = Math.max(0, totalLeaves - earnedQuota);
+      const deductedDays = Math.max(0, absences - weeklyOffsUsed) + manualExtraLeaves;
 
-      const missingDays = genuineAbsentDays + leavesBeyondQuota;
+      const missingDays = deductedDays;
 
       // Approved OT minutes only
       const approvedOTMinutes = staffAtt

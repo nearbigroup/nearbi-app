@@ -164,6 +164,32 @@ export default function StaffAttendancePage() {
     fetchMonthData();
   }, [user, selectedMonth]);
 
+  // Touch swipe gesture handlers for month navigation
+  const [touchStart, setTouchStart] = useState<number | null>(null);
+  const [touchEnd, setTouchEnd] = useState<number | null>(null);
+  const minSwipeDistance = 50;
+
+  const onTouchStart = (e: React.TouchEvent) => {
+    setTouchStart(e.targetTouches[0].clientX);
+    setTouchEnd(null);
+  };
+
+  const onTouchMove = (e: React.TouchEvent) => {
+    setTouchEnd(e.targetTouches[0].clientX);
+  };
+
+  const onTouchEnd = () => {
+    if (!touchStart || !touchEnd) return;
+    const distance = touchStart - touchEnd;
+    const isLeftSwipe = distance > minSwipeDistance;
+    const isRightSwipe = distance < -minSwipeDistance;
+    if (isLeftSwipe) {
+      handleNextMonth();
+    } else if (isRightSwipe) {
+      handlePrevMonth();
+    }
+  };
+
   const handlePrevMonth = () => {
     const [yearStr, monthStr] = selectedMonth.split('-');
     let year = parseInt(yearStr);
@@ -195,6 +221,28 @@ export default function StaffAttendancePage() {
     const absent = attendance.filter(a => a.status === 'absent').length;
     return { present, late, absent };
   }, [attendance]);
+
+  // Weekly off balance calculations
+  const weeklyOffStats = useMemo(() => {
+    if (!staff) return { earnedQuota: 0, weeklyOffsUsed: 0, weeklyOffsRemaining: 0 };
+    const daysActuallyWorked = attendance.filter(a => a.check_in_time !== null && a.day_type !== 'weekly_off' && a.day_type !== 'holiday').length;
+    const offDaysPerMonth = staff.off_days_per_month as 0 | 2 | 4;
+    
+    let earnedQuota = 0;
+    if (offDaysPerMonth === 4) {
+      earnedQuota = Math.min(Math.floor(daysActuallyWorked / 6), 4);
+    } else if (offDaysPerMonth === 2) {
+      earnedQuota = Math.min(Math.floor(daysActuallyWorked / 12), 2);
+    }
+
+    const weeklyOffsTaken = attendance.filter(a => a.day_type === 'weekly_off').length + 
+      leaves.filter(l => l.status === 'approved' && l.is_weekly_off && l.date.substring(0, 7) === selectedMonth).length;
+
+    const weeklyOffsUsed = Math.min(weeklyOffsTaken, earnedQuota);
+    const weeklyOffsRemaining = earnedQuota - weeklyOffsUsed;
+
+    return { earnedQuota, weeklyOffsUsed, weeklyOffsRemaining };
+  }, [attendance, leaves, staff, selectedMonth]);
 
   const calendarDays = useMemo(() => {
     const [yearStr, monthStr] = selectedMonth.split('-');
@@ -234,10 +282,7 @@ export default function StaffAttendancePage() {
       let label = staff.shift.label;
       let note = 'Standard Shift';
       
-      if (isSunday && staff.off_days_per_month > 0) {
-        label = 'WEEKLY OFF';
-        note = 'Off day';
-      } else if (holiday) {
+      if (holiday) {
         label = `HOLIDAY (${holiday.name})`;
         note = 'Public Holiday';
       }
@@ -358,8 +403,21 @@ export default function StaffAttendancePage() {
         </div>
       </div>
 
+      {/* Weekly Off Balance Indicator */}
+      <div className="bg-white border border-[#E8E8E8] rounded-xl p-3 flex justify-between items-center text-xs font-bold text-gray-500 shadow-sm">
+        <span className="uppercase text-[9px] tracking-wider text-[var(--text-muted)]">Weekly Off Balance</span>
+        <span className="text-[#1A1A1A] font-mono">
+          {weeklyOffStats.earnedQuota} Earned | {weeklyOffStats.weeklyOffsUsed} Used | {weeklyOffStats.weeklyOffsRemaining} Remaining
+        </span>
+      </div>
+
       {/* 4. Calendar Grid */}
-      <div className="bg-white border border-[#E8E8E8] rounded-[18px] p-4 shadow-sm">
+      <div 
+        className="bg-white border border-[#E8E8E8] rounded-[18px] p-4 shadow-sm"
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+      >
         <div className="grid grid-cols-7 gap-1.5 text-center mb-3">
           {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((h, i) => (
             <span key={i} className="text-[9px] font-black uppercase text-[var(--text-muted)] tracking-wider">
@@ -418,8 +476,8 @@ export default function StaffAttendancePage() {
 
               if (isLeaveApproved) {
                 cellClass += "bg-[var(--info-bg)] border-[var(--info)]/20 text-[var(--info)] hover:bg-[var(--info-bg)]/80";
-              } else if (holiday || (isSunday && staff?.off_days_per_month > 0)) {
-                // Weekly off / Holiday is White with dotted outline or dashed marker
+              } else if (holiday) {
+                // Holiday is White with dotted outline or dashed marker
                 cellClass += "bg-white border-dashed border-gray-300 text-gray-400 hover:border-gray-500";
               } else {
                 // Unmarked past date = Absent
@@ -436,7 +494,7 @@ export default function StaffAttendancePage() {
                 dateStr,
                 record: record || null,
                 isLeaveApproved: leaves.some(l => l.date === dateStr),
-                isOffDay: isSunday && staff?.off_days_per_month > 0,
+                isOffDay: record?.day_type === 'weekly_off',
                 holiday: holiday || null,
                 fines: dayFines
               });
