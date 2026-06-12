@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
-import { Lock, Plus, Trash2 } from 'lucide-react';
+import { Lock, Plus, Trash2, CheckCircle2, Circle, Search } from 'lucide-react';
 
 interface FineSettings {
   id: string;
@@ -81,10 +81,9 @@ export default function SettingsPage() {
 
   const [exemptions, setExemptions] = useState<Exemption[]>([]);
   const [staffList, setStaffList] = useState<Staff[]>([]);
-  const [selectedStaffId, setSelectedStaffId] = useState('');
+  const [exemptionSearch, setExemptionSearch] = useState('');
 
   const [savingSettings, setSavingSettings] = useState(false);
-  const [addingExemption, setAddingExemption] = useState(false);
 
   const [breakSettings, setBreakSettings] = useState<BreakSettings>({
     morning_tea_duration: 10,
@@ -218,18 +217,36 @@ export default function SettingsPage() {
     e.preventDefault();
     setSavingSettings(true);
     try {
+      const targetId = settings?.id || '00000000-0000-0000-0000-000000000001';
       const { error } = await supabase
         .from('fine_settings')
         .upsert({
-          id: 'default',
+          id: targetId,
           yellow_fine: Number(settings.yellow_fine),
           orange_fine: Number(settings.orange_fine),
           red_fine: Number(settings.red_fine),
           yellow_free_passes: Number(settings.yellow_free_passes),
-        });
+          updated_by: user?.email || 'admin',
+          updated_at: new Date().toISOString()
+        }, { onConflict: 'id' });
 
-      if (error) throw error;
-      showToast('Settings saved successfully!');
+      if (error) {
+        console.error('Settings save error:', error);
+        // Try insert if upsert fails
+        const { error: insError } = await supabase
+          .from('fine_settings')
+          .insert({
+            yellow_fine: Number(settings.yellow_fine),
+            orange_fine: Number(settings.orange_fine),
+            red_fine: Number(settings.red_fine),
+            yellow_free_passes: Number(settings.yellow_free_passes),
+            updated_by: user?.email || 'admin'
+          });
+        if (insError) throw insError;
+      }
+
+      showToast('Settings saved ✓');
+      fetchData();
     } catch (err: any) {
       console.error('Save settings error:', err);
       showToast('Error saving settings.');
@@ -238,51 +255,33 @@ export default function SettingsPage() {
     }
   };
 
-  const handleAddExemption = async () => {
-    if (!selectedStaffId) return;
-    setAddingExemption(true);
+  const handleToggleExemption = async (staffId: string) => {
+    const existing = exemptions.find((ex) => ex.staff_id === staffId);
     try {
-      // Check if already exists
-      const exists = exemptions.some((ex) => ex.staff_id === selectedStaffId);
-      if (exists) {
-        showToast('Staff is already exempt!');
-        setAddingExemption(false);
-        return;
+      if (existing) {
+        const { error } = await supabase
+          .from('staff_fine_exemptions')
+          .delete()
+          .eq('id', existing.id);
+
+        if (error) throw error;
+        showToast('Exemption removed ✓');
+      } else {
+        const pKey = 'ex_' + Math.random().toString(36).substr(2, 9);
+        const { error } = await supabase
+          .from('staff_fine_exemptions')
+          .insert({
+            id: pKey,
+            staff_id: staffId,
+          });
+
+        if (error) throw error;
+        showToast('Exemption added ✓');
       }
-
-      const pKey = 'ex_' + Math.random().toString(36).substr(2, 9);
-      const { error } = await supabase
-        .from('staff_fine_exemptions')
-        .insert({
-          id: pKey,
-          staff_id: selectedStaffId,
-        });
-
-      if (error) throw error;
-      setSelectedStaffId('');
-      showToast('Exemption added!');
       fetchData();
     } catch (err: any) {
-      console.error('Add exemption error:', err);
-      showToast('Error adding exemption.');
-    } finally {
-      setAddingExemption(false);
-    }
-  };
-
-  const handleRemoveExemption = async (id: string) => {
-    try {
-      const { error } = await supabase
-        .from('staff_fine_exemptions')
-        .delete()
-        .eq('id', id);
-
-      if (error) throw error;
-      showToast('Exemption removed!');
-      fetchData();
-    } catch (err: any) {
-      console.error('Remove exemption error:', err);
-      showToast('Error removing exemption.');
+      console.error('Toggle exemption error:', err);
+      showToast('Error toggling exemption.');
     }
   };
 
@@ -961,76 +960,72 @@ export default function SettingsPage() {
 
           {/* Fine Exemptions Card */}
           <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-5 shadow-sm space-y-4">
-            <h2 className="text-[#1A1A1A] font-bold text-sm">
-              2. Fine Exemptions
-            </h2>
-
-            {/* Add exemption form */}
-            <div className="space-y-2">
-              <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider">
-                Exempt Staff Member
-              </label>
-              <div className="flex gap-2">
-                <select
-                  value={selectedStaffId}
-                  onChange={(e) => setSelectedStaffId(e.target.value)}
-                  className="flex-1 text-[#1A1A1A] font-bold"
-                >
-                  <option value="" className="bg-white text-[var(--text-muted)]">Select staff member...</option>
-                  {staffList.map((st) => (
-                    <option key={st.id} value={st.id} className="bg-white">
-                      {st.name} ({st.department} - {getBranchName(st.branch_id)})
-                    </option>
-                  ))}
-                </select>
-                
-                <button
-                  type="button"
-                  onClick={handleAddExemption}
-                  disabled={addingExemption || !selectedStaffId}
-                  className="bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold text-xs px-4 rounded-xl active:scale-95 disabled:opacity-30 disabled:pointer-events-none flex items-center justify-center space-x-1"
-                >
-                  <Plus size={14} strokeWidth={1.5} style={{ color: 'currentColor' }} />
-                  <span>Add</span>
-                </button>
-              </div>
+            <div className="flex justify-between items-center">
+              <h2 className="text-[#1A1A1A] font-bold text-sm">
+                2. Fine Exemptions
+              </h2>
+              <span className="bg-[#E8F5E9] text-[#2E7D32] text-[10px] font-bold px-2 py-0.5 rounded-full">
+                {exemptions.length} staff exempted
+              </span>
             </div>
 
-            {/* List of exemptions */}
-            <div className="space-y-2 pt-2 border-t border-[var(--border)]">
-              <h3 className="text-xs font-bold text-[var(--text-secondary)] mb-2">Exempted List</h3>
-              
-              {exemptions.length === 0 ? (
+            {/* Search bar */}
+            <div className="relative">
+              <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-[var(--text-muted)]">
+                <Search size={14} />
+              </span>
+              <input
+                type="text"
+                value={exemptionSearch}
+                onChange={(e) => setExemptionSearch(e.target.value)}
+                placeholder="Search staff by name..."
+                className="pl-9 w-full min-h-[40px] text-xs rounded-xl border border-[var(--border)] focus:outline-none focus:ring-1 focus:ring-[#1A1A1A] text-[#1A1A1A] font-medium"
+              />
+            </div>
+
+            {/* Scrollable list of staff with checkboxes */}
+            <div className="space-y-1.5 max-h-[250px] overflow-y-auto pr-1">
+              {staffList.filter((st) => st.name.toLowerCase().includes(exemptionSearch.toLowerCase())).length === 0 ? (
                 <p className="text-xs text-[var(--text-muted)] font-semibold italic text-center py-4">
-                  No staff members currently exempted.
+                  No staff members found.
                 </p>
               ) : (
-                <div className="space-y-2">
-                  {exemptions.map((ex) => (
-                    <div
-                      key={ex.id}
-                      className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-2.5 flex items-center justify-between"
-                    >
-                      <div>
-                        <div className="font-bold text-xs text-[#1A1A1A]">
-                          {ex.staff?.name}
-                        </div>
-                        <div className="text-[10px] text-[var(--text-muted)] font-bold">
-                          {ex.staff?.department} • {getBranchName(ex.staff?.branch_id)}
-                        </div>
-                      </div>
-                      
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveExemption(ex.id)}
-                        className="text-[var(--danger)] hover:bg-[var(--danger-bg)] p-2 rounded active:scale-90 flex items-center justify-center"
-                        title="Remove Exemption"
+                staffList
+                  .filter((st) => st.name.toLowerCase().includes(exemptionSearch.toLowerCase()))
+                  .map((st) => {
+                    const isExempted = exemptions.some((ex) => ex.staff_id === st.id);
+                    return (
+                      <div
+                        key={st.id}
+                        onClick={() => handleToggleExemption(st.id)}
+                        className="flex items-center justify-between p-2.5 rounded-xl border border-[#F0F0F0] hover:bg-[#F9F9F9] cursor-pointer active:bg-gray-100 transition-colors"
                       >
-                        <Trash2 size={16} strokeWidth={1.5} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
+                        <div className="flex items-center space-x-2.5">
+                          <span className="flex-shrink-0">
+                            {isExempted ? (
+                              <CheckCircle2 size={18} className="text-[#2E7D32]" fill="#E8F5E9" />
+                            ) : (
+                              <Circle size={18} className="text-[#CCCCCC]" />
+                            )}
+                          </span>
+                          <div>
+                            <div className="font-bold text-xs text-[#1A1A1A]">
+                              {st.name}
+                            </div>
+                            <div className="text-[10px] text-[var(--text-muted)] font-semibold">
+                              {st.department} • {getBranchName(st.branch_id)}
+                            </div>
+                          </div>
+                        </div>
+                        
+                        {isExempted && (
+                          <span className="text-[10px] text-[#2E7D32] font-bold bg-[#E8F5E9] px-2 py-0.5 rounded">
+                            Exempted
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })
               )}
             </div>
           </div>

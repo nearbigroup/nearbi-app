@@ -316,144 +316,25 @@ export default function MonthlyReportTab({
 
     const wb = XLSX.utils.book_new();
 
-    // -------------------------------------------------------------
-    // SHEET 1: Summary of All Staff
-    // -------------------------------------------------------------
-    const summaryHeaders = [
-      "SL.NO", "NAME", "BRANCH", "DEPARTMENT", "BASE SALARY",
-      "PAID DAYS", "DEDUCTIONS", "OT PAY", "NET SALARY", "STATUS"
+    const detailedHeaders = [
+      "SL.NO", "STAFF NAME", "BRANCH", "DEPARTMENT", "SHIFT", "DATE", "DAY", 
+      "CHECK IN", "CHECK OUT", "ACTUAL HOURS", "SHIFT HOURS", "STATUS", 
+      "DAY TYPE", "LATE MINS", "OT MINS", "OT APPROVED", "EARLY IN MINS", 
+      "EARLY LEAVE MINS", "LATE FINE", "FINE STATUS"
     ];
 
-    const summaryRows: any[][] = [summaryHeaders];
+    const detailedRows: any[][] = [detailedHeaders];
     const sortedStaff = [...staffList].sort((a, b) => a.name.localeCompare(b.name));
+    let globalRowIndex = 0;
 
-    sortedStaff.forEach((s, idx) => {
-      const conf = reportRecords.find(c => c.staff_id === s.id);
-      const isPaid = payments.find(p => p.staff_id === s.id);
-
-      const baseSalary = conf?.base_salary ?? s.monthly_salary;
-      const netSalary = conf?.net_salary ?? 0;
-      const otPay = conf?.ot_pay ?? 0;
-      const deductions = conf?.leave_deduction ?? 0;
-      const paidDays = conf?.paid_days ?? 30;
-
-      let status = "Not Confirmed";
-      if (confirmations.length > 0) {
-        status = isPaid ? "Paid" : "Pending";
-      }
-
-      summaryRows.push([
-        idx + 1,
-        s.name,
-        s.branch?.name || s.branch_id || '',
-        s.department || '',
-        Number(baseSalary),
-        Number(paidDays),
-        Number(deductions),
-        Number(otPay),
-        Number(netSalary),
-        status
-      ]);
-    });
-
-    // Totals Row
-    const totalBase = summaryRows.slice(1).reduce((sum, r) => sum + Number(r[4] || 0), 0);
-    const totalDeductions = summaryRows.slice(1).reduce((sum, r) => sum + Number(r[6] || 0), 0);
-    const totalOTPay = summaryRows.slice(1).reduce((sum, r) => sum + Number(r[7] || 0), 0);
-    const totalNetPayroll = summaryRows.slice(1).reduce((sum, r) => sum + Number(r[8] || 0), 0);
-
-    summaryRows.push([
-      "",
-      "TOTAL",
-      "",
-      "",
-      totalBase,
-      "",
-      totalDeductions,
-      totalOTPay,
-      totalNetPayroll,
-      ""
-    ]);
-
-    const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
-
-    // Styling Summary Sheet
-    const headerStyle = {
-      fill: { fgColor: { rgb: "1E2028" } },
-      font: { bold: true, color: { rgb: "FFFFFF" }, sz: 11 },
-      alignment: { horizontal: "center", vertical: "center" }
-    };
-    const rowStyleEven = {
-      fill: { fgColor: { rgb: "FFFFFF" } },
-      font: { sz: 10 }
-    };
-    const rowStyleOdd = {
-      fill: { fgColor: { rgb: "F8F8F8" } },
-      font: { sz: 10 }
-    };
-    const totalStyle = {
-      fill: { fgColor: { rgb: "E8E8E8" } },
-      font: { bold: true, sz: 10 }
-    };
-
-    for (let r = 0; r < summaryRows.length; r++) {
-      for (let c = 0; c < summaryRows[r].length; c++) {
-        const cellRef = XLSX.utils.encode_cell({ r, c });
-        if (!wsSummary[cellRef]) continue;
-
-        if (r === 0) {
-          wsSummary[cellRef].s = headerStyle;
-        } else if (r === summaryRows.length - 1) {
-          wsSummary[cellRef].s = totalStyle;
-        } else {
-          wsSummary[cellRef].s = r % 2 === 0 ? rowStyleEven : rowStyleOdd;
-        }
-      }
-    }
-
-    XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
-
-    // -------------------------------------------------------------
-    // SHEET 2 ONWARDS: Individual Staff Attendance
-    // -------------------------------------------------------------
     sortedStaff.forEach((s) => {
       const staffAtt = attendanceRecords.filter((r) => r.staff_id === s.id);
       const staffLeaves = leaveRequests.filter(
         (l: any) => l.staff_id === s.id && l.status === 'approved'
       );
-      const conf = reportRecords.find(c => c.staff_id === s.id);
 
-      const baseSalary = conf?.base_salary ?? s.monthly_salary;
-      const netSalary = conf?.net_salary ?? 0;
-      const otPay = conf?.ot_pay ?? 0;
-      const deductions = conf?.leave_deduction ?? 0;
-
-      // Metadata Block
-      const sheetAOA: any[][] = [
-        ["STAFF ATTENDANCE DETAIL - " + formatMonthDisplay(selectedMonth)],
-        ["Name:", s.name, "Department:", s.department || ''],
-        ["Branch:", s.branch?.name || s.branch_id || '', "Shift:", s.shift?.label || 'N/A'],
-        ["Base Salary:", Number(baseSalary), "Net Salary:", Number(netSalary)],
-        ["OT Pay:", Number(otPay), "Deductions:", Number(deductions)],
-        [], // Empty row
-        [
-          "DATE", "DAY", "CHECK IN", "CHECK OUT", "ACTUAL HOURS", "SHIFT HOURS",
-          "STATUS", "DAY TYPE", "LATE MINS", "OT MINS", "OT APPROVED",
-          "EARLY IN MINS", "EARLY LEAVE MINS", "LATE FINE", "FINE STATUS"
-        ]
-      ];
-
-      const startDataRow = 7;
-      let actualWorkedSum = 0;
-      let shiftHoursSum = 0;
-      let lateMinsSum = 0;
-      let otMinsSum = 0;
-      let earlyInMinsSum = 0;
-      let earlyLeaveMinsSum = 0;
-      let lateFineSum = 0;
-
-      // Fill in daily data
       for (let d = 1; d <= daysInMonth; d++) {
+        globalRowIndex++;
         const dateStr = `${selectedMonth}-${String(d).padStart(2, '0')}`;
         const att = staffAtt.find((r: any) => r.date === dateStr);
         const hasLeave = staffLeaves.find((l: any) => l.date === dateStr);
@@ -466,7 +347,6 @@ export default function MonthlyReportTab({
         let actualHours = 0;
         const shiftHours = s.shift?.hours || 9;
         let status = 'absent';
-        let colorCode = '';
         let lateMins = 0;
         let otMins = 0;
         let otApproved = 'No';
@@ -488,7 +368,6 @@ export default function MonthlyReportTab({
             actualHours = mins > 0 ? Math.round((mins / 60) * 100) / 100 : 0;
           }
           status = att.status || '';
-          colorCode = att.color_code || '';
           lateMins = att.minutes_late || 0;
           otMins = att.ot_minutes || 0;
           otApproved = att.ot_approved ? 'Yes' : 'No';
@@ -509,15 +388,12 @@ export default function MonthlyReportTab({
           else fineStatus = 'Pending';
         }
 
-        actualWorkedSum += actualHours;
-        shiftHoursSum += shiftHours;
-        lateMinsSum += lateMins;
-        otMinsSum += otMins;
-        earlyInMinsSum += earlyInMins;
-        earlyLeaveMinsSum += earlyLeaveMins;
-        lateFineSum += lateFineAmt;
-
-        sheetAOA.push([
+        detailedRows.push([
+          globalRowIndex,
+          s.name,
+          s.branch?.name || s.branch_id || '',
+          s.department || '',
+          s.shift?.label || 'N/A',
           dateStr,
           dayName,
           checkIn,
@@ -535,158 +411,184 @@ export default function MonthlyReportTab({
           fineStatus
         ]);
       }
-
-      // Add Totals row
-      sheetAOA.push([
-        "TOTAL", "", "", "",
-        Math.round(actualWorkedSum * 100) / 100,
-        Math.round(shiftHoursSum * 100) / 100,
-        "", "",
-        lateMinsSum,
-        otMinsSum,
-        "",
-        earlyInMinsSum,
-        earlyLeaveMinsSum,
-        lateFineSum,
-        ""
-      ]);
-
-      const wsStaff = XLSX.utils.aoa_to_sheet(sheetAOA);
-
-      // Apply styling to Metadata (First 5 rows)
-      const titleStyle = { font: { bold: true, sz: 14, color: { rgb: "1E2028" } } };
-      const metaLabelStyle = { font: { bold: true, sz: 10, color: { rgb: "555555" } } };
-      const metaValStyle = { font: { sz: 10, bold: false } };
-      const metaValBoldStyle = { font: { sz: 10, bold: true, color: { rgb: "1E2028" } } };
-
-      for (let r = 0; r < 5; r++) {
-        for (let c = 0; c < 15; c++) {
-          const cellRef = XLSX.utils.encode_cell({ r, c });
-          if (!wsStaff[cellRef]) continue;
-
-          if (r === 0) {
-            wsStaff[cellRef].s = titleStyle;
-          } else {
-            if (c % 2 === 0) {
-              wsStaff[cellRef].s = metaLabelStyle;
-            } else {
-              const isBoldVal = (r === 3 && c === 3) || (r === 4 && c === 1);
-              wsStaff[cellRef].s = isBoldVal ? metaValBoldStyle : metaValStyle;
-            }
-          }
-        }
-      }
-
-      // Apply styling to Table Headers (Row 6)
-      const tableHeaderStyle = {
-        fill: { fgColor: { rgb: "1E2028" } },
-        font: { bold: true, color: { rgb: "FFFFFF" }, sz: 10 },
-        alignment: { horizontal: "center", vertical: "center" }
-      };
-      for (let c = 0; c < 15; c++) {
-        const cellRef = XLSX.utils.encode_cell({ r: 6, c });
-        if (wsStaff[cellRef]) {
-          wsStaff[cellRef].s = tableHeaderStyle;
-        }
-      }
-
-      // Apply styling to Table Data
-      const presentRowStyle = { fill: { fgColor: { rgb: "E6F4EA" } }, font: { sz: 9 } };
-      const lateRowStyle = { fill: { fgColor: { rgb: "FEF3C7" } }, font: { sz: 9 } };
-      const absentRowStyle = { fill: { fgColor: { rgb: "FCE8E6" } }, font: { sz: 9 } };
-      const weeklyOffRowStyle = { fill: { fgColor: { rgb: "E8F0FE" } }, font: { sz: 9 } };
-      const holidayRowStyle = { fill: { fgColor: { rgb: "F3E8FF" } }, font: { sz: 9 } };
-      const defaultDataStyle = { fill: { fgColor: { rgb: "FFFFFF" } }, font: { sz: 9 } };
-
-      for (let d = 0; d < daysInMonth; d++) {
-        const rIdx = startDataRow + d;
-        const rowData = sheetAOA[rIdx];
-        const statusVal = rowData[6];
-        const dayTypeVal = rowData[7];
-        const otMinsVal = rowData[9];
-
-        let dayStyle = defaultDataStyle;
-        if (dayTypeVal === 'weekly_off') {
-          dayStyle = weeklyOffRowStyle;
-        } else if (dayTypeVal === 'holiday') {
-          dayStyle = holidayRowStyle;
-        } else if (statusVal === 'late') {
-          dayStyle = lateRowStyle;
-        } else if (statusVal === 'absent') {
-          dayStyle = absentRowStyle;
-        } else if (statusVal === 'present') {
-          dayStyle = presentRowStyle;
-        }
-
-        for (let c = 0; c < 15; c++) {
-          const cellRef = XLSX.utils.encode_cell({ r: rIdx, c });
-          if (!wsStaff[cellRef]) continue;
-
-          if (c === 9 && Number(otMinsVal) > 0) {
-            wsStaff[cellRef].s = {
-              fill: dayStyle.fill,
-              font: { sz: 9, bold: true, color: { rgb: "10B981" } }
-            };
-          } else {
-            wsStaff[cellRef].s = dayStyle;
-          }
-        }
-      }
-
-      // Style Totals Row
-      const totalsRowIdx = startDataRow + daysInMonth;
-      const wsTotalsStyle = {
-        fill: { fgColor: { rgb: "E8E8E8" } },
-        font: { bold: true, sz: 9 }
-      };
-      for (let c = 0; c < 15; c++) {
-        const cellRef = XLSX.utils.encode_cell({ r: totalsRowIdx, c });
-        if (wsStaff[cellRef]) {
-          wsStaff[cellRef].s = wsTotalsStyle;
-        }
-      }
-
-      const cleanedName = s.name.replace(/[\\\/\?\*\[\]]/g, '').substring(0, 30);
-      XLSX.utils.book_append_sheet(wb, wsStaff, cleanedName);
     });
 
+    const wsDetailed = XLSX.utils.aoa_to_sheet(detailedRows);
+
+    const colWidths = detailedHeaders.map((_, colIndex) => {
+      let maxLen = 10;
+      detailedRows.forEach(row => {
+        const val = row[colIndex];
+        if (val !== null && val !== undefined) {
+          const len = String(val).length;
+          if (len > maxLen) maxLen = len;
+        }
+      });
+      return { wch: maxLen + 2 };
+    });
+    wsDetailed['!cols'] = colWidths;
+
+    const headerStyle = {
+      fill: { fgColor: { rgb: "1E2028" } },
+      font: { bold: true, color: { rgb: "FFFFFF" }, sz: 10 },
+      alignment: { horizontal: "center", vertical: "center", wrapText: true },
+      border: {
+        top: { style: "thin", color: { rgb: "CCCCCC" } },
+        bottom: { style: "thin", color: { rgb: "CCCCCC" } },
+        left: { style: "thin", color: { rgb: "CCCCCC" } },
+        right: { style: "thin", color: { rgb: "CCCCCC" } }
+      }
+    };
+
+    const presentStyle = { fill: { fgColor: { rgb: "E6F4EA" } }, font: { sz: 9 } };
+    const lateStyle = { fill: { fgColor: { rgb: "FEF3C7" } }, font: { sz: 9 } };
+    const absentStyle = { fill: { fgColor: { rgb: "FCE8E6" } }, font: { sz: 9 } };
+    const weeklyOffStyle = { fill: { fgColor: { rgb: "E8F0FE" } }, font: { sz: 9 } };
+    const holidayStyle = { fill: { fgColor: { rgb: "F3E8FF" } }, font: { sz: 9 } };
+    const defaultStyleEven = { fill: { fgColor: { rgb: "FFFFFF" } }, font: { sz: 9 } };
+    const defaultStyleOdd = { fill: { fgColor: { rgb: "F9F9F9" } }, font: { sz: 9 } };
+
+    for (let r = 0; r < detailedRows.length; r++) {
+      const rowData = detailedRows[r];
+      const statusVal = rowData[11];
+      const dayTypeVal = rowData[12];
+
+      let rowStyle = r % 2 === 0 ? defaultStyleEven : defaultStyleOdd;
+      if (r > 0) {
+        if (dayTypeVal === 'weekly_off') {
+          rowStyle = weeklyOffStyle;
+        } else if (dayTypeVal === 'holiday') {
+          rowStyle = holidayStyle;
+        } else if (statusVal === 'late') {
+          rowStyle = lateStyle;
+        } else if (statusVal === 'absent') {
+          rowStyle = absentStyle;
+        } else if (statusVal === 'present') {
+          rowStyle = presentStyle;
+        }
+      }
+
+      for (let c = 0; c < detailedHeaders.length; c++) {
+        const cellRef = XLSX.utils.encode_cell({ r, c });
+        if (!wsDetailed[cellRef]) continue;
+
+        if (r === 0) {
+          wsDetailed[cellRef].s = headerStyle;
+        } else {
+          wsDetailed[cellRef].s = rowStyle;
+        }
+      }
+    }
+
+    XLSX.utils.book_append_sheet(wb, wsDetailed, 'Daily Details');
     XLSX.writeFile(wb, `Nearbi_Detailed_Attendance_${monthStr}_${yearStr}.xlsx`);
   };
 
   // --- Monthly Summary Export ---
-  const handleMonthlySummaryExport = () => {
+  const createStyledSummarySheet = (dataRows: any[][]) => {
+    const ws = XLSX.utils.aoa_to_sheet(dataRows);
+
+    const colWidths = dataRows[0].map((_, colIndex) => {
+      let maxLen = 10;
+      dataRows.forEach(row => {
+        const val = row[colIndex];
+        if (val !== null && val !== undefined) {
+          const len = String(val).length;
+          if (len > maxLen) maxLen = len;
+        }
+      });
+      return { wch: maxLen + 2 };
+    });
+    ws['!cols'] = colWidths;
+
+    const headerStyle = {
+      fill: { fgColor: { rgb: "1E2028" } },
+      font: { bold: true, color: { rgb: "FFFFFF" }, sz: 10 },
+      alignment: { horizontal: "center", vertical: "center", wrapText: true },
+      border: {
+        top: { style: "thin", color: { rgb: "CCCCCC" } },
+        bottom: { style: "thin", color: { rgb: "CCCCCC" } },
+        left: { style: "thin", color: { rgb: "CCCCCC" } },
+        right: { style: "thin", color: { rgb: "CCCCCC" } }
+      }
+    };
+    
+    const dataStyleEven = {
+      fill: { fgColor: { rgb: "FFFFFF" } },
+      font: { sz: 9 },
+      border: {
+        top: { style: "thin", color: { rgb: "EAEAEA" } },
+        bottom: { style: "thin", color: { rgb: "EAEAEA" } },
+        left: { style: "thin", color: { rgb: "EAEAEA" } },
+        right: { style: "thin", color: { rgb: "EAEAEA" } }
+      }
+    };
+
+    const dataStyleOdd = {
+      fill: { fgColor: { rgb: "F9F9F9" } },
+      font: { sz: 9 },
+      border: {
+        top: { style: "thin", color: { rgb: "EAEAEA" } },
+        bottom: { style: "thin", color: { rgb: "EAEAEA" } },
+        left: { style: "thin", color: { rgb: "EAEAEA" } },
+        right: { style: "thin", color: { rgb: "EAEAEA" } }
+      }
+    };
+
+    const totalsStyle = {
+      fill: { fgColor: { rgb: "E8E8E8" } },
+      font: { bold: true, sz: 10 },
+      border: {
+        top: { style: "medium", color: { rgb: "1E2028" } },
+        bottom: { style: "double", color: { rgb: "1E2028" } },
+        left: { style: "thin", color: { rgb: "CCCCCC" } },
+        right: { style: "thin", color: { rgb: "CCCCCC" } }
+      }
+    };
+
+    for (let r = 0; r < dataRows.length; r++) {
+      for (let c = 0; c < dataRows[r].length; c++) {
+        const cellRef = XLSX.utils.encode_cell({ r, c });
+        if (!ws[cellRef]) continue;
+
+        if (r === 0) {
+          ws[cellRef].s = headerStyle;
+        } else if (r === dataRows.length - 1) {
+          ws[cellRef].s = totalsStyle;
+        } else {
+          ws[cellRef].s = r % 2 === 0 ? dataStyleEven : dataStyleOdd;
+        }
+      }
+    }
+
+    return ws;
+  };
+
+  const getSummaryRowsForStaffList = (list: Staff[]) => {
     const [yearStr, monthStr] = selectedMonth.split('-');
     const year = parseInt(yearStr);
     const monthNum = parseInt(monthStr);
     const daysInMonth = new Date(year, monthNum, 0).getDate();
 
-    const rows: Record<string, any>[] = [];
-    const sortedStaff = [...staffList].filter(s => s.active).sort((a, b) => a.name.localeCompare(b.name));
-    let slNo = 0;
+    const rowsAOA: any[][] = [];
+    const headers = [
+      'SL.NO', 'NAME', 'BRANCH', 'DEPARTMENT', 'MONTHLY SALARY',
+      'CALENDAR DAYS', 'REQUIRED DAYS', 'DAYS WORKED', 'EXTRA DAYS',
+      'MISSING DAYS', 'PAID DAYS', 'DAILY RATE', 'GROSS PAY',
+      'OT MINUTES', 'OT PAY', 'EARLY IN PAY', 'EARLY LEAVE DEDUCTION',
+      'LATE FINES', 'SPECIAL FINES', 'NET SALARY'
+    ];
+    rowsAOA.push(headers);
 
-    for (const s of sortedStaff) {
+    let slNo = 0;
+    list.forEach((s) => {
       slNo++;
       const staffAtt = attendanceRecords.filter((r) => r.staff_id === s.id);
       const staffLeaves = leaveRequests.filter((l: any) => l.staff_id === s.id && l.status === 'approved');
 
-      // Use same logic as reportRecords useMemo
       const daysActuallyWorked = staffAtt.filter(
         (r) => r.check_in_time !== null && r.day_type !== 'weekly_off' && r.day_type !== 'holiday'
       ).length;
-
-      let genuineAbsentDays = 0;
-      for (let d = 1; d <= daysInMonth; d++) {
-        const dateStr = `${selectedMonth}-${String(d).padStart(2, '0')}`;
-        const att = staffAtt.find((r: any) => r.date === dateStr);
-        const hasLeave = staffLeaves.some((l: any) => l.date === dateStr);
-        if (att) {
-          if (att.status === 'absent' && att.day_type !== 'weekly_off' && att.day_type !== 'holiday' && !hasLeave) {
-            genuineAbsentDays++;
-          }
-        } else {
-          if (!hasLeave) genuineAbsentDays++;
-        }
-      }
 
       const offDaysPerMonth = s.off_days_per_month as 0 | 2 | 4;
       let earnedQuota = 0;
@@ -696,10 +598,8 @@ export default function MonthlyReportTab({
         earnedQuota = Math.min(Math.floor(daysActuallyWorked / 12), 2);
       }
 
-      // Find confirmation for this staff if exists
       const conf = confirmations.find(c => c.staff_id === s.id);
-      
-      // Weekly offs taken (unique dates marked as weekly off in attendance, or as a weekly off leave request)
+
       const weeklyOffDates = new Set([
         ...staffAtt.filter(r => r.day_type === 'weekly_off').map(r => r.date),
         ...staffLeaves.filter(l => l.is_weekly_off === true).map(l => l.date)
@@ -707,13 +607,9 @@ export default function MonthlyReportTab({
       const weeklyOffsTaken = weeklyOffDates.size;
       const weeklyOffsUsed = Math.min(weeklyOffsTaken, earnedQuota);
 
-      // absences = calendarDays - daysActuallyWorked
       const absences = daysInMonth - daysActuallyWorked;
-
-      // deductedDays = absences - weeklyOffsUsed + manualExtraLeaves
       const manualExtraLeaves = conf?.extra_leave_days || 0;
       const deductedDays = Math.max(0, absences - weeklyOffsUsed) + manualExtraLeaves;
-
       const missingDays = deductedDays;
 
       const approvedOTMinutes = staffAtt
@@ -754,58 +650,65 @@ export default function MonthlyReportTab({
         { daysActuallyWorked, confirmedLateFines: totalLateFinesAmt, confirmedSpecialFines: totalSpecialFinesAmt, approvedOTMinutes, approvedEarlyInMinutes, earlyLeaveMinutes, missingDays }
       );
 
-      const branchName = s.branch?.name || s.branch_id || '';
-
-      rows.push({
-        'SL.NO': slNo,
-        'NAME': s.name,
-        'BRANCH': branchName,
-        'DEPARTMENT': s.department || '',
-        'MONTHLY SALARY': baseSalary,
-        'CALENDAR DAYS': breakdown.calendarDays,
-        'REQUIRED DAYS': breakdown.requiredWorkingDays,
-        'DAYS WORKED': daysActuallyWorked,
-        'EXTRA DAYS': breakdown.extraDaysWorked,
-        'MISSING DAYS': breakdown.missingDays,
-        'PAID DAYS': breakdown.paidDays,
-        'DAILY RATE': breakdown.dailyRate,
-        'GROSS PAY': breakdown.grossPay,
-        'OT MINUTES': approvedOTMinutes,
-        'OT PAY': breakdown.otPay,
-        'EARLY IN PAY': breakdown.earlyInPay,
-        'EARLY LEAVE DEDUCTION': breakdown.earlyLeaveDeduction,
-        'LATE FINES': totalLateFinesAmt,
-        'SPECIAL FINES': totalSpecialFinesAmt,
-        'NET SALARY': Math.max(0, breakdown.netSalary),
-      });
-    }
-
-    // Totals row
-    const numericKeys = [
-      'MONTHLY SALARY', 'CALENDAR DAYS', 'REQUIRED DAYS', 'DAYS WORKED',
-      'EXTRA DAYS', 'MISSING DAYS', 'PAID DAYS', 'DAILY RATE', 'GROSS PAY',
-      'OT MINUTES', 'OT PAY', 'EARLY IN PAY', 'EARLY LEAVE DEDUCTION',
-      'LATE FINES', 'SPECIAL FINES', 'NET SALARY',
-    ];
-    const totals: Record<string, any> = { 'SL.NO': '', 'NAME': 'TOTAL', 'BRANCH': '', 'DEPARTMENT': '' };
-    numericKeys.forEach((k) => {
-      const sum = rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
-      totals[k] = Math.round(sum * 100) / 100;
+      rowsAOA.push([
+        slNo,
+        s.name,
+        s.branch?.name || s.branch_id || '',
+        s.department || '',
+        Number(baseSalary),
+        Number(breakdown.calendarDays),
+        Number(breakdown.requiredWorkingDays),
+        Number(daysActuallyWorked),
+        Number(breakdown.extraDaysWorked),
+        Number(breakdown.missingDays),
+        Number(breakdown.paidDays),
+        Number(breakdown.dailyRate),
+        Number(breakdown.grossPay),
+        Number(approvedOTMinutes),
+        Number(breakdown.otPay),
+        Number(breakdown.earlyInPay),
+        Number(breakdown.earlyLeaveDeduction),
+        Number(totalLateFinesAmt),
+        Number(totalSpecialFinesAmt),
+        Number(Math.max(0, breakdown.netSalary))
+      ]);
     });
-    rows.push(totals);
 
-    const ws = XLSX.utils.json_to_sheet(rows);
-    const totalRowIdx = rows.length;
-    const cols = Object.keys(totals);
-    cols.forEach((_, ci) => {
-      const cellRef = XLSX.utils.encode_cell({ r: totalRowIdx, c: ci });
-      if (ws[cellRef]) {
-        ws[cellRef].s = { font: { bold: true } };
+    const totalsRow = ['', 'TOTAL', '', '', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    for (let ci = 4; ci < headers.length; ci++) {
+      let sum = 0;
+      for (let ri = 1; ri < rowsAOA.length; ri++) {
+        sum += Number(rowsAOA[ri][ci]) || 0;
       }
-    });
+      totalsRow[ci] = Math.round(sum * 100) / 100;
+    }
+    rowsAOA.push(totalsRow);
+
+    return rowsAOA;
+  };
+
+  const handleMonthlySummaryExport = () => {
+    const [yearStr, monthStr] = selectedMonth.split('-');
+    const year = parseInt(yearStr);
+    const monthNum = parseInt(monthStr);
+
+    const activeStaff = staffList.filter(s => s.active).sort((a, b) => a.name.localeCompare(b.name));
+    const dailyStaff = activeStaff.filter(s => s.branch_id === 'daily');
+    const hyperStaff = activeStaff.filter(s => s.branch_id === 'hypermarket');
+
+    const allSummaryRows = getSummaryRowsForStaffList(activeStaff);
+    const dailySummaryRows = getSummaryRowsForStaffList(dailyStaff);
+    const hyperSummaryRows = getSummaryRowsForStaffList(hyperStaff);
+
+    const wsAll = createStyledSummarySheet(allSummaryRows);
+    const wsDaily = createStyledSummarySheet(dailySummaryRows);
+    const wsHyper = createStyledSummarySheet(hyperSummaryRows);
 
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, 'Monthly Summary');
+    XLSX.utils.book_append_sheet(wb, wsAll, 'All Summary');
+    XLSX.utils.book_append_sheet(wb, wsDaily, 'Nearbi Daily');
+    XLSX.utils.book_append_sheet(wb, wsHyper, 'Nearbi Hypermarket');
+
     XLSX.writeFile(wb, `Nearbi_Monthly_Summary_${monthStr}_${yearStr}.xlsx`);
   };
 

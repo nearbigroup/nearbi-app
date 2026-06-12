@@ -88,6 +88,11 @@ export default function StaffPage() {
   // Delete staff state
   const [deleteModeId, setDeleteModeId] = useState<string | null>(null);
   const [staffToDelete, setStaffToDelete] = useState<StaffMember | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedStaffIds, setSelectedStaffIds] = useState<string[]>([]);
+  const [bulkDeleteModalOpen, setBulkDeleteModalOpen] = useState(false);
+  const [bulkDeleteConfirmText, setBulkDeleteConfirmText] = useState('');
+  const [singleDeleteConfirmText, setSingleDeleteConfirmText] = useState('');
 
   // Special Fine Modal State
   const [fineModalOpen, setFineModalOpen] = useState(false);
@@ -1705,6 +1710,97 @@ export default function StaffPage() {
     }
   };
 
+  const [swipeStaffId, setSwipeStaffId] = useState<string | null>(null);
+  const [touchStartX, setTouchStartX] = useState<number | null>(null);
+
+  const handleTouchStart = (e: React.TouchEvent, id: string) => {
+    setTouchStartX(e.targetTouches[0].clientX);
+  };
+
+  const handleTouchMove = (e: React.TouchEvent, id: string) => {
+    if (touchStartX === null) return;
+    const currentX = e.targetTouches[0].clientX;
+    const diffX = touchStartX - currentX;
+    
+    // Swipe left (diffX > 60) to reveal delete
+    if (diffX > 60) {
+      setSwipeStaffId(id);
+    }
+    // Swipe right (diffX < -60) to hide delete
+    else if (diffX < -60) {
+      if (swipeStaffId === id) {
+        setSwipeStaffId(null);
+      }
+    }
+  };
+
+  const toggleSelectStaff = (id: string) => {
+    setSelectedStaffIds(prev => 
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectAll = () => {
+    const allIds = filteredStaff.map(s => s.id);
+    if (selectedStaffIds.length === allIds.length) {
+      setSelectedStaffIds([]);
+    } else {
+      setSelectedStaffIds(allIds);
+    }
+  };
+
+  const handleBulkDeleteStaff = async () => {
+    if (bulkDeleteConfirmText !== 'DELETE') {
+      alert('Please type DELETE to confirm.');
+      return;
+    }
+    setFormLoading(true);
+    try {
+      const idsToDelete = [...selectedStaffIds];
+      for (const staffId of idsToDelete) {
+        const staffMem = staff.find(s => s.id === staffId);
+        if (!staffMem) continue;
+
+        // Delete all related records first
+        await supabase.from('attendance').delete().eq('staff_id', staffId);
+        await supabase.from('late_fines').delete().eq('staff_id', staffId);
+        await supabase.from('leave_requests').delete().eq('staff_id', staffId);
+        await supabase.from('break_logs').delete().eq('staff_id', staffId);
+        await supabase.from('special_fines').delete().eq('staff_id', staffId);
+        await supabase.from('performance_scores').delete().eq('staff_id', staffId);
+        await supabase.from('salary_confirmations').delete().eq('staff_id', staffId);
+        await supabase.from('salary_payments').delete().eq('staff_id', staffId);
+        await supabase.from('attendance_adjustments').delete().eq('staff_id', staffId);
+        await supabase.from('wall_events').delete().eq('staff_id', staffId);
+        await supabase.from('notifications').delete().eq('staff_id', staffId);
+        await supabase.from('staff_fine_exemptions').delete().eq('staff_id', staffId);
+        await supabase.from('staff').delete().eq('id', staffId);
+
+        await createAuditLog({
+          action: 'delete_staff',
+          table_name: 'staff',
+          record_id: staffId,
+          old_value: staffMem,
+          performed_by: user?.email || 'admin',
+          performed_by_role: user?.role || 'admin',
+          reason: 'Staff deleted in bulk along with all historical data'
+        });
+      }
+
+      setStaff(prev => prev.filter(s => !idsToDelete.includes(s.id)));
+      setSelectedStaffIds([]);
+      setSelectionMode(false);
+      setBulkDeleteModalOpen(false);
+      setBulkDeleteConfirmText('');
+      showToast('Selected staff members removed successfully');
+    } catch (e: any) {
+      console.error(e);
+      showToast('Error removing selected staff.');
+    } finally {
+      setFormLoading(false);
+    }
+  };
+
   const togglePinVisibility = (id: string) => {
     setVisiblePins((prev) => ({ ...prev, [id]: !prev[id] }));
   };
@@ -1843,6 +1939,49 @@ export default function StaffPage() {
         </button>
       </div>
 
+      {/* Bulk Delete / Selection Bar */}
+      {user?.role === 'admin' && (
+        <div className="flex flex-wrap items-center justify-between gap-2 bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3 shadow-sm select-none">
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => {
+                setSelectionMode(!selectionMode);
+                setSelectedStaffIds([]);
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                selectionMode
+                  ? 'bg-[#1A1A1A] text-white'
+                  : 'bg-white border border-[#E8E8E8] text-[#1A1A1A] hover:bg-[#ECECEC]'
+              }`}
+            >
+              {selectionMode ? 'Exit Selection' : 'Select Staff'}
+            </button>
+            
+            {selectionMode && (
+              <button
+                onClick={toggleSelectAll}
+                className="bg-white border border-[#E8E8E8] hover:bg-[#F2F2F2] px-3 py-1.5 rounded-lg text-xs font-bold text-[#1A1A1A] transition-all"
+              >
+                {selectedStaffIds.length === filteredStaff.length ? 'Deselect All' : 'Select All'}
+              </button>
+            )}
+          </div>
+          
+          {selectionMode && selectedStaffIds.length > 0 && (
+            <button
+              onClick={() => {
+                setBulkDeleteConfirmText('');
+                setBulkDeleteModalOpen(true);
+              }}
+              className="bg-[rgba(248,113,113,0.15)] border border-[rgba(248,113,113,0.3)] text-[#C0392B] hover:bg-[rgba(248,113,113,0.25)] px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider flex items-center space-x-1 transition-all"
+            >
+              <Trash2 size={13} />
+              <span>Delete ({selectedStaffIds.length})</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Staff list */}
       {loading ? (
         <div className="space-y-3">
@@ -1863,60 +2002,116 @@ export default function StaffPage() {
           {filteredStaff.map((s) => {
             const isDeleteMode = deleteModeId === s.id;
             const isPinVisible = !!visiblePins[s.id];
+            const isSelected = selectedStaffIds.includes(s.id);
+            const isSwiped = swipeStaffId === s.id;
 
             return (
               <div
                 key={s.id}
-                onClick={() => router.push('/staff/' + s.id)}
-                className={`bg-white border rounded-[14px] p-4 flex flex-col transition-all relative cursor-pointer hover:border-[#D0D0D0] ${
-                  isDeleteMode ? 'border-[#C0392B] ring-1 ring-[#C0392B]/30' : 'border-[#E8E8E8] shadow-sm'
-                }`}
+                onTouchStart={(e) => handleTouchStart(e, s.id)}
+                onTouchMove={(e) => handleTouchMove(e, s.id)}
+                className="relative overflow-hidden rounded-[14px] w-full"
               >
-                {/* Top Right Action Icons */}
-                <div className="absolute top-3 right-3 flex items-center space-x-1" onClick={(e) => e.stopPropagation()}>
-                  {(user?.role === 'admin' || user?.role === 'ops_manager') && (
-                    <button
-                      onClick={() => handleOpenEditStaff(s)}
-                      className="p-1.5 text-[#555555] hover:text-[#1A1A1A] hover:bg-[#F2F2F2] rounded-lg transition-all cursor-pointer"
-                      title="Edit Staff"
-                    >
-                      <Edit2 size={14} strokeWidth={1.5} />
-                    </button>
-                  )}
-                  {user?.role === 'admin' && (
-                    <button
-                      onClick={() => {
-                        setStaffToDelete(s);
-                      }}
-                      className="p-1.5 text-[#C0392B] hover:bg-[#FDECEA] rounded-lg transition-all cursor-pointer"
-                      title="Delete Staff"
-                    >
-                      <Trash2 size={14} strokeWidth={1.5} />
-                    </button>
-                  )}
-                </div>
-
-                <div className="flex items-start space-x-3.5">
-                  {/* Avatar or Delete Mode Trigger */}
-                  {user?.role === 'admin' || user?.role === 'ops_manager' ? (
+                {/* Swipe Action behind the card */}
+                {user?.role === 'admin' && !selectionMode && (
+                  <div className="absolute inset-y-0 right-0 w-20 bg-[#C0392B] flex items-center justify-center text-white z-0 rounded-[14px]">
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        setDeleteModeId(isDeleteMode ? null : s.id);
+                        setSingleDeleteConfirmText('');
+                        setStaffToDelete(s);
+                        setSwipeStaffId(null);
                       }}
-                      className={`w-12 h-12 rounded-full font-bold text-lg flex items-center justify-center flex-shrink-0 transition-colors ${
-                        isDeleteMode
-                          ? 'bg-[#FDECEA] text-[#C0392B] border border-[#C0392B]/20'
-                          : 'bg-[#1A1A1A] text-white border border-[#1A1A1A]'
-                      }`}
+                      className="w-full h-full flex items-center justify-center cursor-pointer"
                     >
-                      {isDeleteMode ? <Trash2 size={20} strokeWidth={1.5} className="text-[#C0392B]" /> : s.name.charAt(0).toUpperCase()}
+                      <Trash2 size={20} />
                     </button>
-                  ) : (
-                    <div className="w-12 h-12 rounded-full bg-[#1A1A1A] text-white border border-[#1A1A1A] font-bold text-lg flex items-center justify-center flex-shrink-0">
-                      {s.name.charAt(0).toUpperCase()}
+                  </div>
+                )}
+
+                {/* Card Container */}
+                <div
+                  onClick={(e) => {
+                    if (selectionMode) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      toggleSelectStaff(s.id);
+                    } else {
+                      router.push('/staff/' + s.id);
+                    }
+                  }}
+                  className={`bg-white border rounded-[14px] p-4 flex flex-col transition-all relative cursor-pointer hover:border-[#D0D0D0] z-10 ${
+                    isSelected ? 'border-[#1A1A1A] ring-1 ring-[#1A1A1A]/30 bg-[#F9F9F9]' : isDeleteMode ? 'border-[#C0392B] ring-1 ring-[#C0392B]/30' : 'border-[#E8E8E8] shadow-sm'
+                  } ${isSwiped ? 'translate-x-[-80px]' : ''}`}
+                >
+                  {/* Top Right Action Icons */}
+                  {!selectionMode && (
+                    <div className="absolute top-3 right-3 flex items-center space-x-1" onClick={(e) => e.stopPropagation()}>
+                      {(user?.role === 'admin' || user?.role === 'ops_manager') && (
+                        <button
+                          onClick={() => handleOpenEditStaff(s)}
+                          className="p-1.5 text-[#555555] hover:text-[#1A1A1A] hover:bg-[#F2F2F2] rounded-lg transition-all cursor-pointer"
+                          title="Edit Staff"
+                        >
+                          <Edit2 size={14} strokeWidth={1.5} />
+                        </button>
+                      )}
+                      {user?.role === 'admin' && (
+                        <button
+                          onClick={() => {
+                            setSingleDeleteConfirmText('');
+                            setStaffToDelete(s);
+                          }}
+                          className="p-1.5 text-[#C0392B] hover:bg-[#FDECEA] rounded-lg transition-all cursor-pointer"
+                          title="Delete Staff"
+                        >
+                          <Trash2 size={14} strokeWidth={1.5} />
+                        </button>
+                      )}
                     </div>
                   )}
+
+                  <div className="flex items-start space-x-3.5">
+                    {/* Selection Checkbox or Avatar */}
+                    {selectionMode ? (
+                      <div 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleSelectStaff(s.id);
+                        }}
+                        className="w-12 h-12 flex items-center justify-center flex-shrink-0 cursor-pointer"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => {}} // Handled by outer container click
+                          className="w-5 h-5 rounded border-[#E8E8E8] text-[#1a1a1a] focus:ring-[#1a1a1a]"
+                        />
+                      </div>
+                    ) : (
+                      <>
+                        {/* Avatar or Delete Mode Trigger */}
+                        {user?.role === 'admin' || user?.role === 'ops_manager' ? (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeleteModeId(isDeleteMode ? null : s.id);
+                            }}
+                            className={`w-12 h-12 rounded-full font-bold text-lg flex items-center justify-center flex-shrink-0 transition-colors ${
+                              isDeleteMode
+                                ? 'bg-[#FDECEA] text-[#C0392B] border border-[#C0392B]/20'
+                                : 'bg-[#1A1A1A] text-white border border-[#1A1A1A]'
+                            }`}
+                          >
+                            {isDeleteMode ? <Trash2 size={20} strokeWidth={1.5} className="text-[#C0392B]" /> : s.name.charAt(0).toUpperCase()}
+                          </button>
+                        ) : (
+                          <div className="w-12 h-12 rounded-full bg-[#1A1A1A] text-white border border-[#1A1A1A] font-bold text-lg flex items-center justify-center flex-shrink-0">
+                            {s.name.charAt(0).toUpperCase()}
+                          </div>
+                        )}
+                      </>
+                    )}
 
                   {/* Profile info details */}
                   <div className="flex-1 min-w-0">
@@ -2109,6 +2304,7 @@ export default function StaffPage() {
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
+                        setSingleDeleteConfirmText('');
                         setStaffToDelete(s);
                       }}
                       className="bg-white border border-[#C0392B] text-[#C0392B] hover:bg-[#FDECEA] hover:border-[#C0392B]/20 font-bold text-xs px-4 py-2 rounded-[12px] active:scale-95 transition-all shadow-sm"
@@ -2118,8 +2314,9 @@ export default function StaffPage() {
                   </div>
                 )}
               </div>
-            );
-          })}
+            </div>
+          );
+        })}
         </div>
       )}
 
@@ -2815,29 +3012,91 @@ export default function StaffPage() {
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
             onClick={() => setStaffToDelete(null)}
           />
-          <div className="bg-[var(--bg-surface)] rounded-[16px] shadow-2xl relative z-10 p-6 w-full max-w-xs text-center border border-[var(--border-strong)] flex flex-col items-center">
+          <div className="bg-white rounded-[16px] shadow-2xl relative z-10 p-6 w-full max-w-xs text-center border border-[#E8E8E8] flex flex-col items-center select-none">
             <AlertTriangle size={36} strokeWidth={1.5} style={{ color: '#FBBF24' }} className="mb-3" />
-            <h3 className="text-base font-bold text-white mb-1">
+            <h3 className="text-base font-bold text-[#1A1A1A] mb-1">
               Remove {staffToDelete.name}?
             </h3>
-            <p className="text-xs text-[var(--text-muted)] leading-relaxed mb-6">
+            <p className="text-xs text-[var(--text-muted)] leading-relaxed mb-4">
               This will permanently delete this staff member and all associated registers, leave claims, and fine sheets.
             </p>
+            <div className="w-full mb-5 text-left">
+              <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase mb-1.5">
+                Type DELETE to confirm
+              </label>
+              <input
+                type="text"
+                value={singleDeleteConfirmText}
+                onChange={(e) => setSingleDeleteConfirmText(e.target.value)}
+                placeholder="DELETE"
+                className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-lg p-2 text-center text-xs font-black text-[#1A1A1A] focus:outline-none focus:border-[#C0392B]"
+              />
+            </div>
 
             <div className="flex gap-3 w-full">
               <button
                 type="button"
                 onClick={() => setStaffToDelete(null)}
-                className="flex-1 bg-transparent border border-[var(--border-strong)] text-[var(--text-secondary)] font-bold text-xs py-2.5 rounded-[10px] active:scale-95"
+                className="flex-1 bg-transparent border border-[#E8E8E8] text-[#555555] font-bold text-xs py-2.5 rounded-[10px] active:scale-95 cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="button"
                 onClick={handleDeleteStaff}
-                className="flex-1 bg-[rgba(248,113,113,0.15)] border border-[rgba(248,113,113,0.3)] text-[#F87171] hover:bg-[rgba(248,113,113,0.25)] font-bold text-xs py-2.5 rounded-[10px] active:scale-95 transition-all shadow"
+                disabled={singleDeleteConfirmText !== 'DELETE'}
+                className="flex-1 bg-[#FDECEA] border border-[#FDECEA] text-[#C0392B] hover:bg-[#FCDAD7] font-bold text-xs py-2.5 rounded-[10px] active:scale-95 transition-all shadow disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
               >
                 Yes, delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Delete confirmation modal */}
+      {bulkDeleteModalOpen && (
+        <div className="fixed inset-0 z-[12000] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setBulkDeleteModalOpen(false)}
+          />
+          <div className="bg-white rounded-[16px] shadow-2xl relative z-10 p-6 w-full max-w-xs text-center border border-[#E8E8E8] flex flex-col items-center select-none">
+            <AlertTriangle size={36} strokeWidth={1.5} style={{ color: '#C0392B' }} className="mb-3" />
+            <h3 className="text-base font-bold text-[#1A1A1A] mb-1">
+              Delete {selectedStaffIds.length} Staff?
+            </h3>
+            <p className="text-xs text-[var(--text-muted)] leading-relaxed mb-4">
+              This will permanently delete the <strong>{selectedStaffIds.length}</strong> selected staff members and all associated registers, leave claims, and fine sheets.
+            </p>
+            <div className="w-full mb-5 text-left">
+              <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase mb-1.5">
+                Type DELETE to confirm
+              </label>
+              <input
+                type="text"
+                value={bulkDeleteConfirmText}
+                onChange={(e) => setBulkDeleteConfirmText(e.target.value)}
+                placeholder="DELETE"
+                className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-lg p-2 text-center text-xs font-black text-[#1A1A1A] focus:outline-none focus:border-[#C0392B]"
+              />
+            </div>
+
+            <div className="flex gap-3 w-full">
+              <button
+                type="button"
+                onClick={() => setBulkDeleteModalOpen(false)}
+                className="flex-1 bg-transparent border border-[#E8E8E8] text-[#555555] font-bold text-xs py-2.5 rounded-[10px] active:scale-95 cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleBulkDeleteStaff}
+                disabled={bulkDeleteConfirmText !== 'DELETE'}
+                className="flex-1 bg-[#FDECEA] border border-[#FDECEA] text-[#C0392B] hover:bg-[#FCDAD7] font-bold text-xs py-2.5 rounded-[10px] active:scale-95 transition-all shadow disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
+              >
+                Yes, delete all
               </button>
             </div>
           </div>

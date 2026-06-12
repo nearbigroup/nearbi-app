@@ -14,6 +14,7 @@ interface LeaveRequest {
   requested_at: string;
   requires_ops_approval?: boolean;
   day_of_week?: string;
+  is_weekly_off?: boolean;
 }
 
 export default function StaffLeavePage() {
@@ -194,35 +195,7 @@ export default function StaffLeavePage() {
     }
   };
 
-  // Dynamic Quota Metrics based on Section 1
-  const quota = React.useMemo(() => {
-    if (!staffInfo) return { earned: 0, used: 0, remaining: 0 };
-    const currentMonth = new Date().toISOString().slice(0, 7); // "YYYY-MM"
-    
-    // 4-off staff: 1 day per 6 days worked
-    // 2-off staff: 1 day per 12 days worked
-    const offDays = staffInfo.off_days_per_month || 0;
-    let earned = 0;
-    if (offDays === 4) {
-      earned = Math.floor(daysWorkedThisMonth / 6);
-    } else if (offDays === 2) {
-      earned = Math.floor(daysWorkedThisMonth / 12);
-    }
-    
-    // Earned quota cannot exceed total possible off days
-    earned = Math.min(earned, offDays);
-    
-    const used = leaves.filter(l => 
-      l.status === 'approved' && 
-      l.date.startsWith(currentMonth)
-    ).length;
-    
-    return {
-      earned,
-      used,
-      remaining: Math.max(0, earned - used)
-    };
-  }, [staffInfo, leaves, daysWorkedThisMonth]);
+
 
   const filteredLeaves = React.useMemo(() => {
     if (activeTab === 'all') return leaves;
@@ -281,32 +254,7 @@ export default function StaffLeavePage() {
         <ClipboardList size={18} className="text-[var(--text-secondary)]" />
       </div>
 
-      {/* Quota Info Bar */}
-      <div className="bg-white border border-[#E8E8E8] rounded-[16px] p-4 shadow-sm">
-        <h3 className="text-xs font-extrabold text-[#1A1A1A] uppercase tracking-wider mb-2">Leave Quota (This Month)</h3>
-        <p className="text-[10px] text-[var(--text-muted)] font-semibold mb-3 leading-tight">
-          Earned based on {daysWorkedThisMonth} days worked this month
-        </p>
-        <div className="grid grid-cols-3 gap-3">
-          <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-3 text-center">
-            <div className="text-lg font-black text-[#1A1A1A]">{quota.earned}</div>
-            <div className="text-[9px] text-[var(--text-secondary)] font-bold uppercase tracking-wider mt-1">Earned</div>
-          </div>
-          <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-3 text-center">
-            <div className={`text-lg font-black ${quota.used > quota.earned ? 'text-[var(--danger)]' : 'text-[var(--warning)]'}`}>{quota.used}</div>
-            <div className="text-[9px] text-[var(--text-secondary)] font-bold uppercase tracking-wider mt-1">Used</div>
-          </div>
-          <div className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-3 text-center">
-            <div className={`text-lg font-black ${quota.remaining > 0 ? 'text-[var(--success)]' : 'text-[#999]'}`}>{quota.remaining}</div>
-            <div className="text-[9px] text-[var(--text-secondary)] font-bold uppercase tracking-wider mt-1">Remaining</div>
-          </div>
-        </div>
-        {quota.earned === 0 && daysWorkedThisMonth < 6 && staffInfo?.off_days_per_month > 0 && (
-          <p className="text-[10px] text-[var(--info)] font-bold mt-3 text-center bg-[var(--info-bg)] border border-[var(--info)]/20 rounded-lg py-2 px-3">
-            Earn your first leave day after {(staffInfo.off_days_per_month === 4 ? 6 : 12) - daysWorkedThisMonth} more working days
-          </p>
-        )}
-      </div>
+
 
       {/* Apply Leave Section */}
       <div className="bg-white border border-[#E8E8E8] rounded-[16px] p-4 shadow-sm space-y-4">
@@ -442,9 +390,15 @@ export default function StaffLeavePage() {
                 {/* Quota Impact Notes */}
                 {l.status === 'approved' && (
                   <div className="mt-0.5 text-[9.5px] font-bold">
-                    <span className="text-amber-700 bg-amber-50 border border-amber-100/50 px-2 py-0.5 rounded">
-                      Unpaid leave — 1 day salary deduction
-                    </span>
+                    {l.is_weekly_off ? (
+                      <span className="text-emerald-750 bg-emerald-50 border border-emerald-100 px-2 py-0.5 rounded">
+                        Weekly Off — no deduction
+                      </span>
+                    ) : (
+                      <span className="text-amber-700 bg-amber-50 border border-amber-100/50 px-2 py-0.5 rounded">
+                        Unpaid leave — 1 day salary deduction
+                      </span>
+                    )}
                   </div>
                 )}
                 

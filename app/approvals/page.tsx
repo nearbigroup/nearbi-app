@@ -87,6 +87,44 @@ export default function ApprovalsPage() {
 
   const fetchApprovals = async () => {
     try {
+      const now = new Date();
+      const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+      const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+
+      // Auto-sync OT adjustments
+      const { data: attWithOT } = await supabase
+        .from('attendance')
+        .select('*, staff(*)')
+        .gt('ot_minutes', 0)
+        .eq('ot_approved', false)
+        .gte('date', firstDayOfMonth)
+        .lte('date', lastDayOfMonth);
+
+      for (const att of attWithOT || []) {
+        if (!att.staff) continue;
+        if (userBranch && att.staff.branch_id !== userBranch) continue;
+
+        const { data: existing } = await supabase
+          .from('attendance_adjustments')
+          .select('id')
+          .eq('staff_id', att.staff_id)
+          .eq('date', att.date)
+          .eq('type', 'ot')
+          .maybeSingle();
+
+        if (!existing) {
+          await supabase
+            .from('attendance_adjustments')
+            .insert({
+              staff_id: att.staff_id,
+              date: att.date,
+              type: 'ot',
+              minutes: att.ot_minutes,
+              status: 'pending'
+            });
+        }
+      }
+
       // 1. Fetch pending adjustments (OT / Early In)
       let adjQuery = supabase
         .from('attendance_adjustments')

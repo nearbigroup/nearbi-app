@@ -6,7 +6,7 @@ import BulkConfirmTab from '@/components/salary/BulkConfirmTab';
 import PayslipTab from '@/components/salary/PayslipTab';
 import PaymentTrackerTab from '@/components/salary/PaymentTrackerTab';
 import MonthlyReportTab from '@/components/salary/MonthlyReportTab';
-import { Lock, Calculator, User, Calendar, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Lock, Calculator, User, Calendar, RefreshCw, ChevronLeft, ChevronRight, AlertCircle } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { calculateSalary, getDaysInMonth, calculateEarlyLeaveDeduction } from '@/lib/salary';
 import { formatCurrency, getPastMonths, formatMonthDisplay, getCurrentMonthStr } from '@/components/salary/utils';
@@ -87,6 +87,30 @@ export default function SalaryPage() {
     (selectedYear === now.getFullYear() && selectedMonthNum < now.getMonth() + 1);
 
   const [earliestMonth, setEarliestMonth] = useState('');
+  const [hasConfirmations, setHasConfirmations] = useState<boolean>(true);
+  const [confirmationsLoading, setConfirmationsLoading] = useState<boolean>(true);
+
+  const checkConfirmations = async () => {
+    try {
+      setConfirmationsLoading(true);
+      const { data, error } = await supabase
+        .from('salary_confirmations')
+        .select('id')
+        .eq('month', selectedMonth)
+        .limit(1);
+      
+      if (error) throw error;
+      setHasConfirmations(data && data.length > 0);
+    } catch (err) {
+      console.error('Error checking confirmations:', err);
+    } finally {
+      setConfirmationsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    checkConfirmations();
+  }, [selectedMonth]);
 
   useEffect(() => {
     async function fetchEarliest() {
@@ -566,9 +590,32 @@ export default function SalaryPage() {
         </div>
       </div>
 
+      {/* Unconfirmed Banner */}
+      {!confirmationsLoading && !hasConfirmations && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm select-none">
+          <div className="flex items-center space-x-2 text-amber-900 font-bold text-xs">
+            <AlertCircle className="text-amber-600 flex-shrink-0" size={18} />
+            <span>Salaries for {formatMonthDisplay(selectedMonth)} are not yet confirmed. Unconfirmed salaries are marked as PENDING.</span>
+          </div>
+          {activeTab !== 'bulk_confirm' && (
+            <button
+              onClick={() => setActiveTab('bulk_confirm')}
+              className="bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-black uppercase px-4 py-2 rounded-lg active:scale-95 transition-all w-fit cursor-pointer"
+            >
+              Go to Bulk Confirm
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Active Tab Content */}
       <div className="animate-in fade-in duration-200">
-        {activeTab === 'bulk_confirm' && <BulkConfirmTab selectedMonth={selectedMonth} />}
+        {activeTab === 'bulk_confirm' && (
+          <BulkConfirmTab 
+            selectedMonth={selectedMonth} 
+            onConfirmationsUpdated={checkConfirmations} 
+          />
+        )}
         {activeTab === 'payslip' && <PayslipTab selectedMonth={selectedMonth} />}
         {activeTab === 'payments' && <PaymentTrackerTab selectedMonth={selectedMonth} />}
         {activeTab === 'report' && (

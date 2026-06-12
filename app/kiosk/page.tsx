@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { createNotification } from '@/lib/notifications';
 import { useRouter } from 'next/navigation';
 import { Check, LogOut, Camera, AlertCircle, UserCheck, Timer, AlertTriangle, Coffee, RotateCcw, CircleCheck } from 'lucide-react';
-import { calculateOTMinutes, calculateActualHours, calculateActualHoursWithBreaks } from '@/lib/salary';
+import { calculateOTMinutes, calculateActualHours, calculateActualHoursWithBreaks, calculateEarlyLeaveMinutes } from '@/lib/salary';
 import { formatTime12hr } from '@/lib/utils';
 
 
@@ -241,10 +241,15 @@ export default function KioskPage() {
     if (type === 'CHECK_IN' && staff) {
       const now = new Date();
       const todayStr = now.toISOString().split('T')[0];
+      const shiftStart = staff.shift?.start_time || staff.shifts?.start_time || '09:00';
       const shiftEnd = staff.shift?.end_time || staff.shifts?.end_time || '18:00';
+      const [shH, shM] = shiftStart.split(':').map(Number);
       const [seH, seM] = shiftEnd.split(':').map(Number);
       
-      const shiftEndToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), seH, seM, 0);
+      let shiftEndToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), seH, seM, 0);
+      if (seH * 60 + seM <= shH * 60 + shM) {
+        shiftEndToday.setDate(shiftEndToday.getDate() + 1);
+      }
       const blockTime = new Date(shiftEndToday.getTime() + 2 * 60 * 60 * 1000);
       
       if (now.getTime() > blockTime.getTime()) {
@@ -360,25 +365,11 @@ export default function KioskPage() {
         String(now.getHours()).padStart(2, '0') + ':' +
         String(now.getMinutes()).padStart(2, '0');
 
+      const shiftStart = staff.shift?.start_time || staff.shifts?.start_time || '09:00';
       const shiftEnd = staff.shift?.end_time || staff.shifts?.end_time || '18:00';
-      const otMins = calculateOTMinutes(shiftEnd, actualOut);
-
-      const [shiftEndH, shiftEndM] = shiftEnd.split(':').map(Number);
-      const [actualOutH, actualOutM] = actualOut.split(':').map(Number);
-      const shiftEndMins = shiftEndH * 60 + shiftEndM;
-      const actualOutMins = actualOutH * 60 + actualOutM;
-
-      let earlyLeaveMins = 0;
-      const [ih, im] = record.check_in_time.split(':').map(Number);
-      const actualMins = (actualOutH * 60 + actualOutM) - (ih * 60 + im);
-      const actualHrs = Math.round((actualMins / 60) * 100) / 100;
-
-      const shiftHours = Number(staff.shift?.hours || staff.shifts?.hours || 9);
-
-      if (actualOutMins < shiftEndMins) {
-        const shortHours = Math.max(0, shiftHours - actualHrs);
-        earlyLeaveMins = Math.round(shortHours * 60);
-      }
+      const otMins = calculateOTMinutes(shiftEnd, actualOut, shiftStart);
+      const actualHrs = calculateActualHours(record.check_in_time, actualOut);
+      const earlyLeaveMins = calculateEarlyLeaveMinutes(shiftEnd, actualOut, shiftStart);
 
       const isEarlyLeave = earlyLeaveMins > 0;
       const earlyLeaveMinutes = earlyLeaveMins;
@@ -543,12 +534,20 @@ export default function KioskPage() {
         const shiftMins = sh * 60 + sm;
         const currentMins = now.getHours() * 60 + now.getMinutes();
 
-        // Block check-in if more than 2 hours past shift start
-        const blockAfterMins = shiftMins + 120; // shift start + 2 hours
-        if (currentMins > blockAfterMins) {
-          setErrorMsg(`Check-in blocked. Current time is more than 2 hours past shift start (${shiftStartStr}).`);
+        // Block check-in if time > shift_end + 2 hours
+        const shiftEndStr = staff.shift?.end_time || '18:00';
+        const [seH, seM] = shiftEndStr.split(':').map(Number);
+        
+        let shiftEndToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), seH, seM, 0);
+        if (seH * 60 + seM <= sh * 60 + sm) {
+          shiftEndToday.setDate(shiftEndToday.getDate() + 1);
+        }
+        const blockTime = new Date(shiftEndToday.getTime() + 2 * 60 * 60 * 1000);
+        
+        if (now.getTime() > blockTime.getTime()) {
+          setErrorMsg(`Check-in is blocked. Your shift ended at ${formatTime12hr(shiftEndStr)}, and check-in is only allowed up to 2 hours after shift end.`);
           setKioskState('ERROR');
-          setTimeout(() => resetKiosk(), 3000);
+          setTimeout(() => resetKiosk(), 5000);
           return;
         }
 
@@ -807,7 +806,7 @@ export default function KioskPage() {
           String(nowForCheckout.getHours()).padStart(2, '0') + ':' +
           String(nowForCheckout.getMinutes()).padStart(2, '0');
         if (actualOutPreCheck === record.check_in_time) {
-          setErrorMsg('Cannot check out at the same time as check-in');
+          setErrorMsg('Invalid checkout. Try again.');
           setKioskState('ERROR');
           setTimeout(() => resetKiosk(), 2500);
           return;
@@ -1433,10 +1432,10 @@ export default function KioskPage() {
                   Short Attendance Warning
                 </h3>
                 <p className="text-gray-300 text-sm font-medium leading-relaxed">
-                  You have only worked <span className="text-amber-500 font-extrabold">{pendingCheckout.durationMins} minutes</span> today. Checking out now will mark your attendance as short attendance.
+                  Only <span className="text-amber-500 font-extrabold">{pendingCheckout.durationMins} mins</span>. Sure?
                 </p>
                 <p className="text-[#999999] text-xs font-semibold">
-                  Do you still wish to continue?
+                  Checking out now will mark your attendance as short attendance.
                 </p>
               </div>
 

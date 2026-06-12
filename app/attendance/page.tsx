@@ -9,7 +9,7 @@ import { Clock, RefreshCw, CircleCheck, CircleX, AlertTriangle, X, AlertCircle, 
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import * as XLSX from 'xlsx';
 import { DEPARTMENTS } from '@/lib/data';
-import { calculateOTMinutes, calculateActualHours, calculateEarlyLeaveDeduction } from '@/lib/salary';
+import { calculateOTMinutes, calculateActualHours, calculateEarlyLeaveDeduction, calculateEarlyLeaveMinutes, calculateLateMinutes } from '@/lib/salary';
 import { formatTime12hr } from '@/lib/utils';
 
 
@@ -29,6 +29,7 @@ interface StaffMember {
     start_time: string;
     end_time: string;
   };
+  off_days_per_month?: number;
 }
 
 interface AttendanceRecord {
@@ -70,6 +71,7 @@ interface Adjustment {
 export default function AttendancePage() {
   const router = useRouter();
   const { user, userBranch, canSeeAllBranches } = useAuth();
+  const canEdit = user?.role === 'admin' || user?.role === 'ops_manager' || (user?.role === 'staff_executive' && user?.branch !== null);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   
@@ -86,6 +88,11 @@ export default function AttendancePage() {
     return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
   });
 
+  const [currentMonth, setCurrentMonth] = useState<Date>(() => {
+    const today = new Date();
+    return new Date(today.getFullYear(), today.getMonth(), 1);
+  });
+
   const todayStr = useMemo(() => {
     const today = new Date();
     return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
@@ -93,7 +100,7 @@ export default function AttendancePage() {
 
   const getMinDateStr = () => {
     const d = new Date();
-    const prevMonth = new Date(d.getFullYear(), d.getMonth() - 1, 1);
+    const prevMonth = new Date(d.getFullYear(), d.getMonth() - 4, 1);
     return `${prevMonth.getFullYear()}-${String(prevMonth.getMonth() + 1).padStart(2, '0')}-01`;
   };
 
@@ -102,7 +109,7 @@ export default function AttendancePage() {
     
     if (newDateStr > todayStr) return;
     if (newDateStr < minDateStr) {
-      alert("Attendance editing only available for current and previous month");
+      alert("Attendance editing only available for the last 4 months");
       return;
     }
     setSelectedDate(newDateStr);
@@ -121,6 +128,38 @@ export default function AttendancePage() {
     const dateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     handleDateChange(dateStr);
   };
+
+  const handlePrevMonth = () => {
+    const minDate = new Date(getMinDateStr() + 'T00:00:00');
+    const newMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1);
+    if (newMonth < new Date(minDate.getFullYear(), minDate.getMonth(), 1)) {
+      alert("Only last 4 months allowed");
+      return;
+    }
+    setCurrentMonth(newMonth);
+    const mStr = String(newMonth.getMonth() + 1).padStart(2, '0');
+    setSelectedDate(`${newMonth.getFullYear()}-${mStr}-01`);
+  };
+
+  const handleNextMonth = () => {
+    const d = new Date();
+    const newMonth = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1);
+    if (newMonth > new Date(d.getFullYear(), d.getMonth(), 1)) {
+      return;
+    }
+    setCurrentMonth(newMonth);
+    const mStr = String(newMonth.getMonth() + 1).padStart(2, '0');
+    if (newMonth.getFullYear() === d.getFullYear() && newMonth.getMonth() === d.getMonth()) {
+      setSelectedDate(todayStr);
+    } else {
+      setSelectedDate(`${newMonth.getFullYear()}-${mStr}-01`);
+    }
+  };
+
+  useEffect(() => {
+    const d = new Date(selectedDate + 'T00:00:00');
+    setCurrentMonth(new Date(d.getFullYear(), d.getMonth(), 1));
+  }, [selectedDate]);
 
   useEffect(() => {
     const saved = localStorage.getItem('nearbi_attendance_view');
@@ -143,6 +182,7 @@ export default function AttendancePage() {
   // Edit & Detail Attendance States
   const [detailModalOpen, setDetailModalOpen] = useState(false);
   const [detailRecord, setDetailRecord] = useState<any>(null);
+  const [weeklyOffBalances, setWeeklyOffBalances] = useState<Record<string, { earned: number; used: number; remaining: number }>>({});
 
   const [editModalOpen, setEditModalOpen] = useState(false);
   const [editRecord, setEditRecord] = useState<any>(null);
@@ -212,10 +252,7 @@ export default function AttendancePage() {
   const liveMinutesLate = useMemo(() => {
     if (editStatus !== 'late' || !editCheckInTime) return 0;
     const shiftStart = detailRecord?.shift?.start_time || '09:00';
-    const shiftStartMins = parseMins(shiftStart);
-    const checkInMins = parseMins(editCheckInTime);
-    const diff = checkInMins - shiftStartMins;
-    return diff > 0 ? diff : 0;
+    return calculateLateMinutes(editCheckInTime, shiftStart);
   }, [editStatus, editCheckInTime, detailRecord]);
 
   const liveColorCode = useMemo(() => {
@@ -234,22 +271,17 @@ export default function AttendancePage() {
 
   const liveOTMinutes = useMemo(() => {
     if (!editCheckOutTime) return 0;
+    const shiftStart = detailRecord?.shift?.start_time || '09:00';
     const shiftEnd = detailRecord?.shift?.end_time || '18:00';
-    return calculateOTMinutes(shiftEnd, editCheckOutTime);
+    return calculateOTMinutes(shiftEnd, editCheckOutTime, shiftStart);
   }, [editCheckOutTime, detailRecord]);
 
   const liveEarlyLeaveMinutes = useMemo(() => {
     if (!editCheckInTime || !editCheckOutTime) return 0;
+    const shiftStart = detailRecord?.shift?.start_time || '09:00';
     const shiftEnd = detailRecord?.shift?.end_time || '18:00';
-    const [eh, em] = shiftEnd.split(':').map(Number);
-    const [oh, om] = editCheckOutTime.split(':').map(Number);
-    const shiftEndMins = eh * 60 + em;
-    const actualOutMins = oh * 60 + om;
-    if (actualOutMins >= shiftEndMins) return 0;
-    const shiftHours = Number(detailRecord?.shift?.hours || 9);
-    const shortHours = Math.max(0, shiftHours - liveHoursWorked);
-    return Math.round(shortHours * 60);
-  }, [editCheckInTime, editCheckOutTime, liveHoursWorked, detailRecord]);
+    return calculateEarlyLeaveMinutes(shiftEnd, editCheckOutTime, shiftStart);
+  }, [editCheckInTime, editCheckOutTime, detailRecord]);
 
   useEffect(() => {
     if (editStatus !== 'late') {
@@ -268,14 +300,9 @@ export default function AttendancePage() {
     }
   }, [liveColorCode, editStatus, detailRecord, fineSettings]);
 
-  const calculateOTFromImport = (checkOut: string | null, shiftEnd: string | null): number => {
+  const calculateOTFromImport = (checkOut: string | null, shiftEnd: string | null, shiftStart?: string | null): number => {
     if (!checkOut || !shiftEnd) return 0;
-    const [eh, em] = shiftEnd.split(':').map(Number);
-    const [ah, am] = checkOut.split(':').map(Number);
-    const endMins = eh * 60 + em;
-    const outMins = ah * 60 + am;
-    const extra = outMins - endMins;
-    return extra >= 30 ? extra : 0;
+    return calculateOTMinutes(shiftEnd, checkOut, shiftStart || '09:00');
   };
 
   const calculateDerivedFields = (
@@ -289,28 +316,20 @@ export default function AttendancePage() {
     let ot_minutes = 0;
     let early_leave_minutes = 0;
 
-    const shift_start_mins = shift?.start_time ? parseMins(shift.start_time) : 540; // 09:00 default
-    const shift_end_mins = shift?.end_time ? parseMins(shift.end_time) : 1080; // 18:00 default
+    const shift_start = shift?.start_time || '09:00';
+    const shift_end = shift?.end_time || '18:00';
 
     if (status === 'late' && checkIn) {
-      const checkin_mins = parseMins(checkIn);
-      const diff = checkin_mins - shift_start_mins;
-      minutes_late = diff > 0 ? diff : 0;
+      minutes_late = calculateLateMinutes(checkIn, shift_start);
     }
 
     if (checkIn && checkOut) {
       actual_hours_worked = calculateActualHours(checkIn, checkOut);
-      
-      const checkout_mins = parseMins(checkOut);
-      if (checkout_mins < shift_end_mins) {
-        const shiftHours = Number(shift?.hours || 9);
-        const shortHours = Math.max(0, shiftHours - actual_hours_worked);
-        early_leave_minutes = Math.round(shortHours * 60);
-      }
+      early_leave_minutes = calculateEarlyLeaveMinutes(shift_end, checkOut, shift_start);
     }
 
     if (checkOut) {
-      ot_minutes = calculateOTMinutes(shift?.end_time || '18:00', checkOut);
+      ot_minutes = calculateOTMinutes(shift_end, checkOut, shift_start);
     }
 
     return {
@@ -419,7 +438,7 @@ export default function AttendancePage() {
 
       const { data: attRecords } = await supabase
         .from('attendance')
-        .select('check_in_time, day_type')
+        .select('date, check_in_time, day_type')
         .eq('staff_id', staffId)
         .gte('date', firstDay)
         .lte('date', lastDay);
@@ -431,15 +450,14 @@ export default function AttendancePage() {
 
       // Count used weekly offs already this month (excluding this date to avoid self-counting)
       const usedWeeklyOffs = attRecords?.filter(
-        r => r.day_type === 'weekly_off'
+        r => r.day_type === 'weekly_off' && r.date !== date
       ).length || 0;
 
-      const offDaysPerMonth = detailRecord.off_days_per_month || 4;
-      const divisor = offDaysPerMonth === 2 ? 12 : 6;
-      const earned = offDaysPerMonth === 0 ? 0 : Math.min(Math.floor(daysWorked / divisor), offDaysPerMonth);
+      const offDaysPerMonth = detailRecord.off_days_per_month !== undefined ? detailRecord.off_days_per_month : 4;
+      const earned = offDaysPerMonth === 0 ? 0 : Math.min(Math.floor(daysWorked / 6), offDaysPerMonth);
 
       if (usedWeeklyOffs >= earned) {
-        alert(`${detailRecord.name} has used all ${earned} earned weekly offs this month. Mark as Absent or Leave instead.`);
+        alert(`${detailRecord.name} has no weekly off balance remaining this month. Earned: ${earned} | Used: ${usedWeeklyOffs}`);
         return;
       }
     }
@@ -1501,19 +1519,14 @@ export default function AttendancePage() {
           row.shift = { start_time: '09:00', end_time: '18:00', hours: 9 };
         }
 
-        const [sh, sm] = row.shift.start_time.split(':').map(Number);
-        const shiftStartMins = sh * 60 + sm;
+        const shiftStart = row.shift.start_time || '09:00';
+        const shiftEnd = row.shift.end_time || '18:00';
 
-        const [ih, im] = row.inTime.split(':').map(Number);
-        const inMins = ih * 60 + im;
-
-        let minutesLate = 0;
-        let status: 'present' | 'late' = 'present';
+        let minutesLate = calculateLateMinutes(row.inTime, shiftStart);
+        let status: 'present' | 'late' = minutesLate > 0 ? 'late' : 'present';
         let colorCode: 'green' | 'yellow' | 'orange' | 'red' = 'green';
 
-        if (inMins > shiftStartMins) {
-          minutesLate = inMins - shiftStartMins;
-          status = 'late';
+        if (status === 'late') {
           if (minutesLate <= 15) {
             colorCode = 'yellow';
           } else if (minutesLate <= 30) {
@@ -1528,22 +1541,9 @@ export default function AttendancePage() {
         let earlyLeaveMinutes = 0;
 
         if (row.outTime) {
-          const shiftEnd = row.shift?.end_time || '18:00';
-          otMinutes = calculateOTFromImport(row.outTime, shiftEnd);
-          
-          const [oh, om] = row.outTime.split(':').map(Number);
-          const actualMins = (oh * 60 + om) - (inMins);
-          actualHoursWorked = Math.round((actualMins / 60) * 100) / 100;
-          
-          const [eh, em] = shiftEnd.split(':').map(Number);
-          const shiftEndMins = eh * 60 + em;
-          const actualOutMins = oh * 60 + om;
-          
-          if (actualOutMins < shiftEndMins) {
-            const shiftHours = Number(row.shift?.hours || 9);
-            const shortHours = Math.max(0, shiftHours - actualHoursWorked);
-            earlyLeaveMinutes = Math.round(shortHours * 60);
-          }
+          otMinutes = calculateOTFromImport(row.outTime, shiftEnd, shiftStart);
+          actualHoursWorked = calculateActualHours(row.inTime, row.outTime);
+          earlyLeaveMinutes = calculateEarlyLeaveMinutes(shiftEnd, row.outTime, shiftStart);
         }
 
         // FIX 4: Build the record object dynamically.
@@ -1839,6 +1839,40 @@ export default function AttendancePage() {
         }
       } catch (err) {
         console.error('Exception fetching fine settings:', err);
+      }
+
+      // 7. Fetch selected month's attendance for weekly off balance calculations
+      try {
+        const monthKey = selectedDate.substring(0, 7);
+        const firstDay = `${monthKey}-01`;
+        const [yr, mo] = monthKey.split('-').map(Number);
+        const lastDay = new Date(yr, mo, 0).toISOString().split('T')[0];
+
+        const { data: monthAtt } = await supabase
+          .from('attendance')
+          .select('staff_id, date, check_in_time, day_type')
+          .gte('date', firstDay)
+          .lte('date', lastDay);
+
+        const balances: Record<string, { earned: number; used: number; remaining: number }> = {};
+        
+        staff.forEach((s) => {
+          const staffAtt = monthAtt?.filter(a => a.staff_id === s.id) || [];
+          const daysWorked = staffAtt.filter(
+            a => a.check_in_time !== null && a.day_type !== 'weekly_off' && a.day_type !== 'holiday'
+          ).length;
+
+          const used = staffAtt.filter(a => a.day_type === 'weekly_off').length;
+          const offDaysPerMonth = s.off_days_per_month !== undefined ? s.off_days_per_month : 4;
+          const earned = offDaysPerMonth === 0 ? 0 : Math.min(Math.floor(daysWorked / 6), offDaysPerMonth);
+          const remaining = Math.max(0, earned - used);
+
+          balances[s.id] = { earned, used, remaining };
+        });
+
+        setWeeklyOffBalances(balances);
+      } catch (err) {
+        console.error('Error computing weekly off balances:', err);
       }
 
 
@@ -2301,30 +2335,66 @@ export default function AttendancePage() {
   return (
     <div className="space-y-5">
       {/* Date Navigation Picker */}
-      <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-3 shadow-sm flex items-center justify-between select-none">
-        <div className="flex items-center space-x-2 bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl px-3 py-1.5">
-          <button
-            onClick={handlePrevDay}
-            className="p-1 rounded hover:bg-[#EBEBEB] active:scale-95 transition-all text-[#1A1A1A] font-bold cursor-pointer"
-          >
-            ←
-          </button>
-          <input
-            type="date"
-            value={selectedDate}
-            min={getMinDateStr()}
-            max={todayStr}
-            onChange={(e) => handleDateChange(e.target.value)}
-            className="bg-transparent border-none p-0 focus:ring-0 text-xs font-bold text-[#1A1A1A] cursor-pointer text-center w-28 focus:outline-none focus:box-shadow-none"
-            style={{ padding: '0px', border: 'none', background: 'transparent', fontSize: '12px', minHeight: '0px', height: 'auto', width: '130px', boxShadow: 'none' }}
-          />
-          <button
-            onClick={handleNextDay}
-            disabled={selectedDate >= todayStr}
-            className="p-1 rounded hover:bg-[#EBEBEB] active:scale-95 transition-all text-[#1A1A1A] font-bold cursor-pointer disabled:opacity-30 disabled:pointer-events-none"
-          >
-            →
-          </button>
+      <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-3 shadow-sm flex flex-col md:flex-row gap-3 items-center justify-between select-none">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Month Selector */}
+          <div className="flex items-center space-x-1 bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl px-2.5 py-1.5">
+            <button
+              onClick={handlePrevMonth}
+              className="p-1 rounded hover:bg-[#EBEBEB] active:scale-95 transition-all text-[#1A1A1A] font-bold cursor-pointer"
+            >
+              ←
+            </button>
+            <span className="text-xs font-bold text-[#1A1A1A] min-w-[100px] text-center select-none uppercase tracking-wide">
+              {currentMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+            </span>
+            <button
+              onClick={handleNextMonth}
+              disabled={currentMonth.getFullYear() === new Date().getFullYear() && currentMonth.getMonth() === new Date().getMonth()}
+              className="p-1 rounded hover:bg-[#EBEBEB] active:scale-95 transition-all text-[#1A1A1A] font-bold cursor-pointer disabled:opacity-30 disabled:pointer-events-none"
+            >
+              →
+            </button>
+          </div>
+
+          {/* Day Selector */}
+          <div className="flex items-center space-x-1 bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl px-2.5 py-1.5">
+            <button
+              onClick={handlePrevDay}
+              className="p-1 rounded hover:bg-[#EBEBEB] active:scale-95 transition-all text-[#1A1A1A] font-bold cursor-pointer"
+            >
+              ←
+            </button>
+            <select
+              value={Number(selectedDate.split('-')[2])}
+              onChange={(e) => {
+                const dayVal = String(e.target.value).padStart(2, '0');
+                const mStr = String(currentMonth.getMonth() + 1).padStart(2, '0');
+                handleDateChange(`${currentMonth.getFullYear()}-${mStr}-${dayVal}`);
+              }}
+              className="bg-transparent border-none p-0 focus:ring-0 text-xs font-bold text-[#1A1A1A] cursor-pointer text-center w-14 focus:outline-none"
+              style={{ boxShadow: 'none', border: 'none', padding: 0 }}
+            >
+              {Array.from({ length: new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).getDate() }, (_, i) => i + 1).map((day) => {
+                const dayStr = String(day).padStart(2, '0');
+                const mStr = String(currentMonth.getMonth() + 1).padStart(2, '0');
+                const targetDateStr = `${currentMonth.getFullYear()}-${mStr}-${dayStr}`;
+                const isFuture = targetDateStr > todayStr;
+                return (
+                  <option key={day} value={day} disabled={isFuture} className="bg-white">
+                    {day}
+                  </option>
+                );
+              })}
+            </select>
+            <button
+              onClick={handleNextDay}
+              disabled={selectedDate >= todayStr}
+              className="p-1 rounded hover:bg-[#EBEBEB] active:scale-95 transition-all text-[#1A1A1A] font-bold cursor-pointer disabled:opacity-30 disabled:pointer-events-none"
+            >
+              →
+            </button>
+          </div>
         </div>
         
         <span className="text-xs font-extrabold text-white font-mono bg-[#1A1A1A] border border-white/10 px-3 py-1.5 rounded-xl uppercase tracking-wider">
@@ -2371,7 +2441,7 @@ export default function AttendancePage() {
           </div>
           {/* Add Record & Import/Export */}
           <div className="attendance-actions flex items-center space-x-2">
-            {(user?.role === 'admin' || user?.role === 'ops_manager') && (
+            {canEdit && (
               <button
                 onClick={() => {
                   setAddStaffId('');
@@ -2419,7 +2489,7 @@ export default function AttendancePage() {
             </button>
             {moreMenuOpen && (
               <div className="absolute right-0 top-[46px] bg-white border border-[#E8E8E8] rounded-[12px] shadow-[0_4px_12px_rgba(0,0,0,0.12)] p-1.5 z-[1000] min-w-[150px] flex flex-col space-y-1">
-                {(user?.role === 'admin' || user?.role === 'ops_manager') && (
+                {canEdit && (
                   <button
                     onClick={() => {
                       setMoreMenuOpen(false);
@@ -2685,12 +2755,18 @@ export default function AttendancePage() {
                       <p className="text-[11px] text-[var(--text-muted)] font-semibold mt-0.5 leading-none">
                         {item.department} • {item.shift?.label || 'No Shift'}
                       </p>
-                      {/* Admin/Ops see branch indicator */}
-                      {!userBranch && (
-                        <span className="inline-block text-[9px] font-bold uppercase text-[#555555] mt-1 bg-[#F2F2F2] border border-[#E8E8E8] px-1.5 py-0.5 rounded">
-                          {getBranchName(item.branch_id)}
-                        </span>
-                      )}
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {!userBranch && (
+                          <span className="inline-block text-[9px] font-bold uppercase text-[#555555] bg-[#F2F2F2] border border-[#E8E8E8] px-1.5 py-0.5 rounded">
+                            {getBranchName(item.branch_id)}
+                          </span>
+                        )}
+                        {weeklyOffBalances[item.id] && weeklyOffBalances[item.id].remaining > 0 && (
+                          <span className="inline-block text-[9px] font-extrabold uppercase text-[#2563EB] bg-[#EFF6FF] border border-[#BFDBFE] px-1.5 py-0.5 rounded">
+                            {weeklyOffBalances[item.id].remaining} offs left
+                          </span>
+                        )}
+                      </div>
                     </div>
 
                     {/* Status Badge & Check-in Photo */}
@@ -3408,7 +3484,7 @@ export default function AttendancePage() {
                   </div>
 
                   {/* Read-Only or Form Fields */}
-                  {user?.role === 'staff_executive' ? (
+                  {!canEdit ? (
                     <div className="space-y-3.5 bg-white border border-[#E8E8E8] rounded-[14px] p-4">
                       <div className="grid grid-cols-2 gap-4">
                         <div>
@@ -3599,7 +3675,7 @@ export default function AttendancePage() {
                             Approved
                           </span>
                         ) : (
-                          user?.role !== 'staff_executive' ? (
+                          canEdit ? (
                             <button
                               type="button"
                               onClick={() => setOtApproved(true)}
@@ -3663,7 +3739,7 @@ export default function AttendancePage() {
                         )}
                       </div>
 
-                      {user?.role !== 'staff_executive' && (
+                      {canEdit && (
                         <div className="pt-1.5 space-y-3 border-t border-[#E8E8E8]/60">
                           {/* Edit Amount */}
                           <div className="flex items-center gap-3">
@@ -3711,7 +3787,7 @@ export default function AttendancePage() {
             </div>
 
             {/* Sticky Action Footer */}
-            {user?.role !== 'staff_executive' && (detailRecord.record || isAddingRecord) && (
+            {canEdit && (detailRecord.record || isAddingRecord) && (
               <div className="p-5 border-t border-[#E8E8E8] bg-white sticky bottom-0 z-10 flex gap-3">
                 {detailRecord.record && (
                   <button

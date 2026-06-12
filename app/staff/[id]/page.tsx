@@ -29,7 +29,7 @@ import {
 } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import { formatTime12hr } from '@/lib/utils';
-import { calculateEarlyLeaveDeduction, calculateActualHours, calculateOTMinutes, calculateEarlyLeaveMinutes } from '@/lib/salary';
+import { calculateEarlyLeaveDeduction, calculateActualHours, calculateOTMinutes, calculateEarlyLeaveMinutes, calculateLateMinutes, calculateMinutesWorked } from '@/lib/salary';
 import { createAuditLog } from '@/lib/audit';
 
 interface StaffMember {
@@ -348,6 +348,37 @@ export default function StaffProfilePage() {
       let actualHours = 0;
       let shortAttendance = false;
 
+      if (finalDayType === 'weekly_off') {
+        const monthKey = dateStr.substring(0, 7);
+        const firstDay = `${monthKey}-01`;
+        const [yr, mo] = monthKey.split('-').map(Number);
+        const lastDay = new Date(yr, mo, 0).toISOString().split('T')[0];
+
+        const { data: attRecords } = await supabase
+          .from('attendance')
+          .select('date, check_in_time, day_type')
+          .eq('staff_id', staff.id)
+          .gte('date', firstDay)
+          .lte('date', lastDay);
+
+        const daysWorked = attRecords?.filter(
+          r => r.check_in_time !== null && r.day_type !== 'weekly_off' && r.day_type !== 'holiday'
+        ).length || 0;
+
+        const usedWeeklyOffs = attRecords?.filter(
+          r => r.day_type === 'weekly_off' && r.date !== dateStr
+        ).length || 0;
+
+        const offDaysPerMonth = staff.off_days_per_month !== undefined ? staff.off_days_per_month : 4;
+        const earned = offDaysPerMonth === 0 ? 0 : Math.min(Math.floor(daysWorked / 6), offDaysPerMonth);
+
+        if (usedWeeklyOffs >= earned) {
+          alert(`${staff.name} has no weekly off balance remaining this month. Earned: ${earned} | Used: ${usedWeeklyOffs}`);
+          setIsSavingAttendance(false);
+          return;
+        }
+      }
+
       if (finalDayType === 'weekly_off' || finalDayType === 'holiday' || finalDayType === 'leave') {
         finalCheckIn = null;
         finalCheckOut = null;
@@ -359,14 +390,9 @@ export default function StaffProfilePage() {
           colorCode = 'red';
         } else {
           const shiftStartStr = staff.shift?.start_time || '09:00';
-          const [sh, sm] = shiftStartStr.split(':').map(Number);
-          const shiftMins = sh * 60 + sm;
+          minutesLate = calculateLateMinutes(finalCheckIn, shiftStartStr);
 
-          const [ih, im] = finalCheckIn.split(':').map(Number);
-          const checkInMins = ih * 60 + im;
-
-          if (checkInMins > shiftMins) {
-            minutesLate = checkInMins - shiftMins;
+          if (minutesLate > 0) {
             finalStatus = 'late';
             if (minutesLate <= 15) colorCode = 'yellow';
             else if (minutesLate <= 30) colorCode = 'orange';
@@ -384,16 +410,14 @@ export default function StaffProfilePage() {
             }
             
             actualHours = calculateActualHours(finalCheckIn, finalCheckOut);
-            const [oh, om] = finalCheckOut.split(':').map(Number);
-            const checkOutMins = oh * 60 + om;
-            const diffMins = checkOutMins - checkInMins;
+            const diffMins = calculateMinutesWorked(finalCheckIn, finalCheckOut);
             if (diffMins > 0 && diffMins < 30) {
               shortAttendance = true;
             }
 
             const shiftEndStr = staff.shift?.end_time || '18:00';
-            otMinutes = calculateOTMinutes(shiftEndStr, finalCheckOut);
-            earlyLeaveMinutes = calculateEarlyLeaveMinutes(shiftEndStr, finalCheckOut);
+            otMinutes = calculateOTMinutes(shiftEndStr, finalCheckOut, shiftStartStr);
+            earlyLeaveMinutes = calculateEarlyLeaveMinutes(shiftEndStr, finalCheckOut, shiftStartStr);
           }
         }
       }
@@ -573,6 +597,94 @@ export default function StaffProfilePage() {
     } catch (err: any) {
       console.error(err);
       alert('Failed to delete attendance: ' + err.message);
+    }
+  };
+
+  const handleApproveAllOT = async () => {
+    if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(50);
+    if (pendingOT.length === 0) return;
+    try {
+      const ids = pendingOT.map(ot => ot.id);
+      const { error } = await supabase
+        .from('attendance')
+        .update({ ot_approved: true })
+        .in('id', ids);
+      if (error) throw error;
+      
+      for (const ot of pendingOT) {
+        await createAuditLog({
+          action: 'APPROVE_OT',
+          table_name: 'attendance',
+          record_id: ot.id,
+          old_value: { ot_approved: false },
+          new_value: { ot_approved: true },
+          performed_by: user?.name || user?.email || 'Admin',
+          performed_by_role: user?.role || 'admin',
+          reason: `Bulk Approved OT of ${ot.ot_minutes} mins for date ${ot.date}`
+        });
+      }
+
+      showToast('All OT Approved ✓');
+      fetchPendingActions();
+      fetchMonthData();
+    } catch (err: any) {
+      alert('Failed to approve all OT: ' + err.message);
+    }
+  };
+
+  const handleConfirmAllFines = async () => {
+    if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(50);
+    if (pendingLateFines.length === 0 && pendingSpecialFines.length === 0) return;
+    try {
+      if (pendingLateFines.length > 0) {
+        const lfIds = pendingLateFines.map(lf => lf.id);
+        const { error } = await supabase
+          .from('late_fines')
+          .update({ confirmed: true })
+          .in('id', lfIds);
+        if (error) throw error;
+
+        for (const lf of pendingLateFines) {
+          await createAuditLog({
+            action: 'CONFIRM_FINE',
+            table_name: 'late_fines',
+            record_id: lf.id,
+            old_value: { confirmed: false },
+            new_value: { confirmed: true },
+            performed_by: user?.name || user?.email || 'Admin',
+            performed_by_role: user?.role || 'admin',
+            reason: `Bulk Confirmed late fine of ₹${lf.fine_amount} for date ${lf.date}`
+          });
+        }
+      }
+
+      if (pendingSpecialFines.length > 0) {
+        const sfIds = pendingSpecialFines.map(sf => sf.id);
+        const { error } = await supabase
+          .from('special_fines')
+          .update({ confirmed: true })
+          .in('id', sfIds);
+        if (error) throw error;
+
+        for (const sf of pendingSpecialFines) {
+          await createAuditLog({
+            action: 'CONFIRM_SPECIAL_FINE',
+            table_name: 'special_fines',
+            record_id: sf.id,
+            old_value: { confirmed: false },
+            new_value: { confirmed: true },
+            performed_by: user?.name || user?.email || 'Admin',
+            performed_by_role: user?.role || 'admin',
+            reason: `Bulk Confirmed special fine of ₹${sf.amount} for date ${sf.date}`
+          });
+        }
+      }
+
+      showToast('All Fines Confirmed ✓');
+      fetchPendingActions();
+      fetchMonthData();
+    } catch (err: any) {
+      alert('Failed to confirm all fines: ' + err.message);
     }
   };
 
@@ -1019,23 +1131,14 @@ export default function StaffProfilePage() {
   const weeklyOffStats = useMemo(() => {
     if (!staff) return { earnedQuota: 0, weeklyOffsUsed: 0, weeklyOffsRemaining: 0 };
     const daysActuallyWorked = attendance.filter(a => a.check_in_time !== null && a.day_type !== 'weekly_off' && a.day_type !== 'holiday').length;
-    const offDaysPerMonth = staff.off_days_per_month as 0 | 2 | 4;
+    const offDaysPerMonth = staff.off_days_per_month ?? 4;
     
-    let earnedQuota = 0;
-    if (offDaysPerMonth === 4) {
-      earnedQuota = Math.min(Math.floor(daysActuallyWorked / 6), 4);
-    } else if (offDaysPerMonth === 2) {
-      earnedQuota = Math.min(Math.floor(daysActuallyWorked / 12), 2);
-    }
-
-    const weeklyOffsTaken = attendance.filter(a => a.day_type === 'weekly_off').length + 
-      leaves.filter(l => l.status === 'approved' && l.is_weekly_off && l.date.substring(0, 7) === selectedMonth).length;
-
-    const weeklyOffsUsed = Math.min(weeklyOffsTaken, earnedQuota);
-    const weeklyOffsRemaining = earnedQuota - weeklyOffsUsed;
+    const earnedQuota = offDaysPerMonth === 0 ? 0 : Math.min(Math.floor(daysActuallyWorked / 6), offDaysPerMonth);
+    const weeklyOffsUsed = attendance.filter(a => a.day_type === 'weekly_off').length;
+    const weeklyOffsRemaining = Math.max(0, earnedQuota - weeklyOffsUsed);
 
     return { earnedQuota, weeklyOffsUsed, weeklyOffsRemaining };
-  }, [attendance, leaves, staff, selectedMonth]);
+  }, [attendance, staff, selectedMonth]);
 
   // Performance Score Grade Calculator
   const getPerfGrade = (score: number) => {
@@ -1112,9 +1215,29 @@ export default function StaffProfilePage() {
       {/* Pending Actions Panel */}
       {(pendingOT.length > 0 || pendingLateFines.length > 0 || pendingSpecialFines.length > 0 || pendingLeaves.length > 0) && (
         <div className="bg-[rgba(251,191,36,0.06)] border border-[rgba(251,191,36,0.18)] rounded-[18px] p-4 space-y-3.5 card-entry">
-          <div className="flex items-center space-x-2 border-b border-[rgba(251,191,36,0.15)] pb-2">
-            <AlertTriangle size={18} className="text-[#FBBF24] animate-pulse" />
-            <h2 className="text-sm font-extrabold text-[#FBBF24] uppercase tracking-wider">Pending Actions Required</h2>
+          <div className="flex items-center justify-between border-b border-[rgba(251,191,36,0.15)] pb-2 flex-wrap gap-2">
+            <div className="flex items-center space-x-2">
+              <AlertTriangle size={18} className="text-[#FBBF24] animate-pulse" />
+              <h2 className="text-sm font-extrabold text-[#FBBF24] uppercase tracking-wider">Pending Actions Required</h2>
+            </div>
+            <div className="flex items-center space-x-1.5">
+              {pendingOT.length > 0 && (
+                <button
+                  onClick={handleApproveAllOT}
+                  className="h-7 min-h-0 px-2.5 bg-[#4ADE80] text-black font-extrabold rounded-lg text-[9px] active:scale-95 transition-all cursor-pointer uppercase tracking-wider whitespace-nowrap"
+                >
+                  Approve All OT
+                </button>
+              )}
+              {(pendingLateFines.length > 0 || pendingSpecialFines.length > 0) && (
+                <button
+                  onClick={handleConfirmAllFines}
+                  className="h-7 min-h-0 px-2.5 bg-[#FBBF24] text-black font-extrabold rounded-lg text-[9px] active:scale-95 transition-all cursor-pointer uppercase tracking-wider whitespace-nowrap"
+                >
+                  Confirm All Fines
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="space-y-3 max-h-[280px] overflow-y-auto pr-1">
@@ -1259,7 +1382,14 @@ export default function StaffProfilePage() {
             </div>
             <p className="text-xs text-[var(--text-secondary)] font-semibold flex items-center gap-1">
               <Clock size={12} className="text-[var(--text-muted)]" />
-              <span>Shift: {staff.shift ? `${staff.shift.label} (${formatTime12hr(staff.shift.start_time)} - ${formatTime12hr(staff.shift.end_time)})` : 'No Shift'}</span>
+              <span>
+                Shift:{' '}
+                {staff.shift
+                  ? (staff.shift.label.includes('AM') || staff.shift.label.includes('PM') || staff.shift.label.includes('–'))
+                    ? staff.shift.label
+                    : `${staff.shift.label} (${formatTime12hr(staff.shift.start_time)} - ${formatTime12hr(staff.shift.end_time)})`
+                  : 'No Shift'}
+              </span>
             </p>
             <p className="text-[11px] text-[var(--text-muted)] font-bold">
               Joined: {new Date(staff.join_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
@@ -1375,6 +1505,12 @@ export default function StaffProfilePage() {
         {/* Tab 1: Attendance Grid */}
         {activeTab === 'attendance' && (
           <div className="space-y-4">
+            <div className="bg-[#EFF6FF] border border-[#60A5FA]/20 rounded-[14px] p-3 text-xs flex justify-between items-center text-[#1E3A8A] font-medium shadow-sm">
+              <span className="font-extrabold uppercase tracking-wider text-[9px] text-[#60A5FA]">Weekly Off Balance</span>
+              <span className="font-extrabold text-[11px] text-[#1E3A8A]">
+                Weekly Off: {weeklyOffStats.earnedQuota} earned | {weeklyOffStats.weeklyOffsUsed} used | {weeklyOffStats.weeklyOffsRemaining} remaining
+              </span>
+            </div>
             <div 
               className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[18px] p-4"
               onTouchStart={onTouchStart}

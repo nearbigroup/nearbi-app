@@ -29,6 +29,7 @@ interface LeaveRequest {
   staff: Staff;
   requires_ops_approval?: boolean;
   day_of_week?: string;
+  is_weekly_off?: boolean;
 }
 
 export default function LeavePage() {
@@ -140,7 +141,7 @@ export default function LeavePage() {
     }
   };
 
-  const checkLeaveQuota = async (staffId: string) => {
+  const checkWeeklyOffQuota = async (staffId: string) => {
     const { data: staffData } = await supabase
       .from('staff')
       .select('off_days_per_month')
@@ -164,18 +165,7 @@ export default function LeavePage() {
     const worked = daysWorked || 0;
     const offDays = staffData?.off_days_per_month || 0;
 
-    let earnedQuota = 0;
-    if (offDays === 4) earnedQuota = Math.floor(worked / 6);
-    if (offDays === 2) earnedQuota = Math.floor(worked / 12);
-    earnedQuota = Math.min(earnedQuota, offDays);
-
-    const { count: usedLeaves } = await supabase
-      .from('leave_requests')
-      .select('*', { count: 'exact', head: true })
-      .eq('staff_id', staffId)
-      .eq('status', 'approved')
-      .gte('date', firstDay)
-      .lte('date', lastDay);
+    const earnedQuota = offDays === 0 ? 0 : Math.min(Math.floor(worked / 6), offDays);
 
     const { count: usedWeeklyOffs } = await supabase
       .from('attendance')
@@ -185,21 +175,24 @@ export default function LeavePage() {
       .gte('date', firstDay)
       .lte('date', lastDay);
 
-    const usedCount = (usedLeaves || 0) + (usedWeeklyOffs || 0);
-    const remaining = earnedQuota - usedCount;
+    const used = usedWeeklyOffs || 0;
+    const remaining = Math.max(0, earnedQuota - used);
 
-    return { earnedQuota, usedLeaves: usedCount, remaining };
+    return { earnedQuota, used, remaining };
   };
 
   const handleApproveClick = async (req: LeaveRequest) => {
-    // Weekend leave restriction
-    if (req.requires_ops_approval) {
+    // Weekend leave restriction (Saturday and Sunday)
+    const reqDate = new Date(req.date);
+    const dayOfWeek = reqDate.getDay();
+    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6; // 0 = Sunday, 6 = Saturday
+    if (isWeekend) {
       if (user?.role === 'staff_executive') {
         alert('This is a weekend leave request. Only the Operations Manager or Admin can approve weekend leaves.');
         return;
       }
       // For ops_manager and admin, show confirmation
-      const dayName = req.day_of_week || new Date(req.date).toLocaleDateString('en-US', { weekday: 'long' });
+      const dayName = req.day_of_week || reqDate.toLocaleDateString('en-US', { weekday: 'long' });
       if (!confirm(`This is a ${dayName} leave request. Weekends are peak business days. Confirm approval?`)) {
         return;
       }
@@ -213,43 +206,56 @@ export default function LeavePage() {
 
     try {
       setLoading(true);
-      const { earnedQuota, remaining } = await checkLeaveQuota(req.staff_id);
+      const { earnedQuota, remaining } = await checkWeeklyOffQuota(req.staff_id);
       setLoading(false);
 
-      if (remaining > 0) {
-        // Approve within quota
-        await executeApproval(req.id, true, approveAsWeeklyOff);
+      const monthlySalary = req.staff.monthly_salary || 0;
+      const dailyRate = Math.round(monthlySalary / 30);
+
+      if (approveAsWeeklyOff) {
+        if (remaining > 0) {
+          // Approve within quota
+          await executeApproval(req.id, true);
+        } else {
+          // Show warning modal
+          setQuotaWarning({
+            id: req.id,
+            staffId: req.staff_id,
+            staffName: req.staff.name,
+            earnedQuota,
+            deductionAmount: dailyRate,
+            approveAsWeeklyOff: true,
+          });
+        }
       } else {
-        // Show warning modal
-        const monthlySalary = req.staff.monthly_salary || 0;
-        const dailyRate = Math.round(monthlySalary / 30);
+        // Standard leave always causes deduction warning
         setQuotaWarning({
           id: req.id,
           staffId: req.staff_id,
           staffName: req.staff.name,
           earnedQuota,
           deductionAmount: dailyRate,
-          approveAsWeeklyOff,
+          approveAsWeeklyOff: false,
         });
       }
     } catch (err) {
       console.error(err);
       setLoading(false);
-      showToast('Error checking leave quota.');
+      showToast('Error checking weekly off quota.');
     }
   };
 
-  const executeApproval = async (id: string, isWithinQuota: boolean, isWeeklyOff: boolean = false) => {
+  const executeApproval = async (id: string, isWeeklyOff: boolean = false) => {
     const req = requests.find((r) => r.id === id);
     const isWeekend = req?.requires_ops_approval;
-    const approverName = (isWithinQuota && !isWeekend) ? 'system_auto' : (user?.name || user?.email || 'Admin');
+    const approverName = user?.name || user?.email || 'Admin';
     try {
       const { error } = await supabase
         .from('leave_requests')
         .update({
           status: 'approved',
           approved_by: approverName,
-          is_quota_leave: isWithinQuota && !isWeekend,
+          is_quota_leave: false, // Standard leaves are always unpaid now
           is_weekly_off: isWeeklyOff,
         })
         .eq('id', id);
@@ -296,10 +302,10 @@ export default function LeavePage() {
           action: 'approve_leave',
           table_name: 'leave_requests',
           record_id: id,
-          new_value: { status: 'approved', approved_by: approverName, is_quota_leave: isWithinQuota, is_weekly_off: isWeeklyOff },
+          new_value: { status: 'approved', approved_by: approverName, is_quota_leave: false, is_weekly_off: isWeeklyOff },
           performed_by: user?.email || 'admin',
           performed_by_role: user?.role || 'admin',
-          reason: isWithinQuota ? 'Approved (within quota)' : 'Approved (salary deduction impact)'
+          reason: isWeeklyOff ? 'Approved as Weekly Off' : 'Approved (Standard Unpaid Leave)'
         });
       }
 
@@ -311,6 +317,7 @@ export default function LeavePage() {
       showToast('Error approving leave request.');
     }
   };
+
 
   // Group by status
   const pendingRequests = requests.filter((r) => r.status === 'pending');
@@ -542,13 +549,13 @@ export default function LeavePage() {
                   
                   {r.status === 'approved' && (
                     <div className="mt-1">
-                      {r.is_quota_leave ? (
+                      {r.is_weekly_off ? (
                         <span className="text-[10px] font-bold text-[var(--success)] bg-white/60 border border-[var(--success)]/20 px-2 py-0.5 rounded-[20px]">
-                          Within quota — no deduction
+                          Weekly Off — no deduction
                         </span>
                       ) : (
                         <span className="text-[10px] font-bold text-[var(--warning)] bg-white/60 border border-[var(--warning)]/20 px-2 py-0.5 rounded-[20px]">
-                          Exceeds quota — salary deducted
+                          Unpaid Leave — salary deducted
                         </span>
                       )}
                     </div>
@@ -565,11 +572,20 @@ export default function LeavePage() {
           <div className="bg-white border border-[#E8E8E8] rounded-[20px] max-w-sm w-full p-6 flex flex-col space-y-4 shadow-2xl text-center">
             <div className="flex flex-col items-center">
               <span className="text-[var(--warning)] mb-2 text-3xl">⚠️</span>
-              <h3 className="text-[#1A1A1A] text-base font-bold">Quota Warning</h3>
+              <h3 className="text-[#1A1A1A] text-base font-bold">Salary Deduction Warning</h3>
               <p className="text-[#555555] text-xs font-semibold mt-2 leading-relaxed">
-                This staff has used all <strong>{quotaWarning.earnedQuota}</strong> earned leave days this month.
-                Approving will deduct 1 day salary (<strong>₹{quotaWarning.deductionAmount.toLocaleString()}</strong>).
-                Approve anyway?
+                {quotaWarning.approveAsWeeklyOff ? (
+                  <>
+                    This staff has no remaining Weekly Off balance (Earned: <strong>{quotaWarning.earnedQuota}</strong> this month).
+                    Approving as a Weekly Off will result in a 1-day salary deduction of <strong>₹{quotaWarning.deductionAmount.toLocaleString()}</strong>.
+                  </>
+                ) : (
+                  <>
+                    This is a standard leave request. Standard leaves are unpaid and will result in a 1-day salary deduction of <strong>₹{quotaWarning.deductionAmount.toLocaleString()}</strong>.
+                  </>
+                )}
+                <br />
+                <span className="mt-2 block font-black text-[#1A1A1A]">Approve anyway?</span>
               </p>
             </div>
             <div className="flex gap-3">
@@ -582,7 +598,7 @@ export default function LeavePage() {
               </button>
               <button
                 type="button"
-                onClick={() => executeApproval(quotaWarning.id, false, quotaWarning.approveAsWeeklyOff)}
+                onClick={() => executeApproval(quotaWarning.id, quotaWarning.approveAsWeeklyOff)}
                 className="flex-1 min-h-[40px] bg-[#1A1A1A] text-white hover:bg-[#333333] font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
               >
                 Approve with Deduction

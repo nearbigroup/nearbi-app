@@ -138,46 +138,83 @@ export function calculateSalary(
   };
 }
 
+function getMinutes(time: string): number {
+  const [h, m] = time.split(':').map(Number)
+  return (h * 60) + m
+}
+
+export function calculateMinutesWorked(
+  checkIn: string,
+  checkOut: string
+): number {
+  const inMins = getMinutes(checkIn)
+  const outMins = getMinutes(checkOut)
+  if (outMins <= inMins) {
+    return (outMins + 1440) - inMins
+  }
+  return outMins - inMins
+}
+
 export function calculateOTMinutes(
   shiftEnd: string,
-  actualOut: string
+  actualOut: string,
+  shiftStart: string
 ): number {
-  if (!shiftEnd || !actualOut) return 0;
-  
-  const [eh, em] = shiftEnd.split(':').map(Number);
-  const [ah, am] = actualOut.split(':').map(Number);
-  
-  const endMins = (eh * 60) + em;
-  const outMins = (ah * 60) + am;
-  
-  const extra = outMins - endMins;
-  
-  if (extra < 30) return 0;
-  return extra;
+  const shiftEndMins = getMinutes(shiftEnd)
+  const outMins = getMinutes(actualOut)
+  const inMins = getMinutes(shiftStart)
+
+  let adjustedShiftEnd = shiftEndMins
+  if (shiftEndMins < inMins) {
+    adjustedShiftEnd = shiftEndMins + 1440
+  }
+
+  let adjustedOut = outMins
+  if (outMins < inMins) {
+    adjustedOut = outMins + 1440
+  }
+
+  const extra = adjustedOut - adjustedShiftEnd
+  if (extra < 30) return 0
+  return extra
 }
 
 export function calculateEarlyLeaveMinutes(
   shiftEnd: string,
-  actualOut: string
+  actualOut: string,
+  shiftStart: string
 ): number {
-  const [eh, em] = shiftEnd.split(':').map(Number);
-  const [ah, am] = actualOut.split(':').map(Number);
-  const shiftEndMins = eh * 60 + em;
-  const actualOutMins = ah * 60 + am;
-  const diff = shiftEndMins - actualOutMins;
-  return Math.max(0, diff);
+  const shiftEndMins = getMinutes(shiftEnd)
+  const outMins = getMinutes(actualOut)
+  const inMins = getMinutes(shiftStart)
+
+  let adjustedShiftEnd = shiftEndMins
+  if (shiftEndMins < inMins) {
+    adjustedShiftEnd = shiftEndMins + 1440
+  }
+
+  let adjustedOut = outMins
+  if (outMins < inMins) {
+    adjustedOut = outMins + 1440
+  }
+
+  return Math.max(0, adjustedShiftEnd - adjustedOut)
+}
+
+export function calculateLateMinutes(
+  checkIn: string,
+  shiftStart: string
+): number {
+  const inMins = getMinutes(checkIn)
+  const startMins = getMinutes(shiftStart)
+  return Math.max(0, inMins - startMins)
 }
 
 export function calculateActualHours(
   checkIn: string,
   checkOut: string
 ): number {
-  const [ih, im] = checkIn.split(':').map(Number);
-  const [oh, om] = checkOut.split(':').map(Number);
-  const inMins = ih * 60 + im;
-  const outMins = oh * 60 + om;
-  if (outMins <= inMins) return 0;
-  return Math.round(((outMins - inMins) / 60) * 100) / 100;
+  return Math.round((calculateMinutesWorked(checkIn, checkOut) / 60) * 100) / 100;
 }
 
 export async function calculateActualHoursWithBreaks(
@@ -186,9 +223,7 @@ export async function calculateActualHoursWithBreaks(
   staffId: string,
   date: string
 ): Promise<number> {
-  const [ih, im] = checkIn.split(':').map(Number);
-  const [oh, om] = checkOut.split(':').map(Number);
-  const rawMins = (oh * 60 + om) - (ih * 60 + im);
+  const rawMins = calculateMinutesWorked(checkIn, checkOut);
   if (rawMins <= 0) return 0;
 
   // Subtract break durations
@@ -206,3 +241,4 @@ export async function calculateActualHoursWithBreaks(
   const netMins = rawMins - totalBreakMins;
   return Math.max(0, Math.round((netMins / 60) * 100) / 100);
 }
+

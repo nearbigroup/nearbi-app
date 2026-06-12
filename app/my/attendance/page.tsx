@@ -226,23 +226,14 @@ export default function StaffAttendancePage() {
   const weeklyOffStats = useMemo(() => {
     if (!staff) return { earnedQuota: 0, weeklyOffsUsed: 0, weeklyOffsRemaining: 0 };
     const daysActuallyWorked = attendance.filter(a => a.check_in_time !== null && a.day_type !== 'weekly_off' && a.day_type !== 'holiday').length;
-    const offDaysPerMonth = staff.off_days_per_month as 0 | 2 | 4;
+    const offDaysPerMonth = staff.off_days_per_month ?? 4;
     
-    let earnedQuota = 0;
-    if (offDaysPerMonth === 4) {
-      earnedQuota = Math.min(Math.floor(daysActuallyWorked / 6), 4);
-    } else if (offDaysPerMonth === 2) {
-      earnedQuota = Math.min(Math.floor(daysActuallyWorked / 12), 2);
-    }
-
-    const weeklyOffsTaken = attendance.filter(a => a.day_type === 'weekly_off').length + 
-      leaves.filter(l => l.status === 'approved' && l.is_weekly_off && l.date.substring(0, 7) === selectedMonth).length;
-
-    const weeklyOffsUsed = Math.min(weeklyOffsTaken, earnedQuota);
-    const weeklyOffsRemaining = earnedQuota - weeklyOffsUsed;
+    const earnedQuota = offDaysPerMonth === 0 ? 0 : Math.min(Math.floor(daysActuallyWorked / 6), offDaysPerMonth);
+    const weeklyOffsUsed = attendance.filter(a => a.day_type === 'weekly_off').length;
+    const weeklyOffsRemaining = Math.max(0, earnedQuota - weeklyOffsUsed);
 
     return { earnedQuota, weeklyOffsUsed, weeklyOffsRemaining };
-  }, [attendance, leaves, staff, selectedMonth]);
+  }, [attendance, staff, selectedMonth]);
 
   const calendarDays = useMemo(() => {
     const [yearStr, monthStr] = selectedMonth.split('-');
@@ -407,7 +398,7 @@ export default function StaffAttendancePage() {
       <div className="bg-white border border-[#E8E8E8] rounded-xl p-3 flex justify-between items-center text-xs font-bold text-gray-500 shadow-sm">
         <span className="uppercase text-[9px] tracking-wider text-[var(--text-muted)]">Weekly Off Balance</span>
         <span className="text-[#1A1A1A] font-mono">
-          {weeklyOffStats.earnedQuota} Earned | {weeklyOffStats.weeklyOffsUsed} Used | {weeklyOffStats.weeklyOffsRemaining} Remaining
+          Weekly Off: {weeklyOffStats.earnedQuota} earned | {weeklyOffStats.weeklyOffsUsed} used | {weeklyOffStats.weeklyOffsRemaining} remaining
         </span>
       </div>
 

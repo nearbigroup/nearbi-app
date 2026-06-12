@@ -10,7 +10,13 @@ import { Check, Search, AlertCircle } from 'lucide-react';
 import { createAuditLog } from '@/lib/audit';
 import SpecialFinesSection from './SpecialFinesSection';
 
-export default function BulkConfirmTab({ selectedMonth }: { selectedMonth?: string }) {
+export default function BulkConfirmTab({ 
+  selectedMonth,
+  onConfirmationsUpdated
+}: { 
+  selectedMonth?: string;
+  onConfirmationsUpdated?: () => void;
+}) {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [confirming, setConfirming] = useState(false);
@@ -346,6 +352,9 @@ export default function BulkConfirmTab({ selectedMonth }: { selectedMonth?: stri
 
         await fetchData();
         alert('All salaries confirmed successfully!');
+        if (onConfirmationsUpdated) {
+          onConfirmationsUpdated();
+        }
       }
     } catch (err) {
       console.error(err);
