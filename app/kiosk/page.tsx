@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { createNotification } from '@/lib/notifications';
 import { useRouter } from 'next/navigation';
 import { Check, LogOut, Camera, AlertCircle, UserCheck, Timer, AlertTriangle, Coffee, RotateCcw, CircleCheck } from 'lucide-react';
-import { calculateOTMinutes, calculateActualHours, calculateActualHoursWithBreaks, calculateEarlyLeaveMinutes } from '@/lib/salary';
+import { calculateOTMinutes, calculateActualHours, calculateActualHoursWithBreaks, calculateEarlyLeaveMinutes, calculateLateMinutes } from '@/lib/salary';
 import { formatTime12hr } from '@/lib/utils';
 
 
@@ -529,13 +529,13 @@ export default function KioskPage() {
         const now = new Date();
         const checkInTimeStr = now.toTimeString().split(' ')[0].substring(0, 5); // "HH:MM"
 
-        const shiftStartStr = staff.shift?.start_time || '09:00'; // "HH:MM"
+        const shiftStartStr = staff.shift?.start_time || staff.shifts?.start_time || '09:00'; // "HH:MM"
         const [sh, sm] = shiftStartStr.split(':').map(Number);
         const shiftMins = sh * 60 + sm;
         const currentMins = now.getHours() * 60 + now.getMinutes();
 
         // Block check-in if time > shift_end + 2 hours
-        const shiftEndStr = staff.shift?.end_time || '18:00';
+        const shiftEndStr = staff.shift?.end_time || staff.shifts?.end_time || '18:00';
         const [seH, seM] = shiftEndStr.split(':').map(Number);
         
         let shiftEndToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), seH, seM, 0);
@@ -557,13 +557,13 @@ export default function KioskPage() {
           earlyInMinutes = shiftMins - currentMins;
         }
 
-        // Calculate minutes late
-        let minutesLate = 0;
+        // Calculate minutes late using calculateLateMinutes
+        const minutesLate = calculateLateMinutes(checkInTimeStr, shiftStartStr);
+        const lateMins = minutesLate; // late_salary_deduction_minutes
         let status: 'present' | 'late' = 'present';
         let colorCode: 'green' | 'yellow' | 'orange' | 'red' = 'green';
 
-        if (currentMins > shiftMins) {
-          minutesLate = currentMins - shiftMins;
+        if (minutesLate > 0) {
           status = 'late';
           
           if (minutesLate <= 15) {
@@ -623,7 +623,7 @@ export default function KioskPage() {
 
         const currentMonthStr = todayStr.substring(0, 7);
 
-        // Upsert attendance record for check_in
+        // Upsert attendance record for check_in with late_salary_deduction_minutes
         const { error: upsertErr } = await supabase.from('attendance').upsert({
           staff_id: staff.id,
           date: todayStr,
@@ -631,6 +631,7 @@ export default function KioskPage() {
           status,
           color_code: colorCode,
           minutes_late: minutesLate,
+          late_salary_deduction_minutes: lateMins,
           early_in_minutes: earlyInMinutes,
           check_in_photo: photoUrl || null,
           marked_by: 'kiosk',

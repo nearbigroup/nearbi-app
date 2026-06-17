@@ -94,7 +94,7 @@ export default function ApprovalsPage() {
       // Auto-sync OT adjustments
       const { data: attWithOT } = await supabase
         .from('attendance')
-        .select('*, staff(*)')
+        .select('*, staff!inner(*)')
         .gt('ot_minutes', 0)
         .eq('ot_approved', false)
         .gte('date', firstDayOfMonth)
@@ -137,7 +137,9 @@ export default function ApprovalsPage() {
 
       const { data: adjData, error: adjErr } = await adjQuery;
       if (adjErr) throw adjErr;
-      setAdjustments((adjData || []) as unknown as Adjustment[]);
+      // Filter out orphan records where staff object is null
+      const validAdjustments = (adjData || []).filter((a) => a.staff !== null);
+      setAdjustments(validAdjustments as unknown as Adjustment[]);
 
       // 2. Fetch pending fines (waived=false and confirmed=false)
       let fineQuery = supabase
@@ -152,7 +154,9 @@ export default function ApprovalsPage() {
 
       const { data: fineData, error: fineErr } = await fineQuery;
       if (fineErr) throw fineErr;
-      setFines((fineData || []) as unknown as LateFine[]);
+      // Filter out orphan records where staff object is null
+      const validFines = (fineData || []).filter((f) => f.staff !== null);
+      setFines(validFines as unknown as LateFine[]);
 
       // 3. Fetch corresponding attendance records for adjustments to show details
       if (adjData && adjData.length > 0) {

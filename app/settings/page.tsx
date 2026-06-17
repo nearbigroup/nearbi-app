@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
 import { Lock, Plus, Trash2, CheckCircle2, Circle, Search } from 'lucide-react';
+import { calculateLateMinutes } from '@/lib/salary';
 
 interface FineSettings {
   id: string;
@@ -120,7 +121,7 @@ export default function SettingsPage() {
         const { data: setD, error: setE } = await supabase
           .from('fine_settings')
           .select('*')
-          .eq('id', 'default')
+          .limit(1)
           .maybeSingle();
 
         if (setE) throw setE;
@@ -217,23 +218,21 @@ export default function SettingsPage() {
     e.preventDefault();
     setSavingSettings(true);
     try {
-      const targetId = settings?.id || '00000000-0000-0000-0000-000000000001';
-      const { error } = await supabase
-        .from('fine_settings')
-        .upsert({
-          id: targetId,
-          yellow_fine: Number(settings.yellow_fine),
-          orange_fine: Number(settings.orange_fine),
-          red_fine: Number(settings.red_fine),
-          yellow_free_passes: Number(settings.yellow_free_passes),
-          updated_by: user?.email || 'admin',
-          updated_at: new Date().toISOString()
-        }, { onConflict: 'id' });
-
-      if (error) {
-        console.error('Settings save error:', error);
-        // Try insert if upsert fails
-        const { error: insError } = await supabase
+      if (settings?.id && settings.id !== 'default') {
+        const { error } = await supabase
+          .from('fine_settings')
+          .update({
+            yellow_fine: Number(settings.yellow_fine),
+            orange_fine: Number(settings.orange_fine),
+            red_fine: Number(settings.red_fine),
+            yellow_free_passes: Number(settings.yellow_free_passes),
+            updated_by: user?.email || 'admin',
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', settings.id);
+        if (error) throw error;
+      } else {
+        const { error } = await supabase
           .from('fine_settings')
           .insert({
             yellow_fine: Number(settings.yellow_fine),
@@ -242,7 +241,7 @@ export default function SettingsPage() {
             yellow_free_passes: Number(settings.yellow_free_passes),
             updated_by: user?.email || 'admin'
           });
-        if (insError) throw insError;
+        if (error) throw error;
       }
 
       showToast('Settings saved ✓');
@@ -262,17 +261,16 @@ export default function SettingsPage() {
         const { error } = await supabase
           .from('staff_fine_exemptions')
           .delete()
-          .eq('id', existing.id);
+          .eq('staff_id', staffId);
 
         if (error) throw error;
         showToast('Exemption removed ✓');
       } else {
-        const pKey = 'ex_' + Math.random().toString(36).substr(2, 9);
         const { error } = await supabase
           .from('staff_fine_exemptions')
           .insert({
-            id: pKey,
             staff_id: staffId,
+            exempted_by: user?.email || 'admin'
           });
 
         if (error) throw error;
@@ -346,110 +344,92 @@ export default function SettingsPage() {
 
       // 1. Attendance
       if (cleanupItems.attendance && allowedStaffIds.length > 0) {
-        let attQuery = supabase.from('attendance')
+        const { data, error } = await supabase.from('attendance')
           .delete()
           .gte('date', firstDay)
           .lte('date', lastDay)
-          .in('staff_id', allowedStaffIds);
-        const { data, error } = await attQuery.select();
+          .in('staff_id', allowedStaffIds)
+          .select();
         if (error) throw error;
         summaryParts.push(`${data?.length || 0} attendance records`);
       }
 
-      // 2. Late Fines (unconfirmed only)
+      // 2. Fines (Late & Special Fines)
       if (cleanupItems.fines && allowedStaffIds.length > 0) {
-        let finesQuery = supabase.from('late_fines')
-          .select('id, confirmed')
+        const { data: lfData, error: lfError } = await supabase.from('late_fines')
+          .delete()
           .eq('month', cleanupMonth)
-          .in('staff_id', allowedStaffIds);
-        const { data: finesData } = await finesQuery;
-        
-        const unconfirmedFines = finesData?.filter(f => !f.confirmed).map(f => f.id) || [];
-        const confirmedCount = finesData?.filter(f => f.confirmed).length || 0;
+          .in('staff_id', allowedStaffIds)
+          .select();
+        if (lfError) throw lfError;
 
-        if (unconfirmedFines.length > 0) {
-          const { error } = await supabase.from('late_fines')
-            .delete()
-            .in('id', unconfirmedFines);
-          if (error) throw error;
-        }
-        summaryParts.push(`${unconfirmedFines.length} late fines (${confirmedCount} skipped confirmed fines)`);
+        const { data: sfData, error: sfError } = await supabase.from('special_fines')
+          .delete()
+          .eq('month', cleanupMonth)
+          .in('staff_id', allowedStaffIds)
+          .select();
+        if (sfError) throw sfError;
+
+        summaryParts.push(`${(lfData?.length || 0) + (sfData?.length || 0)} late & special fines`);
       }
 
       // 3. Break Logs
       if (cleanupItems.breaks && allowedStaffIds.length > 0) {
-        let breakQuery = supabase.from('break_logs')
+        const { data, error } = await supabase.from('break_logs')
           .delete()
           .gte('date', firstDay)
           .lte('date', lastDay)
-          .in('staff_id', allowedStaffIds);
-        const { data, error } = await breakQuery.select();
+          .in('staff_id', allowedStaffIds)
+          .select();
         if (error) throw error;
         summaryParts.push(`${data?.length || 0} break logs`);
       }
 
       // 4. Wall Events
       if (cleanupItems.wall && allowedStaffIds.length > 0) {
-        let wallQuery = supabase.from('wall_events')
+        const { data, error } = await supabase.from('wall_events')
           .delete()
           .gte('created_at', `${firstDay}T00:00:00Z`)
           .lte('created_at', `${lastDay}T23:59:59Z`)
-          .in('staff_id', allowedStaffIds);
-        const { data, error } = await wallQuery.select();
+          .in('staff_id', allowedStaffIds)
+          .select();
         if (error) throw error;
         summaryParts.push(`${data?.length || 0} wall events`);
       }
 
-      // 5. Notifications (read only)
+      // 5. Notifications
       if (cleanupItems.notifications && allowedStaffIds.length > 0) {
-        let notifQuery = supabase.from('notifications')
-          .select('id, is_read')
+        const { data, error } = await supabase.from('notifications')
+          .delete()
           .gte('created_at', `${firstDay}T00:00:00Z`)
           .lte('created_at', `${lastDay}T23:59:59Z`)
-          .in('staff_id', allowedStaffIds);
-        const { data: notifData } = await notifQuery;
-        const readIds = notifData?.filter(n => n.is_read).map(n => n.id) || [];
-        const unreadCount = notifData?.filter(n => !n.is_read).length || 0;
-
-        if (readIds.length > 0) {
-          const { error } = await supabase.from('notifications')
-            .delete()
-            .in('id', readIds);
-          if (error) throw error;
-        }
-        summaryParts.push(`${readIds.length} notifications (${unreadCount} skipped unread notifications)`);
+          .in('staff_id', allowedStaffIds)
+          .select();
+        if (error) throw error;
+        summaryParts.push(`${data?.length || 0} notifications`);
       }
 
       // 6. Leave Requests
       if (cleanupItems.leaves && allowedStaffIds.length > 0) {
-        let leaveQuery = supabase.from('leave_requests')
+        const { data, error } = await supabase.from('leave_requests')
           .delete()
           .gte('date', firstDay)
           .lte('date', lastDay)
-          .in('staff_id', allowedStaffIds);
-        const { data, error } = await leaveQuery.select();
+          .in('staff_id', allowedStaffIds)
+          .select();
         if (error) throw error;
         summaryParts.push(`${data?.length || 0} leave requests`);
       }
 
-      // 7. Salary Confirmations (unlocked only)
+      // 7. Salary Confirmations
       if (cleanupItems.salaries && allowedStaffIds.length > 0) {
-        let salQuery = supabase.from('salary_confirmations')
-          .select('id, is_locked')
+        const { data, error } = await supabase.from('salary_confirmations')
+          .delete()
           .eq('month', cleanupMonth)
-          .in('staff_id', allowedStaffIds);
-        const { data: salData } = await salQuery;
-        
-        const unlockedSalaries = salData?.filter(s => !s.is_locked).map(s => s.id) || [];
-        const lockedCount = salData?.filter(s => s.is_locked).length || 0;
-
-        if (unlockedSalaries.length > 0) {
-          const { error } = await supabase.from('salary_confirmations')
-            .delete()
-            .in('id', unlockedSalaries);
-          if (error) throw error;
-        }
-        summaryParts.push(`${unlockedSalaries.length} salary confirmations (${lockedCount} skipped locked confirmations)`);
+          .in('staff_id', allowedStaffIds)
+          .select();
+        if (error) throw error;
+        summaryParts.push(`${data?.length || 0} salary confirmations`);
       }
 
       setCleanupResult(`Deleted:\n` + summaryParts.map(s => `• ${s}`).join('\n'));
@@ -723,10 +703,7 @@ export default function SettingsPage() {
         setRecalcProgress(`Processing ${i + 1} / ${attRecords.length}...`);
 
         const shiftStart = staffShiftMap.get(rec.staff_id) || '09:00';
-        const shiftStartMins = parseMins(shiftStart);
-        const checkInMins = parseMins(rec.check_in_time);
-
-        const correctMinutesLate = Math.max(0, checkInMins - shiftStartMins);
+        const correctMinutesLate = calculateLateMinutes(rec.check_in_time, shiftStart);
         let correctColorCode = 'green';
         let correctStatus: string = 'present';
 

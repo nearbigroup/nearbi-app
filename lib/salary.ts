@@ -36,6 +36,8 @@ export function calculateSalary(
     earlyLeaveMinutes: number;
     missingDays?: number;
     weeklyOffsTaken?: number;
+    late_salary_deduction_minutes?: number;
+    leaves_taken?: number;
   }
 ) {
   const {
@@ -53,6 +55,8 @@ export function calculateSalary(
     approvedOTMinutes,
     approvedEarlyInMinutes,
     earlyLeaveMinutes,
+    late_salary_deduction_minutes = 0,
+    leaves_taken = 0,
   } = attendance;
 
   // Daily rate based on ACTUAL calendar days
@@ -81,19 +85,20 @@ export function calculateSalary(
   let missingDays: number;
 
   if (attendance.missingDays !== undefined) {
-    // If missingDays (deductedDays) is explicitly passed (e.g. from BulkConfirmTab or MonthlyReportTab)
+    // If missingDays (deductedDays) is explicitly passed
     missingDays = attendance.missingDays;
-    paidDays = Math.max(0, calendarDays - missingDays);
+    const absentDays = Math.max(0, missingDays - leaves_taken);
+    paidDays = Math.max(0, calendarDays - absentDays);
   } else {
-    // Default dynamic calculation (e.g. from calculator tab or mobile screen)
+    // Default dynamic calculation
     const weeklyOffsTaken = attendance.weeklyOffsTaken ?? 0;
     const weeklyOffsUsed = Math.min(weeklyOffsTaken, earnedQuota);
-    paidDays = daysActuallyWorked + weeklyOffsUsed;
+    paidDays = daysActuallyWorked + weeklyOffsUsed + leaves_taken;
     paidDays = Math.min(paidDays, maxPaidDays);
-    missingDays = calendarDays - paidDays;
+    missingDays = calendarDays - (daysActuallyWorked + weeklyOffsUsed);
   }
 
-  // Gross pay
+  // Gross pay (includes leaves, which will be deducted separately)
   const grossPay = paidDays * dailyRate;
 
   // OT pay
@@ -109,13 +114,24 @@ export function calculateSalary(
     shiftHours
   );
 
+  // Late salary deduction (permanent)
+  const lateSalaryDeduction = (late_salary_deduction_minutes / 60) * hourlyRate;
+
+  // Leave deduction (always salary deducted)
+  const leaveDeduction = leaves_taken * dailyRate;
+
   // Net salary
   const netSalary = grossPay
     + otPay
     + earlyInPay
     - earlyLeaveDeduction
+    - lateSalaryDeduction
+    - leaveDeduction
     - confirmedLateFines
     - confirmedSpecialFines;
+
+  // Adjust paidDays returned to represent net paid days for DB compatibility
+  const netPaidDays = Math.max(0, paidDays - leaves_taken);
 
   return {
     calendarDays,
@@ -126,11 +142,13 @@ export function calculateSalary(
     daysActuallyWorked,
     extraDaysWorked: 0,
     missingDays,
-    paidDays,
+    paidDays: netPaidDays,
     grossPay: Math.round(grossPay * 100) / 100,
     otPay: Math.round(otPay * 100) / 100,
     earlyInPay: Math.round(earlyInPay * 100) / 100,
     earlyLeaveDeduction: Math.round(earlyLeaveDeduction * 100) / 100,
+    lateSalaryDeduction: Math.round(lateSalaryDeduction * 100) / 100,
+    leaveDeduction: Math.round(leaveDeduction * 100) / 100,
     confirmedLateFines,
     confirmedSpecialFines,
     netSalary: Math.round(netSalary * 100) / 100,
@@ -139,6 +157,7 @@ export function calculateSalary(
 }
 
 function getMinutes(time: string): number {
+  if (!time) return 0
   const [h, m] = time.split(':').map(Number)
   return (h * 60) + m
 }
@@ -147,6 +166,7 @@ export function calculateMinutesWorked(
   checkIn: string,
   checkOut: string
 ): number {
+  if (!checkIn || !checkOut) return 0
   const inMins = getMinutes(checkIn)
   const outMins = getMinutes(checkOut)
   if (outMins <= inMins) {
@@ -160,6 +180,8 @@ export function calculateOTMinutes(
   actualOut: string,
   shiftStart: string
 ): number {
+  if (!shiftEnd || !actualOut || !shiftStart)
+    return 0
   const shiftEndMins = getMinutes(shiftEnd)
   const outMins = getMinutes(actualOut)
   const inMins = getMinutes(shiftStart)
@@ -184,6 +206,8 @@ export function calculateEarlyLeaveMinutes(
   actualOut: string,
   shiftStart: string
 ): number {
+  if (!shiftEnd || !actualOut || !shiftStart)
+    return 0
   const shiftEndMins = getMinutes(shiftEnd)
   const outMins = getMinutes(actualOut)
   const inMins = getMinutes(shiftStart)
@@ -205,6 +229,7 @@ export function calculateLateMinutes(
   checkIn: string,
   shiftStart: string
 ): number {
+  if (!checkIn || !shiftStart) return 0
   const inMins = getMinutes(checkIn)
   const startMins = getMinutes(shiftStart)
   return Math.max(0, inMins - startMins)
@@ -241,4 +266,5 @@ export async function calculateActualHoursWithBreaks(
   const netMins = rawMins - totalBreakMins;
   return Math.max(0, Math.round((netMins / 60) * 100) / 100);
 }
+
 

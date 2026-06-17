@@ -274,3 +274,12 @@ button:active, a:active {
   }
 }
 
+/* Premium Contrast Classes */
+.staff-name-header {
+  color: #1A1A1A !important;
+}
+.section-label {
+  color: #555555 !important;
+}
+
+

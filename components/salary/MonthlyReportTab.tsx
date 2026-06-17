@@ -249,6 +249,8 @@ export default function MonthlyReportTab({
           approvedEarlyInMinutes,
           earlyLeaveMinutes,
           missingDays,
+          late_salary_deduction_minutes: staffAtt.reduce((sum, r) => sum + (r.late_salary_deduction_minutes || 0), 0),
+          leaves_taken: staffLeaves.filter(l => !l.is_weekly_off).length,
         }
       );
 
@@ -647,7 +649,17 @@ export default function MonthlyReportTab({
 
       const breakdown = calculateSalary(
         { monthlySalary: baseSalary, offDaysPerMonth, shiftHours, year, month: monthNum },
-        { daysActuallyWorked, confirmedLateFines: totalLateFinesAmt, confirmedSpecialFines: totalSpecialFinesAmt, approvedOTMinutes, approvedEarlyInMinutes, earlyLeaveMinutes, missingDays }
+        {
+          daysActuallyWorked,
+          confirmedLateFines: totalLateFinesAmt,
+          confirmedSpecialFines: totalSpecialFinesAmt,
+          approvedOTMinutes,
+          approvedEarlyInMinutes,
+          earlyLeaveMinutes,
+          missingDays,
+          late_salary_deduction_minutes: staffAtt.reduce((sum, r) => sum + (r.late_salary_deduction_minutes || 0), 0),
+          leaves_taken: staffLeaves.filter(l => !l.is_weekly_off).length,
+        }
       );
 
       rowsAOA.push([
@@ -691,6 +703,17 @@ export default function MonthlyReportTab({
     const [yearStr, monthStr] = selectedMonth.split('-');
     const year = parseInt(yearStr);
     const monthNum = parseInt(monthStr);
+    const daysInMonth = new Date(year, monthNum, 0).getDate();
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+    const format24h = (timeStr: string | null) => {
+      if (!timeStr) return '';
+      const parts = timeStr.split(':');
+      if (parts.length >= 2) {
+        return `${parts[0].padStart(2, '0')}:${parts[1].padStart(2, '0')}`;
+      }
+      return timeStr;
+    };
 
     const activeStaff = staffList.filter(s => s.active).sort((a, b) => a.name.localeCompare(b.name));
     const dailyStaff = activeStaff.filter(s => s.branch_id === 'daily');
@@ -708,6 +731,120 @@ export default function MonthlyReportTab({
     XLSX.utils.book_append_sheet(wb, wsAll, 'All Summary');
     XLSX.utils.book_append_sheet(wb, wsDaily, 'Nearbi Daily');
     XLSX.utils.book_append_sheet(wb, wsHyper, 'Nearbi Hypermarket');
+
+    let slNo = 0;
+    activeStaff.forEach((s) => {
+      slNo++;
+      const staffAtt = attendanceRecords.filter((r) => r.staff_id === s.id);
+      const staffLeaves = leaveRequests.filter((l: any) => l.staff_id === s.id && l.status === 'approved');
+
+      const staffDetailedHeaders = [
+        "DATE", "DAY", "CHECK IN", "CHECK OUT", "ACTUAL HOURS", "STATUS", "DAY TYPE", "LATE MINUTES", "OT MINUTES", "LATE FINE"
+      ];
+      const staffDetailedRows: any[][] = [staffDetailedHeaders];
+
+      for (let d = 1; d <= daysInMonth; d++) {
+        const dateStr = `${selectedMonth}-${String(d).padStart(2, '0')}`;
+        const att = staffAtt.find((r: any) => r.date === dateStr);
+        const hasLeave = staffLeaves.find((l: any) => l.date === dateStr);
+
+        const dateObj = new Date(dateStr + 'T00:00:00');
+        const dayName = dayNames[dateObj.getDay()];
+
+        let checkIn = '';
+        let checkOut = '';
+        let actualHours = 0;
+        let status = 'absent';
+        let lateMins = 0;
+        let otMins = 0;
+        let dayType = 'present';
+
+        if (att) {
+          checkIn = format24h(att.check_in_time);
+          checkOut = format24h(att.check_out_time);
+          if (att.actual_hours_worked) {
+            actualHours = Math.round(Number(att.actual_hours_worked) * 100) / 100;
+          }
+          status = att.status || '';
+          lateMins = att.minutes_late || 0;
+          otMins = att.ot_minutes || 0;
+          dayType = att.day_type || 'present';
+        } else if (hasLeave) {
+          dayType = hasLeave.is_weekly_off ? 'weekly_off' : 'leave';
+        }
+
+        const lf = lateFines.find((f: any) => f.staff_id === s.id && f.date === dateStr);
+        const lateFineAmt = lf ? Number(lf.fine_amount) : 0;
+
+        staffDetailedRows.push([
+          dateStr,
+          dayName,
+          checkIn,
+          checkOut,
+          actualHours,
+          status,
+          dayType,
+          lateMins,
+          otMins,
+          lateFineAmt
+        ]);
+      }
+
+      const wsStaff = XLSX.utils.aoa_to_sheet(staffDetailedRows);
+
+      const sColWidths = staffDetailedHeaders.map((_, colIndex) => {
+        let maxLen = 8;
+        staffDetailedRows.forEach(row => {
+          const val = row[colIndex];
+          if (val !== null && val !== undefined) {
+            const len = String(val).length;
+            if (len > maxLen) maxLen = len;
+          }
+        });
+        return { wch: maxLen + 2 };
+      });
+      wsStaff['!cols'] = sColWidths;
+
+      const sHeaderStyle = {
+        fill: { fgColor: { rgb: "1A1A1A" } },
+        font: { bold: true, color: { rgb: "FFFFFF" }, sz: 10 },
+        alignment: { horizontal: "center", vertical: "center" }
+      };
+
+      const sDefaultStyleEven = { fill: { fgColor: { rgb: "FFFFFF" } }, font: { sz: 9 } };
+      const sDefaultStyleOdd = { fill: { fgColor: { rgb: "F9F9F9" } }, font: { sz: 9 } };
+      const sWeeklyOffStyle = { fill: { fgColor: { rgb: "E8F0FE" } }, font: { sz: 9 } };
+      const sAbsentStyle = { fill: { fgColor: { rgb: "FCE8E6" } }, font: { sz: 9 } };
+
+      for (let r = 0; r < staffDetailedRows.length; r++) {
+        const rowData = staffDetailedRows[r];
+        const statusVal = rowData[5];
+        const dayTypeVal = rowData[6];
+
+        let cellStyle = r % 2 === 0 ? sDefaultStyleEven : sDefaultStyleOdd;
+        if (r > 0) {
+          if (dayTypeVal === 'weekly_off') {
+            cellStyle = sWeeklyOffStyle;
+          } else if (statusVal === 'absent') {
+            cellStyle = sAbsentStyle;
+          }
+        }
+
+        for (let c = 0; c < staffDetailedHeaders.length; c++) {
+          const cellRef = XLSX.utils.encode_cell({ r, c });
+          if (!wsStaff[cellRef]) continue;
+
+          if (r === 0) {
+            wsStaff[cellRef].s = sHeaderStyle;
+          } else {
+            wsStaff[cellRef].s = cellStyle;
+          }
+        }
+      }
+
+      const sheetName = `${s.name.substring(0, 25)} (${slNo})`;
+      XLSX.utils.book_append_sheet(wb, wsStaff, sheetName);
+    });
 
     XLSX.writeFile(wb, `Nearbi_Monthly_Summary_${monthStr}_${yearStr}.xlsx`);
   };

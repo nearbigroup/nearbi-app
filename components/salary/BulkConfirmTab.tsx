@@ -69,7 +69,8 @@ export default function BulkConfirmTab({
           early_in_minutes,
           early_in_approved,
           early_leave_minutes,
-          day_type
+          day_type,
+          late_salary_deduction_minutes
         `)
         .gte('date', startDate)
         .lte('date', endDate);
@@ -264,6 +265,8 @@ export default function BulkConfirmTab({
           approvedEarlyInMinutes,
           earlyLeaveMinutes,
           missingDays,
+          late_salary_deduction_minutes: staffAtt.reduce((sum, r) => sum + (r.late_salary_deduction_minutes || 0), 0),
+          leaves_taken: staffLeaves.filter(l => !l.is_weekly_off).length,
         }
       );
 
@@ -279,6 +282,7 @@ export default function BulkConfirmTab({
         confirmed_special_fines: totalSpecialFinesAmt,
         paid_days: breakdown.paidDays,
         early_leave_deduction: breakdown.earlyLeaveDeduction,
+        late_salary_deduction: breakdown.lateSalaryDeduction,
         ot_minutes: approvedOTMinutes,
       };
     });
@@ -316,7 +320,8 @@ export default function BulkConfirmTab({
           confirmed_fines: bd.confirmed_fines || 0,
           confirmed_special_fines: bd.confirmed_special_fines || 0,
           confirmed_by: user.email || 'Admin',
-          is_locked: true
+          is_locked: true,
+          late_salary_deduction: bd.late_salary_deduction || 0
         };
       });
 

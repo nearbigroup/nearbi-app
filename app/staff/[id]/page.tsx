@@ -151,10 +151,14 @@ export default function StaffProfilePage() {
   const [errorMsg, setErrorMsg] = useState('');
 
   // Date States
-  const [selectedMonth, setSelectedMonth] = useState(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-  });
+  const [selectedYear, setSelectedYear] = useState<number>(() => new Date().getFullYear());
+  const [selectedMonthVal, setSelectedMonthVal] = useState<number>(() => new Date().getMonth() + 1);
+  const selectedMonth = `${selectedYear}-${String(selectedMonthVal).padStart(2, '0')}`;
+  const setSelectedMonth = (monthStr: string) => {
+    const [y, m] = monthStr.split('-').map(Number);
+    setSelectedYear(y);
+    setSelectedMonthVal(m);
+  };
 
   // DB States
   const [staff, setStaff] = useState<StaffMember | null>(null);
@@ -196,6 +200,7 @@ export default function StaffProfilePage() {
   const [pendingLateFines, setPendingLateFines] = useState<LateFine[]>([]);
   const [pendingSpecialFines, setPendingSpecialFines] = useState<SpecialFine[]>([]);
   const [pendingLeaves, setPendingLeaves] = useState<LeaveRequest[]>([]);
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
 
   // Toast Helper
   const showToast = (msg: string) => {
@@ -299,6 +304,31 @@ export default function StaffProfilePage() {
         .eq('staff_id', id)
         .eq('status', 'pending');
       setPendingLeaves(lvData || []);
+
+      const { data: logsData } = await supabase
+        .from('audit_logs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(100);
+
+      const filteredLogs = logsData ? logsData.filter((log: any) => {
+        if (log.record_id === id) return true;
+        if (log.reason && log.reason.includes(id)) return true;
+        if (log.reason && staff?.name && log.reason.includes(staff.name)) return true;
+        
+        let oldValObj: any = null;
+        let newValObj: any = null;
+        try {
+          oldValObj = typeof log.old_value === 'string' ? JSON.parse(log.old_value) : log.old_value;
+        } catch (_) {}
+        try {
+          newValObj = typeof log.new_value === 'string' ? JSON.parse(log.new_value) : log.new_value;
+        } catch (_) {}
+        
+        if (oldValObj?.staff_id === id || newValObj?.staff_id === id) return true;
+        return false;
+      }) : [];
+      setAuditLogs(filteredLogs.slice(0, 5));
     } catch (err) {
       console.error('Error fetching pending actions:', err);
     }
@@ -310,11 +340,6 @@ export default function StaffProfilePage() {
 
     const d = new Date(selectedDayDetail.dateStr + 'T00:00:00');
     const today = new Date();
-    const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-    const previousMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-
-    const isCurrentMonth = d >= currentMonthStart;
-    const isPreviousMonth = d >= previousMonthStart && d < currentMonthStart;
     const isFuture = d > today;
 
     if (isFuture) {
@@ -322,10 +347,17 @@ export default function StaffProfilePage() {
       return;
     }
 
+    const isWithinLast4Months = (dateStr: string) => {
+      const targetDate = new Date(dateStr + 'T00:00:00');
+      const now = new Date();
+      const diffMonths = (now.getFullYear() - targetDate.getFullYear()) * 12 + (now.getMonth() - targetDate.getMonth());
+      return diffMonths >= 0 && diffMonths <= 3;
+    };
+
     const isAdminOps = user?.role === 'admin' || user?.role === 'ops_manager';
     const isHR = user?.role === 'staff_executive';
 
-    const canEdit = isAdminOps ? (isCurrentMonth || isPreviousMonth) : (isHR && isCurrentMonth);
+    const canEdit = !isFuture && isWithinLast4Months(selectedDayDetail.dateStr) && (isAdminOps || isHR);
 
     if (!canEdit) {
       alert('You do not have permission to edit attendance for this date.');
@@ -340,6 +372,21 @@ export default function StaffProfilePage() {
       let finalCheckOut = editCheckOut ? editCheckOut : null;
       let finalStatus: 'present' | 'late' | 'absent' = editStatus;
       let finalDayType = editDayType;
+
+      if (isHR) {
+        // Enforce HR limits: Mark Weekly Off, Mark Approved Leave, or Keep Absent
+        if (finalDayType !== 'weekly_off' && finalDayType !== 'leave') {
+          // Keep Absent
+          finalDayType = 'present';
+          finalStatus = 'absent';
+          finalCheckIn = null;
+          finalCheckOut = null;
+        } else {
+          finalCheckIn = null;
+          finalCheckOut = null;
+          finalStatus = 'present';
+        }
+      }
 
       let minutesLate = 0;
       let otMinutes = 0;
@@ -1208,158 +1255,186 @@ export default function StaffProfilePage() {
         </button>
         <div>
           <span className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Staff Profile</span>
-          <h1 className="text-xl font-bold text-white leading-tight">{staff.name}</h1>
+          <h1 className="text-xl font-extrabold text-[#1A1A1A] staff-name-header leading-tight">{staff.name}</h1>
         </div>
       </div>
 
-      {/* Pending Actions Panel */}
-      {(pendingOT.length > 0 || pendingLateFines.length > 0 || pendingSpecialFines.length > 0 || pendingLeaves.length > 0) && (
-        <div className="bg-[rgba(251,191,36,0.06)] border border-[rgba(251,191,36,0.18)] rounded-[18px] p-4 space-y-3.5 card-entry">
-          <div className="flex items-center justify-between border-b border-[rgba(251,191,36,0.15)] pb-2 flex-wrap gap-2">
-            <div className="flex items-center space-x-2">
-              <AlertTriangle size={18} className="text-[#FBBF24] animate-pulse" />
-              <h2 className="text-sm font-extrabold text-[#FBBF24] uppercase tracking-wider">Pending Actions Required</h2>
+      {/* Pending Actions & Audit Log Panel */}
+      {(pendingOT.length > 0 || pendingLateFines.length > 0 || pendingSpecialFines.length > 0 || pendingLeaves.length > 0 || auditLogs.length > 0) && (() => {
+        const totalPending = pendingOT.length + pendingLateFines.length + pendingSpecialFines.length + pendingLeaves.length;
+        return (
+          <div className="bg-[rgba(251,191,36,0.06)] border border-[rgba(251,191,36,0.18)] rounded-[18px] p-4 space-y-3.5 card-entry">
+            <div className="flex items-center justify-between border-b border-[rgba(251,191,36,0.15)] pb-2 flex-wrap gap-2">
+              <div className="flex items-center space-x-2">
+                <AlertTriangle size={18} className="text-[#FBBF24] animate-pulse" />
+                <h2 className="text-sm font-extrabold text-[#FBBF24] uppercase tracking-wider">
+                  PENDING ACTIONS ({totalPending})
+                </h2>
+              </div>
+              <div className="flex items-center space-x-1.5">
+                {pendingOT.length > 0 && (
+                  <button
+                    onClick={handleApproveAllOT}
+                    className="h-7 min-h-0 px-2.5 bg-[#4ADE80] text-black font-extrabold rounded-lg text-[9px] active:scale-95 transition-all cursor-pointer uppercase tracking-wider whitespace-nowrap"
+                  >
+                    Approve All OT
+                  </button>
+                )}
+                {(pendingLateFines.length > 0 || pendingSpecialFines.length > 0) && (
+                  <button
+                    onClick={handleConfirmAllFines}
+                    className="h-7 min-h-0 px-2.5 bg-[#FBBF24] text-black font-extrabold rounded-lg text-[9px] active:scale-95 transition-all cursor-pointer uppercase tracking-wider whitespace-nowrap"
+                  >
+                    Confirm All Fines
+                  </button>
+                )}
+              </div>
             </div>
-            <div className="flex items-center space-x-1.5">
-              {pendingOT.length > 0 && (
-                <button
-                  onClick={handleApproveAllOT}
-                  className="h-7 min-h-0 px-2.5 bg-[#4ADE80] text-black font-extrabold rounded-lg text-[9px] active:scale-95 transition-all cursor-pointer uppercase tracking-wider whitespace-nowrap"
-                >
-                  Approve All OT
-                </button>
-              )}
-              {(pendingLateFines.length > 0 || pendingSpecialFines.length > 0) && (
-                <button
-                  onClick={handleConfirmAllFines}
-                  className="h-7 min-h-0 px-2.5 bg-[#FBBF24] text-black font-extrabold rounded-lg text-[9px] active:scale-95 transition-all cursor-pointer uppercase tracking-wider whitespace-nowrap"
-                >
-                  Confirm All Fines
-                </button>
-              )}
-            </div>
+
+            {totalPending > 0 ? (
+              <div className="space-y-3 max-h-[280px] overflow-y-auto pr-1">
+                {/* Pending OT */}
+                {pendingOT.map(ot => (
+                  <div key={ot.id} className="bg-black/25 border border-white/5 rounded-xl p-3 flex justify-between items-center text-xs">
+                    <div>
+                      <p className="font-bold text-white">Overtime Request ({ot.ot_minutes} mins)</p>
+                      <p className="text-[10px] text-[var(--text-muted)] mt-0.5">{new Date(ot.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
+                    </div>
+                    <div className="flex space-x-1.5">
+                      <button 
+                        onClick={() => handleApproveOT(ot)}
+                        className="h-8 min-h-0 px-3 bg-[#4ADE80] text-black font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
+                      >
+                        Approve
+                      </button>
+                      <button 
+                        onClick={() => handleRejectOT(ot)}
+                        className="h-8 min-h-0 px-3 bg-[#F87171]/10 border border-[#F87171]/20 text-[#F87171] font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                {/* Pending Late Fines */}
+                {pendingLateFines.map(lf => (
+                  <div key={lf.id} className="bg-black/25 border border-white/5 rounded-xl p-3 flex justify-between items-center text-xs">
+                    <div>
+                      <p className="font-bold text-white">Late Fine Confirmation (₹{lf.fine_amount})</p>
+                      <p className="text-[10px] text-[var(--text-muted)] mt-0.5">{new Date(lf.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} • {lf.late_minutes} mins late</p>
+                    </div>
+                    <div className="flex space-x-1.5">
+                      <button 
+                        onClick={() => handleConfirmLateFine(lf)}
+                        className="h-8 min-h-0 px-3 bg-[#4ADE80] text-black font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
+                      >
+                        Confirm
+                      </button>
+                      <button 
+                        onClick={() => {
+                          setSelectedFineForWaive({
+                            id: lf.id,
+                            type: 'late',
+                            date: lf.date,
+                            originalAmount: lf.fine_amount,
+                            waivedAmount: lf.waived_amount || 0
+                          });
+                          setWaivedAmountInput(String(lf.waived_amount || 0));
+                          setWaiveModalOpen(true);
+                        }}
+                        className="h-8 min-h-0 px-3 bg-[#FBBF24]/10 border border-[#FBBF24]/20 text-[#FBBF24] font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
+                      >
+                        Waive
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                {/* Pending Special Fines */}
+                {pendingSpecialFines.map(sf => (
+                  <div key={sf.id} className="bg-black/25 border border-white/5 rounded-xl p-3 flex justify-between items-center text-xs">
+                    <div>
+                      <p className="font-bold text-white">Special Fine Confirmation (₹{sf.amount})</p>
+                      <p className="text-[10px] text-[var(--text-muted)] mt-0.5">{new Date(sf.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} • "{sf.reason}"</p>
+                    </div>
+                    <div className="flex space-x-1.5">
+                      <button 
+                        onClick={() => handleConfirmSpecialFine(sf)}
+                        className="h-8 min-h-0 px-3 bg-[#4ADE80] text-black font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
+                      >
+                        Confirm
+                      </button>
+                      <button 
+                        onClick={() => {
+                          setSelectedFineForWaive({
+                            id: sf.id,
+                            type: 'special',
+                            date: sf.date,
+                            originalAmount: sf.amount,
+                            waivedAmount: sf.waived_amount || 0,
+                            reason: sf.reason
+                          });
+                          setWaivedAmountInput(String(sf.waived_amount || 0));
+                          setWaiveModalOpen(true);
+                        }}
+                        className="h-8 min-h-0 px-3 bg-[#FBBF24]/10 border border-[#FBBF24]/20 text-[#FBBF24] font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
+                      >
+                        Waive
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                {/* Pending Leaves */}
+                {pendingLeaves.map(lv => (
+                  <div key={lv.id} className="bg-black/25 border border-white/5 rounded-xl p-3 flex justify-between items-center text-xs">
+                    <div>
+                      <p className="font-bold text-white">Leave Request ({new Date(lv.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })})</p>
+                      <p className="text-[10px] text-[var(--text-muted)] mt-0.5">Reason: "{lv.reason || 'No reason provided'}"</p>
+                    </div>
+                    <div className="flex space-x-1.5">
+                      <button 
+                        onClick={() => handleApproveLeave(lv)}
+                        className="h-8 min-h-0 px-3 bg-[#4ADE80] text-black font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
+                      >
+                        Approve
+                      </button>
+                      <button 
+                        onClick={() => handleRejectLeave(lv)}
+                        className="h-8 min-h-0 px-3 bg-[#F87171]/10 border border-[#F87171]/20 text-[#F87171] font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs font-semibold text-[#555555]">No pending actions required.</p>
+            )}
+
+            {/* Audit Logs section inside Pending Actions Panel */}
+            {auditLogs.length > 0 && (
+              <div className="mt-4 pt-3 border-t border-[rgba(251,191,36,0.15)] space-y-2">
+                <h3 className="text-[10px] font-black uppercase tracking-wider text-[#555555] section-label">Recent Profile Activity Logs</h3>
+                <div className="space-y-1.5 max-h-[160px] overflow-y-auto pr-1">
+                  {auditLogs.map((log) => (
+                    <div key={log.id} className="bg-black/10 border border-white/5 rounded-lg p-2.5 flex flex-col space-y-0.5 text-[10px] font-semibold text-[var(--text-secondary)]">
+                      <div className="flex justify-between">
+                        <span className="text-white font-bold">{log.action.replace(/_/g, ' ')}</span>
+                        <span className="text-[9px] text-[var(--text-muted)]">{new Date(log.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+                      </div>
+                      <p className="text-[9px] text-[var(--text-muted)]">By: {log.performed_by} ({log.performed_by_role})</p>
+                      {log.reason && <p className="text-white/80 italic font-medium mt-0.5">"{log.reason}"</p>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
-
-          <div className="space-y-3 max-h-[280px] overflow-y-auto pr-1">
-            {/* Pending OT */}
-            {pendingOT.map(ot => (
-              <div key={ot.id} className="bg-black/20 border border-white/5 rounded-xl p-3 flex justify-between items-center text-xs">
-                <div>
-                  <p className="font-bold text-white">Overtime Request ({ot.ot_minutes} mins)</p>
-                  <p className="text-[10px] text-[var(--text-muted)] mt-0.5">{new Date(ot.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
-                </div>
-                <div className="flex space-x-1.5">
-                  <button 
-                    onClick={() => handleApproveOT(ot)}
-                    className="h-8 min-h-0 px-3 bg-[#4ADE80] text-black font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
-                  >
-                    Approve
-                  </button>
-                  <button 
-                    onClick={() => handleRejectOT(ot)}
-                    className="h-8 min-h-0 px-3 bg-[#F87171]/10 border border-[#F87171]/20 text-[#F87171] font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
-                  >
-                    Reject
-                  </button>
-                </div>
-              </div>
-            ))}
-
-            {/* Pending Late Fines */}
-            {pendingLateFines.map(lf => (
-              <div key={lf.id} className="bg-black/20 border border-white/5 rounded-xl p-3 flex justify-between items-center text-xs">
-                <div>
-                  <p className="font-bold text-white">Late Fine Confirmation (₹{lf.fine_amount})</p>
-                  <p className="text-[10px] text-[var(--text-muted)] mt-0.5">{new Date(lf.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} • {lf.late_minutes} mins late</p>
-                </div>
-                <div className="flex space-x-1.5">
-                  <button 
-                    onClick={() => handleConfirmLateFine(lf)}
-                    className="h-8 min-h-0 px-3 bg-[#4ADE80] text-black font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
-                  >
-                    Confirm
-                  </button>
-                  <button 
-                    onClick={() => {
-                      setSelectedFineForWaive({
-                        id: lf.id,
-                        type: 'late',
-                        date: lf.date,
-                        originalAmount: lf.fine_amount,
-                        waivedAmount: lf.waived_amount || 0
-                      });
-                      setWaivedAmountInput(String(lf.waived_amount || 0));
-                      setWaiveModalOpen(true);
-                    }}
-                    className="h-8 min-h-0 px-3 bg-[#FBBF24]/10 border border-[#FBBF24]/20 text-[#FBBF24] font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
-                  >
-                    Waive
-                  </button>
-                </div>
-              </div>
-            ))}
-
-            {/* Pending Special Fines */}
-            {pendingSpecialFines.map(sf => (
-              <div key={sf.id} className="bg-black/20 border border-white/5 rounded-xl p-3 flex justify-between items-center text-xs">
-                <div>
-                  <p className="font-bold text-white">Special Fine Confirmation (₹{sf.amount})</p>
-                  <p className="text-[10px] text-[var(--text-muted)] mt-0.5">{new Date(sf.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })} • "{sf.reason}"</p>
-                </div>
-                <div className="flex space-x-1.5">
-                  <button 
-                    onClick={() => handleConfirmSpecialFine(sf)}
-                    className="h-8 min-h-0 px-3 bg-[#4ADE80] text-black font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
-                  >
-                    Confirm
-                  </button>
-                  <button 
-                    onClick={() => {
-                      setSelectedFineForWaive({
-                        id: sf.id,
-                        type: 'special',
-                        date: sf.date,
-                        originalAmount: sf.amount,
-                        waivedAmount: sf.waived_amount || 0,
-                        reason: sf.reason
-                      });
-                      setWaivedAmountInput(String(sf.waived_amount || 0));
-                      setWaiveModalOpen(true);
-                    }}
-                    className="h-8 min-h-0 px-3 bg-[#FBBF24]/10 border border-[#FBBF24]/20 text-[#FBBF24] font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
-                  >
-                    Waive
-                  </button>
-                </div>
-              </div>
-            ))}
-
-            {/* Pending Leaves */}
-            {pendingLeaves.map(lv => (
-              <div key={lv.id} className="bg-black/20 border border-white/5 rounded-xl p-3 flex justify-between items-center text-xs">
-                <div>
-                  <p className="font-bold text-white">Leave Request ({new Date(lv.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })})</p>
-                  <p className="text-[10px] text-[var(--text-muted)] mt-0.5">Reason: "{lv.reason || 'No reason provided'}"</p>
-                </div>
-                <div className="flex space-x-1.5">
-                  <button 
-                    onClick={() => handleApproveLeave(lv)}
-                    className="h-8 min-h-0 px-3 bg-[#4ADE80] text-black font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
-                  >
-                    Approve
-                  </button>
-                  <button 
-                    onClick={() => handleRejectLeave(lv)}
-                    className="h-8 min-h-0 px-3 bg-[#F87171]/10 border border-[#F87171]/20 text-[#F87171] font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
-                  >
-                    Reject
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Profile summary block */}
       <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[18px] p-5 shadow-sm space-y-4">
@@ -1399,12 +1474,12 @@ export default function StaffProfilePage() {
 
         {/* Quick Month Selector */}
         <div className="flex items-center justify-between border-t border-[var(--border-strong)] pt-3.5">
-          <span className="text-xs font-bold text-white uppercase tracking-wider">Select Month</span>
+          <span className="text-xs font-bold text-[#555555] uppercase tracking-wider section-label">Select Month</span>
           <div className="flex items-center space-x-1.5 bg-[var(--bg-input)] border border-[var(--border)] rounded-lg px-2 py-1">
             <button onClick={handlePrevMonth} className="p-1 text-[var(--text-secondary)] hover:text-white active:scale-90">
               <ChevronLeft size={16} />
             </button>
-            <span className="text-[11px] font-bold text-white font-mono uppercase px-1">
+            <span className="text-[11px] font-extrabold text-[#1A1A1A] font-mono uppercase px-1">
               {new Date(selectedMonth + '-02').toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}
             </span>
             <button onClick={handleNextMonth} className="p-1 text-[var(--text-secondary)] hover:text-white active:scale-90">
@@ -1416,19 +1491,19 @@ export default function StaffProfilePage() {
         {/* Quick Stats Grid */}
         <div className="grid grid-cols-4 gap-2.5">
           <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-2.5 text-center flex flex-col items-center">
-            <span className="text-xs font-bold text-[#4ADE80] font-mono leading-none">{monthStats.present}</span>
+            <span className="text-xs font-bold text-[#2D7A3A] font-mono leading-none">{monthStats.present}</span>
             <span className="text-[8px] text-[var(--text-muted)] font-bold uppercase tracking-wider mt-1.5 leading-none">Present</span>
           </div>
           <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-2.5 text-center flex flex-col items-center">
-            <span className="text-xs font-bold text-[#FBBF24] font-mono leading-none">{monthStats.late}</span>
+            <span className="text-xs font-bold text-[#B8860B] font-mono leading-none">{monthStats.late}</span>
             <span className="text-[8px] text-[var(--text-muted)] font-bold uppercase tracking-wider mt-1.5 leading-none">Late</span>
           </div>
           <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-2.5 text-center flex flex-col items-center">
-            <span className="text-xs font-bold text-[#F87171] font-mono leading-none">{monthStats.absent}</span>
+            <span className="text-xs font-bold text-[#C0392B] font-mono leading-none">{monthStats.absent}</span>
             <span className="text-[8px] text-[var(--text-muted)] font-bold uppercase tracking-wider mt-1.5 leading-none">Absent</span>
           </div>
           <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-2.5 text-center flex flex-col items-center">
-            <span className="text-xs font-bold text-[#60A5FA] font-mono leading-none">{monthStats.otHours}h</span>
+            <span className="text-xs font-bold text-[#1A5FA8] font-mono leading-none">{monthStats.otHours}h</span>
             <span className="text-[8px] text-[var(--text-muted)] font-bold uppercase tracking-wider mt-1.5 leading-none">OT Hours</span>
           </div>
         </div>
@@ -1436,7 +1511,7 @@ export default function StaffProfilePage() {
         {/* Weekly Off Balance Banner */}
         <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-3 flex justify-between items-center text-xs font-bold text-[var(--text-secondary)]">
           <span className="uppercase text-[9px] tracking-wider text-[var(--text-muted)]">Weekly Off Balance</span>
-          <span className="text-white font-mono">
+          <span className="text-[#1A1A1A] font-extrabold font-mono">
             {weeklyOffStats.earnedQuota} Earned | {weeklyOffStats.weeklyOffsUsed} Used | {weeklyOffStats.weeklyOffsRemaining} Remaining
           </span>
         </div>
@@ -1487,10 +1562,10 @@ export default function StaffProfilePage() {
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id as TabName)}
-              className={`flex-shrink-0 px-4 py-2.5 rounded-[9px] text-xs font-bold transition-all uppercase tracking-wide cursor-pointer ${
+              className={`flex-shrink-0 px-4 py-2.5 rounded-[9px] text-xs transition-all uppercase tracking-wide cursor-pointer ${
                 isSelected
-                  ? 'bg-white text-[#1E2028]'
-                  : 'text-[var(--text-secondary)] hover:text-white hover:bg-white/5 active:scale-95'
+                  ? 'bg-white text-[#1A1A1A] font-extrabold shadow-xs'
+                  : 'text-[#555555] font-semibold hover:text-[#1A1A1A] hover:bg-white/5 active:scale-95'
               }`}
             >
               {tab.label}
@@ -1505,12 +1580,6 @@ export default function StaffProfilePage() {
         {/* Tab 1: Attendance Grid */}
         {activeTab === 'attendance' && (
           <div className="space-y-4">
-            <div className="bg-[#EFF6FF] border border-[#60A5FA]/20 rounded-[14px] p-3 text-xs flex justify-between items-center text-[#1E3A8A] font-medium shadow-sm">
-              <span className="font-extrabold uppercase tracking-wider text-[9px] text-[#60A5FA]">Weekly Off Balance</span>
-              <span className="font-extrabold text-[11px] text-[#1E3A8A]">
-                Weekly Off: {weeklyOffStats.earnedQuota} earned | {weeklyOffStats.weeklyOffsUsed} used | {weeklyOffStats.weeklyOffsRemaining} remaining
-              </span>
-            </div>
             <div 
               className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[18px] p-4"
               onTouchStart={onTouchStart}
@@ -2133,21 +2202,22 @@ export default function StaffProfilePage() {
         }}
       />
 
-      {/* Calendar Day Detail Dialog Overlay */}
       {selectedDayDetail && (() => {
         const d = new Date(selectedDayDetail.dateStr + 'T00:00:00');
         const today = new Date();
-        const currentMonthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-        const previousMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-
-        const isCurrentMonth = d >= currentMonthStart;
-        const isPreviousMonth = d >= previousMonthStart && d < currentMonthStart;
         const isFuture = d > today;
+
+        const isWithinLast4Months = (dateStr: string) => {
+          const targetDate = new Date(dateStr + 'T00:00:00');
+          const now = new Date();
+          const diffMonths = (now.getFullYear() - targetDate.getFullYear()) * 12 + (now.getMonth() - targetDate.getMonth());
+          return diffMonths >= 0 && diffMonths <= 3;
+        };
 
         const isAdminOps = user?.role === 'admin' || user?.role === 'ops_manager';
         const isHR = user?.role === 'staff_executive';
 
-        const canEdit = !isFuture && (isAdminOps ? (isCurrentMonth || isPreviousMonth) : (isHR && isCurrentMonth));
+        const canEdit = !isFuture && isWithinLast4Months(selectedDayDetail.dateStr) && (isAdminOps || isHR);
 
         return (
           <div className="fixed inset-0 z-[12000] flex items-center justify-center p-4">
@@ -2171,70 +2241,108 @@ export default function StaffProfilePage() {
               {isEditingAttendance ? (
                 <form onSubmit={handleSaveAttendance} className="space-y-4 text-xs font-semibold text-white">
                   <div className="space-y-3">
-                    {isHR && (
-                      <div className="bg-[rgba(251,191,36,0.08)] border border-[rgba(251,191,36,0.18)] text-[#FBBF24] p-2.5 rounded-lg text-[10px] leading-relaxed">
-                        Note: Branch HR can only mark weekly offs. Time inputs are locked.
-                      </div>
-                    )}
-
-                    <div>
-                      <label className="block text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider mb-1">Day Type</label>
-                      <select
-                        value={editDayType}
-                        onChange={(e) => {
-                          setEditDayType(e.target.value);
-                          if (e.target.value !== 'present') {
-                            setEditCheckIn('');
-                            setEditCheckOut('');
-                          }
-                        }}
-                        className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-xl p-2.5 text-xs focus:outline-none focus:border-white/30 text-white"
-                      >
-                        <option value="present">Present / Shift Day</option>
-                        <option value="weekly_off">Weekly Off</option>
-                        <option value="holiday">Public Holiday</option>
-                        <option value="leave">Approved Leave</option>
-                      </select>
-                    </div>
-
-                    {editDayType === 'present' && (
+                    {isHR ? (
                       <>
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <label className="block text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider mb-1">Check In Time</label>
-                            <input
-                              type="time"
-                              value={editCheckIn}
-                              onChange={(e) => setEditCheckIn(e.target.value)}
-                              disabled={isHR}
-                              className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-white/30 disabled:opacity-50"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider mb-1">Check Out Time</label>
-                            <input
-                              type="time"
-                              value={editCheckOut}
-                              onChange={(e) => setEditCheckOut(e.target.value)}
-                              disabled={isHR}
-                              className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-white/30 disabled:opacity-50"
-                            />
-                          </div>
+                        <div className="bg-[rgba(251,191,36,0.08)] border border-[rgba(251,191,36,0.18)] text-[#FBBF24] p-2.5 rounded-lg text-[10px] leading-relaxed">
+                          Note: Branch HR can only mark Weekly Offs, Leaves, or keep Absent.
                         </div>
 
                         <div>
-                          <label className="block text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider mb-1">Status Override</label>
+                          <label className="block text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider mb-1">Mark As</label>
                           <select
-                            value={editStatus}
-                            onChange={(e: any) => setEditStatus(e.target.value)}
-                            disabled={isHR}
+                            value={editDayType === 'weekly_off' ? 'weekly_off' : (editDayType === 'leave' ? 'leave' : 'absent')}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (val === 'weekly_off') {
+                                setEditDayType('weekly_off');
+                                setEditStatus('present');
+                                setEditCheckIn('');
+                                setEditCheckOut('');
+                              } else if (val === 'leave') {
+                                const confirmed = window.confirm('Are you sure you want to mark this day as Leave? 1 day salary will be deducted.');
+                                if (confirmed) {
+                                  setEditDayType('leave');
+                                  setEditStatus('present');
+                                  setEditCheckIn('');
+                                  setEditCheckOut('');
+                                } else {
+                                  e.target.value = editDayType === 'weekly_off' ? 'weekly_off' : 'absent';
+                                }
+                              } else {
+                                setEditDayType('present');
+                                setEditStatus('absent');
+                                setEditCheckIn('');
+                                setEditCheckOut('');
+                              }
+                            }}
                             className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-xl p-2.5 text-xs focus:outline-none focus:border-white/30 text-white"
                           >
-                            <option value="present">Present</option>
-                            <option value="late">Late</option>
-                            <option value="absent">Absent</option>
+                            <option value="weekly_off">Mark Weekly Off</option>
+                            <option value="leave">Mark Approved Leave (salary deducted)</option>
+                            <option value="absent">Keep Absent</option>
                           </select>
                         </div>
+                      </>
+                    ) : (
+                      <>
+                        <div>
+                          <label className="block text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider mb-1">Day Type</label>
+                          <select
+                            value={editDayType}
+                            onChange={(e) => {
+                              setEditDayType(e.target.value);
+                              if (e.target.value !== 'present') {
+                                setEditCheckIn('');
+                                setEditCheckOut('');
+                                setEditStatus('present');
+                              }
+                            }}
+                            className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-xl p-2.5 text-xs focus:outline-none focus:border-white/30 text-white"
+                          >
+                            <option value="present">Present / Shift Day</option>
+                            <option value="weekly_off">Weekly Off</option>
+                            <option value="holiday">Public Holiday</option>
+                            <option value="leave">Approved Leave</option>
+                          </select>
+                        </div>
+
+                        {editDayType === 'present' && (
+                          <>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <label className="block text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider mb-1">Check In Time</label>
+                                <input
+                                  type="time"
+                                  value={editCheckIn}
+                                  onChange={(e) => setEditCheckIn(e.target.value)}
+                                  className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-white/30"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider mb-1">Check Out Time</label>
+                                <input
+                                  type="time"
+                                  value={editCheckOut}
+                                  onChange={(e) => setEditCheckOut(e.target.value)}
+                                  className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-xl p-2.5 text-xs text-white focus:outline-none focus:border-white/30"
+                                />
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className="block text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider mb-1">Status Override</label>
+                              <select
+                                value={editStatus}
+                                onChange={(e: any) => setEditStatus(e.target.value)}
+                                className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-xl p-2.5 text-xs focus:outline-none focus:border-white/30 text-white"
+                              >
+                                <option value="present">Present</option>
+                                <option value="late">Late</option>
+                                <option value="absent">Absent</option>
+                              </select>
+                            </div>
+                          </>
+                        )}
                       </>
                     )}
                   </div>

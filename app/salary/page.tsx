@@ -179,14 +179,16 @@ export default function SalaryPage() {
 
       const { data: attRecords } = await supabase
         .from('attendance')
-        .select('check_in_time, ot_minutes, ot_approved, early_in_minutes, early_in_approved, early_leave_minutes')
+        .select('check_in_time, ot_minutes, ot_approved, early_in_minutes, early_in_approved, early_leave_minutes, day_type, late_salary_deduction_minutes')
         .eq('staff_id', staffId)
         .gte('date', firstDay)
         .lte('date', lastDay);
 
-      const daysWorked = attRecords?.filter(r => r.check_in_time !== null).length || 0;
+      const daysWorked = attRecords?.filter(r => r.check_in_time !== null && r.day_type !== 'weekly_off' && r.day_type !== 'holiday').length || 0;
       const approvedOT = attRecords?.filter(r => r.ot_approved).reduce((sum, r) => sum + (r.ot_minutes || 0), 0) || 0;
       const earlyLeave = attRecords?.reduce((sum, r) => sum + (r.early_leave_minutes || 0), 0) || 0;
+      const totalLateDeductionMins = attRecords?.reduce((sum, r) => sum + (r.late_salary_deduction_minutes || 0), 0) || 0;
+      const leavesTaken = attRecords?.filter(r => r.day_type === 'leave').length || 0;
 
       const { data: lateFines } = await supabase
         .from('late_fines')
@@ -223,7 +225,10 @@ export default function SalaryPage() {
         offBonusEarned = Math.min(Math.floor(daysWorked / 12), 2);
       }
 
-      const paidDaysSoFar = daysWorked + offBonusEarned;
+      const weeklyOffsTaken = attRecords?.filter(r => r.day_type === 'weekly_off').length || 0;
+      const weeklyOffsUsed = Math.min(weeklyOffsTaken, offBonusEarned);
+      const paidDaysSoFar = daysWorked + weeklyOffsUsed + leavesTaken;
+
       const dailyRate = staff.monthly_salary / calendarDays;
       const shiftHours = staff.shift?.hours || staff.shifts?.hours || 9;
       const hourlyRate = dailyRate / shiftHours;
@@ -231,8 +236,10 @@ export default function SalaryPage() {
       const grossSoFar = paidDaysSoFar * dailyRate;
       const otPay = (approvedOT / 60) * hourlyRate;
       const earlyLeaveDeduction = (earlyLeave / 60) * hourlyRate;
+      const lateSalaryDeduction = (totalLateDeductionMins / 60) * hourlyRate;
+      const leaveDeduction = leavesTaken * dailyRate;
 
-      const netSoFar = grossSoFar + otPay - earlyLeaveDeduction - finesSoFar;
+      const netSoFar = grossSoFar + otPay - earlyLeaveDeduction - lateSalaryDeduction - leaveDeduction - finesSoFar;
 
       let nextMilestone = '';
       if (offDaysPerMonth === 4) {
@@ -249,14 +256,16 @@ export default function SalaryPage() {
 
       setLiveSalary({
         daysWorked,
-        offBonusEarned,
-        paidDays: paidDaysSoFar,
+        offBonusEarned: weeklyOffsUsed,
+        paidDays: paidDaysSoFar - leavesTaken,
         calendarDays,
         dailyRate,
         hourlyRate,
         grossPay: Math.round(grossSoFar),
         otEarned: Math.round(otPay),
         earlyLeaveDeduction: Math.round(earlyLeaveDeduction),
+        lateSalaryDeduction: Math.round(lateSalaryDeduction),
+        leaveDeduction: Math.round(leaveDeduction),
         finesSoFar: Math.round(finesSoFar),
         netSalary: Math.round(netSoFar),
         nextMilestone

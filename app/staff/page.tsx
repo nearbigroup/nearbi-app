@@ -1673,6 +1673,27 @@ export default function StaffPage() {
         console.error('Failed to delete staff_fine_exemptions:', e);
       }
 
+      try {
+        const { error } = await supabase.from('staff_announcements').delete().eq('target_staff_id', staffId);
+        if (error) console.error('Error deleting staff_announcements:', error);
+      } catch (e) {
+        console.error('Failed to delete staff_announcements:', e);
+      }
+
+      try {
+        const { error } = await supabase.from('announcement_reads').delete().eq('staff_id', staffId);
+        if (error) console.error('Error deleting announcement_reads:', error);
+      } catch (e) {
+        console.error('Failed to delete announcement_reads:', e);
+      }
+
+      try {
+        const { error } = await supabase.from('staff_accounts').delete().eq('staff_id', staffId);
+        if (error) console.error('Error deleting staff_accounts:', error);
+      } catch (e) {
+        console.error('Failed to delete staff_accounts:', e);
+      }
+
       // staff_birthday table not implemented
       // DOB stored in staff.date_of_birth column directly
 
@@ -1774,6 +1795,9 @@ export default function StaffPage() {
         await supabase.from('wall_events').delete().eq('staff_id', staffId);
         await supabase.from('notifications').delete().eq('staff_id', staffId);
         await supabase.from('staff_fine_exemptions').delete().eq('staff_id', staffId);
+        await supabase.from('staff_announcements').delete().eq('target_staff_id', staffId);
+        await supabase.from('announcement_reads').delete().eq('staff_id', staffId);
+        await supabase.from('staff_accounts').delete().eq('staff_id', staffId);
         await supabase.from('staff').delete().eq('id', staffId);
 
         await createAuditLog({

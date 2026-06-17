@@ -332,11 +332,14 @@ export default function AttendancePage() {
       ot_minutes = calculateOTMinutes(shift_end, checkOut, shift_start);
     }
 
+    const late_salary_deduction_minutes = checkIn ? calculateLateMinutes(checkIn, shift_start) : 0;
+
     return {
       minutes_late,
       actual_hours_worked,
       ot_minutes,
       early_leave_minutes,
+      late_salary_deduction_minutes,
     };
   };
 
@@ -697,7 +700,7 @@ export default function AttendancePage() {
       const selectedStaff = staff.find((s) => s.id === addStaffId);
       if (!selectedStaff) throw new Error("Staff member not found");
 
-      const { minutes_late, actual_hours_worked, ot_minutes, early_leave_minutes } = calculateDerivedFields(
+      const { minutes_late, actual_hours_worked, ot_minutes, early_leave_minutes, late_salary_deduction_minutes } = calculateDerivedFields(
         addCheckIn || null,
         addCheckOut || null,
         addStatus,
@@ -722,6 +725,7 @@ export default function AttendancePage() {
         check_out_time: addCheckOut || null,
         status: addStatus,
         minutes_late,
+        late_salary_deduction_minutes,
         actual_hours_worked,
         ot_minutes,
         early_leave_minutes,
@@ -858,6 +862,8 @@ export default function AttendancePage() {
       const color_code = liveColorCode;
       const early_leave_minutes = liveEarlyLeaveMinutes;
 
+      const late_salary_deduction_minutes = editStatus === 'absent' ? 0 : calculateLateMinutes(editCheckInTime, detailRecord?.shift?.start_time || '09:00');
+
       const attendanceData: any = {
         staff_id: staffId,
         date: date,
@@ -865,6 +871,7 @@ export default function AttendancePage() {
         check_in_time: editStatus === 'absent' ? null : (editCheckInTime || null),
         check_out_time: editStatus === 'absent' ? null : (editCheckOutTime || null),
         minutes_late,
+        late_salary_deduction_minutes,
         actual_hours_worked,
         ot_minutes,
         early_leave_minutes: editStatus === 'absent' ? 0 : early_leave_minutes,
@@ -1550,6 +1557,8 @@ export default function AttendancePage() {
         // If schema cache errors occur, go to
         // Supabase Dashboard → Settings → API
         // and click "Reload schema cache"
+        const lateSalaryDeductionMins = calculateLateMinutes(row.inTime, shiftStart);
+
         const record: any = {
           staff_id: row.staffId,
           date: row.date,
@@ -1557,6 +1566,7 @@ export default function AttendancePage() {
           check_out_time: row.outTime || null,
           status,
           minutes_late: minutesLate,
+          late_salary_deduction_minutes: lateSalaryDeductionMins,
           color_code: colorCode,
           marked_by: 'import',
           early_leave_minutes: earlyLeaveMinutes
@@ -1586,6 +1596,7 @@ export default function AttendancePage() {
               check_out_time: row.outTime || null,
               status,
               minutes_late: minutesLate,
+              late_salary_deduction_minutes: lateSalaryDeductionMins,
               color_code: colorCode,
               marked_by: 'import',
               early_leave_minutes: earlyLeaveMinutes
@@ -2763,7 +2774,7 @@ export default function AttendancePage() {
                         )}
                         {weeklyOffBalances[item.id] && weeklyOffBalances[item.id].remaining > 0 && (
                           <span className="inline-block text-[9px] font-extrabold uppercase text-[#2563EB] bg-[#EFF6FF] border border-[#BFDBFE] px-1.5 py-0.5 rounded">
-                            {weeklyOffBalances[item.id].remaining} offs left
+                            {weeklyOffBalances[item.id].remaining} offs remaining
                           </span>
                         )}
                       </div>
