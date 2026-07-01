@@ -17,6 +17,8 @@ export interface Staff {
     name: string;
   };
   total_ot_minutes?: number;
+  pay_type?: string;
+  standard_hours?: number;
 }
 
 
@@ -40,6 +42,9 @@ export interface SalaryConfirmation {
   confirmed_at: string;
   confirmed_by: string;
   paid_days?: number;
+  standard_hours?: number;
+  hourly_rate?: number;
+  total_hours_logged?: number;
 }
 
 export interface SalaryPayment {

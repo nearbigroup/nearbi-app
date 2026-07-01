@@ -218,9 +218,16 @@ export default function StaffAttendancePage() {
   const stats = useMemo(() => {
     const present = attendance.filter(a => a.status === 'present' || a.status === 'late').length;
     const late = attendance.filter(a => a.status === 'late').length;
-    const absent = attendance.filter(a => a.status === 'absent').length;
+    
+    const approvedLeaveDates = new Set(leaves.map(l => l.date));
+    const absent = attendance.filter(a => 
+      a.status === 'absent' && 
+      a.day_type !== 'weekly_off' && 
+      a.day_type !== 'holiday' && 
+      !approvedLeaveDates.has(a.date)
+    ).length;
     return { present, late, absent };
-  }, [attendance]);
+  }, [attendance, leaves]);
 
   // Weekly off balance calculations
   const weeklyOffStats = useMemo(() => {

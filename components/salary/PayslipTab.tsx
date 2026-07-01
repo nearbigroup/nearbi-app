@@ -93,20 +93,28 @@ export default function PayslipTab({ selectedMonth: propMonth }: { selectedMonth
 
   const handleWhatsApp = () => {
     if (!staff || !confirmation) return;
-    const msg = `*SALARY SLIP - ${formatMonthDisplay(selectedMonth).toUpperCase()}*\n\n` +
+    let msg = `*SALARY SLIP - ${formatMonthDisplay(selectedMonth).toUpperCase()}*\n\n` +
       `*Name:* ${staff.name}\n` +
       `*Department:* ${staff.department}\n` +
-      `*Branch:* ${staff.branch?.name || staff.branch_id}\n\n` +
-      `*Calendar Days:* ${calendarDays} days\n` +
-      `*Daily Rate:* ${formatCurrency(dailyRate)}/day\n` +
-      `*Paid Days:* ${confirmation.paid_days} / ${maxPaidDays} max\n\n` +
-      `*Base Salary:* ${formatCurrency(confirmation.base_salary)}\n` +
-      `*OT Pay:* +${formatCurrency(confirmation.ot_pay)}\n` +
-      `*Leave Deduction:* -${formatCurrency(confirmation.leave_deduction)}\n` +
-      (confirmation.early_leave_deduction ? `*Early Leave Deduction:* -${formatCurrency(confirmation.early_leave_deduction)}\n` : '') +
-      `*Late Fines:* -${formatCurrency(confirmation.confirmed_fines || 0)}\n` +
-      `*Special Fines:* -${formatCurrency(confirmation.confirmed_special_fines || 0)}\n` +
-      `----------------------------------------\n` +
+      `*Branch:* ${staff.branch?.name || staff.branch_id}\n\n`;
+
+    if (confirmation.is_hourly) {
+      msg += `*Hourly Rate:* ${formatCurrency(confirmation.hourly_rate)}/hr\n` +
+        `*Total Hours Logged:* ${confirmation.total_hours_logged} hrs\n` +
+        `*Standard Hours:* ${confirmation.standard_hours} hrs\n`;
+    } else {
+      msg += `*Calendar Days:* ${calendarDays} days\n` +
+        `*Daily Rate:* ${formatCurrency(dailyRate)}/day\n` +
+        `*Paid Days:* ${confirmation.paid_days} / ${maxPaidDays} max\n\n` +
+        `*Base Salary:* ${formatCurrency(confirmation.base_salary)}\n` +
+        `*OT Pay:* +${formatCurrency(confirmation.ot_pay)}\n` +
+        `*Leave Deduction:* -${formatCurrency(confirmation.leave_deduction)}\n` +
+        (confirmation.early_leave_deduction ? `*Early Leave Deduction:* -${formatCurrency(confirmation.early_leave_deduction)}\n` : '') +
+        `*Late Fines:* -${formatCurrency(confirmation.confirmed_fines || 0)}\n` +
+        `*Special Fines:* -${formatCurrency(confirmation.confirmed_special_fines || 0)}\n`;
+    }
+    
+    msg += `----------------------------------------\n` +
       `*NET PAYABLE:* ${formatCurrency(confirmation.net_salary)}\n\n` +
       `Generated via Nearbi Staff Portal.`;
     
@@ -240,7 +248,7 @@ export default function PayslipTab({ selectedMonth: propMonth }: { selectedMonth
                 <span>Branch:</span>
                 <span className="text-[#1A1A1A] print:text-black capitalize">{staff.branch?.name || staff.branch_id}</span>
               </div>
-              {staff.shift && (
+              {staff.shift && !confirmation.is_hourly && (
                 <div className="flex justify-between">
                   <span>Shift Hour profile:</span>
                   <span className="text-[#1A1A1A] print:text-black">{staff.shift.label} ({staff.shift.hours}h)</span>
@@ -253,62 +261,79 @@ export default function PayslipTab({ selectedMonth: propMonth }: { selectedMonth
             </div>
 
             {/* Calculations Breakdown */}
-            <div className="space-y-2 text-xs text-[#555555] print:text-gray-700 border-b border-dashed border-[#E8E8E8] print:border-gray-200 pb-4 mb-4">
-              <div className="flex justify-between items-center bg-[#F8F8F8] print:bg-gray-50 p-2 rounded-xl mb-1">
-                <span className="font-bold text-[#1A1A1A] print:text-black">Base Salary:</span>
-                <span className="font-bold text-[#1A1A1A] print:text-black">{formatCurrency(confirmation.base_salary)}</span>
-              </div>
-              <div className="flex justify-between px-1">
-                <span>Calendar days in month:</span>
-                <span className="text-[#1A1A1A] print:text-black font-bold">{calendarDays} days</span>
-              </div>
-              <div className="flex justify-between px-1">
-                <span>Daily rate:</span>
-                <span className="text-[#1A1A1A] print:text-black font-bold">{formatCurrency(dailyRate)}/day</span>
-              </div>
-              <div className="flex justify-between px-1">
-                <span>Paid days:</span>
-                <span className="text-[#1A1A1A] print:text-black font-bold">{confirmation.paid_days} / {maxPaidDays} max</span>
-              </div>
-
-              {/* Additions heading */}
-              <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] print:text-gray-400 mt-2.5 px-1 border-t border-[#E8E8E8] pt-2">
-                Additions
-              </div>
-              <div className="flex justify-between px-1">
-                <span>OT Earnings ({(confirmation.ot_minutes / 60).toFixed(1)}h):</span>
-                <span className="text-[var(--success)] print:text-green-700 font-bold">+{formatCurrency(confirmation.ot_pay)}</span>
-              </div>
-              {(confirmation.early_in_pay || 0) > 0 && (
-                <div className="flex justify-between px-1">
-                  <span>Early Check-in Pay:</span>
-                  <span className="text-[var(--success)] print:text-green-700 font-bold">+{formatCurrency(confirmation.early_in_pay)}</span>
+            {confirmation.is_hourly ? (
+              <div className="space-y-2 text-xs text-[#555555] print:text-gray-700 border-b border-dashed border-[#E8E8E8] print:border-gray-200 pb-4 mb-4">
+                <div className="flex justify-between items-center bg-[#F8F8F8] print:bg-gray-50 p-2 rounded-xl mb-1">
+                  <span className="font-bold text-[#1A1A1A] print:text-black">Hourly Pay Rate:</span>
+                  <span className="font-bold text-[#1A1A1A] print:text-black">{formatCurrency(confirmation.hourly_rate)}/hr</span>
                 </div>
-              )}
-
-              {/* Deductions heading */}
-              <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] print:text-gray-400 mt-2.5 px-1 border-t border-[#E8E8E8] pt-2">
-                Deductions
-              </div>
-              <div className="flex justify-between px-1">
-                <span>Missing Days ({calendarDays - confirmation.paid_days > 0 ? calendarDays - confirmation.paid_days : 0}d):</span>
-                <span className="text-[var(--danger)] print:text-red-700 font-bold">-{formatCurrency(confirmation.leave_deduction)}</span>
-              </div>
-              {(confirmation.early_leave_deduction || 0) > 0 && (
                 <div className="flex justify-between px-1">
-                  <span>Early Leave:</span>
-                  <span className="text-[var(--danger)] print:text-red-700 font-bold">-{formatCurrency(confirmation.early_leave_deduction)}</span>
+                  <span>Total Hours Logged:</span>
+                  <span className="text-[#1A1A1A] print:text-black font-bold">{confirmation.total_hours_logged} hrs</span>
                 </div>
-              )}
-              <div className="flex justify-between px-1">
-                <span>Late Fines:</span>
-                <span className="text-[var(--danger)] print:text-red-700 font-bold">-{formatCurrency(confirmation.confirmed_fines || 0)}</span>
+                <div className="flex justify-between px-1">
+                  <span>Standard Hours:</span>
+                  <span className="text-[#1A1A1A] print:text-black font-bold">{confirmation.standard_hours} hrs</span>
+                </div>
               </div>
-              <div className="flex justify-between px-1">
-                <span>Special Fines:</span>
-                <span className="text-[var(--danger)] print:text-red-700 font-bold">-{formatCurrency(confirmation.confirmed_special_fines || 0)}</span>
+            ) : (
+              <div className="space-y-2 text-xs text-[#555555] print:text-gray-700 border-b border-dashed border-[#E8E8E8] print:border-gray-200 pb-4 mb-4">
+                <div className="flex justify-between items-center bg-[#F8F8F8] print:bg-gray-50 p-2 rounded-xl mb-1">
+                  <span className="font-bold text-[#1A1A1A] print:text-black">Base Salary:</span>
+                  <span className="font-bold text-[#1A1A1A] print:text-black">{formatCurrency(confirmation.base_salary)}</span>
+                </div>
+                <div className="flex justify-between px-1">
+                  <span>Calendar days in month:</span>
+                  <span className="text-[#1A1A1A] print:text-black font-bold">{calendarDays} days</span>
+                </div>
+                <div className="flex justify-between px-1">
+                  <span>Daily rate:</span>
+                  <span className="text-[#1A1A1A] print:text-black font-bold">{formatCurrency(dailyRate)}/day</span>
+                </div>
+                <div className="flex justify-between px-1">
+                  <span>Paid days:</span>
+                  <span className="text-[#1A1A1A] print:text-black font-bold">{confirmation.paid_days} / {maxPaidDays} max</span>
+                </div>
+
+                {/* Additions heading */}
+                <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] print:text-gray-400 mt-2.5 px-1 border-t border-[#E8E8E8] pt-2">
+                  Additions
+                </div>
+                <div className="flex justify-between px-1">
+                  <span>OT Earnings ({(confirmation.ot_minutes / 60).toFixed(1)}h):</span>
+                  <span className="text-[var(--success)] print:text-green-700 font-bold">+{formatCurrency(confirmation.ot_pay)}</span>
+                </div>
+                {(confirmation.early_in_pay || 0) > 0 && (
+                  <div className="flex justify-between px-1">
+                    <span>Early Check-in Pay:</span>
+                    <span className="text-[var(--success)] print:text-green-700 font-bold">+{formatCurrency(confirmation.early_in_pay)}</span>
+                  </div>
+                )}
+
+                {/* Deductions heading */}
+                <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] print:text-gray-400 mt-2.5 px-1 border-t border-[#E8E8E8] pt-2">
+                  Deductions
+                </div>
+                <div className="flex justify-between px-1">
+                  <span>Missing Days ({calendarDays - confirmation.paid_days > 0 ? calendarDays - confirmation.paid_days : 0}d):</span>
+                  <span className="text-[var(--danger)] print:text-red-700 font-bold">-{formatCurrency(confirmation.leave_deduction)}</span>
+                </div>
+                {(confirmation.early_leave_deduction || 0) > 0 && (
+                  <div className="flex justify-between px-1">
+                    <span>Early Leave:</span>
+                    <span className="text-[var(--danger)] print:text-red-700 font-bold">-{formatCurrency(confirmation.early_leave_deduction)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between px-1">
+                  <span>Late Fines:</span>
+                  <span className="text-[var(--danger)] print:text-red-700 font-bold">-{formatCurrency(confirmation.confirmed_fines || 0)}</span>
+                </div>
+                <div className="flex justify-between px-1">
+                  <span>Special Fines:</span>
+                  <span className="text-[var(--danger)] print:text-red-700 font-bold">-{formatCurrency(confirmation.confirmed_special_fines || 0)}</span>
+                </div>
               </div>
-            </div>
+            )}
 
             {/* Grand net totals */}
             <div className="flex justify-between items-end mb-6 px-1">

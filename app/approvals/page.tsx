@@ -79,6 +79,17 @@ export default function ApprovalsPage() {
   const [adjustments, setAdjustments] = useState<Adjustment[]>([]);
   const [fines, setFines] = useState<LateFine[]>([]);
   const [attendanceMap, setAttendanceMap] = useState<Record<string, AttendanceRecord>>({});
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    setSelectedIds([]);
+  }, [activeTab]);
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev =>
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -371,6 +382,144 @@ export default function ApprovalsPage() {
     }
   };
 
+  const handleBulkAdjustmentAction = async (action: 'approved' | 'rejected') => {
+    const selectedAdjustments = adjustments.filter(a => selectedIds.includes(a.id));
+    if (selectedAdjustments.length === 0) return;
+
+    if (action === 'approved' && activeTab === 'ot') {
+      const invalid = selectedAdjustments.some(adj => {
+        const attRecord = attendanceMap[`${adj.staff_id}_${adj.date}`];
+        return !attRecord || !attRecord.check_out_time || !isCheckoutValidForOT(attRecord.check_out_time, adj.staff?.shift?.end_time);
+      });
+      if (invalid) {
+        alert("Some selected OT claims do not meet the 30+ minute checkout criteria and cannot be approved.");
+        return;
+      }
+    }
+
+    if (!confirm(`Are you sure you want to ${action} ${selectedAdjustments.length} selected claims?`)) {
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const approverName = user?.email || 'HR';
+
+      for (const adj of selectedAdjustments) {
+        await supabase
+          .from('attendance_adjustments')
+          .update({
+            status: action,
+            approved_by: approverName,
+            approved_at: new Date().toISOString(),
+          })
+          .eq('id', adj.id);
+
+        if (action === 'approved') {
+          const updateField = adj.type === 'ot' ? { ot_approved: true } : { early_in_approved: true };
+          await supabase
+            .from('attendance')
+            .update(updateField)
+            .eq('staff_id', adj.staff_id)
+            .eq('date', adj.date);
+        }
+
+        try {
+          await supabase.from('wall_events').insert({
+            event_type: action === 'approved' ? (adj.type === 'ot' ? 'ot_approved' : 'early_in_approved') : (adj.type === 'ot' ? 'ot_rejected' : 'early_in_rejected'),
+            staff_id: adj.staff_id,
+            staff_name: adj.staff?.name,
+            branch_id: adj.staff?.branch_id,
+            description: `Bulk ${action} ${adj.type === 'ot' ? 'overtime' : 'early check-in'} (${adj.minutes} mins) for ${adj.staff?.name} on ${new Date(adj.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}`
+          });
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      await createAuditLog({
+        action: action === 'approved' ? 'bulk_approve_adjustments' : 'bulk_reject_adjustments',
+        table_name: 'attendance_adjustments',
+        record_id: selectedIds.join(','),
+        new_value: { status: action, count: selectedAdjustments.length },
+        performed_by: user?.email || 'admin',
+        performed_by_role: user?.role || 'admin',
+        reason: `Bulk ${action} ${selectedAdjustments.length} claims`
+      });
+
+      showToast(`Successfully bulk ${action} ${selectedAdjustments.length} claims!`);
+      setSelectedIds([]);
+      fetchApprovals();
+    } catch (err) {
+      console.error(err);
+      showToast("Failed to process bulk action.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleBulkFineAction = async (action: 'waived' | 'confirmed') => {
+    const selectedFines = fines.filter(f => selectedIds.includes(f.id));
+    if (selectedFines.length === 0) return;
+
+    let waiverReason = '';
+    if (action === 'waived') {
+      const reason = window.prompt(`Please enter a reason to waive these ${selectedFines.length} selected late fines:`);
+      if (!reason || !reason.trim()) {
+        alert("A reason is required to waive late fines.");
+        return;
+      }
+      waiverReason = reason.trim();
+    } else {
+      if (!confirm(`Are you sure you want to confirm all ${selectedFines.length} selected late fines?`)) {
+        return;
+      }
+    }
+
+    try {
+      setLoading(true);
+      const updateField = action === 'waived' ? { waived: true } : { confirmed: true };
+
+      for (const fine of selectedFines) {
+        await supabase
+          .from('late_fines')
+          .update(updateField)
+          .eq('id', fine.id);
+
+        try {
+          await supabase.from('wall_events').insert({
+            event_type: action === 'waived' ? 'fine_waived' : 'fine_confirmed',
+            staff_id: fine.staff_id,
+            staff_name: fine.staff?.name,
+            branch_id: fine.staff?.branch_id,
+            description: `Bulk ${action} late fine ₹${fine.fine_amount} for ${fine.staff?.name} on ${new Date(fine.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}${action === 'waived' ? ` (Reason: ${waiverReason})` : ''}`
+          });
+        } catch (e) {
+          console.error(e);
+        }
+      }
+
+      await createAuditLog({
+        action: action === 'waived' ? 'bulk_waive_fines' : 'bulk_confirm_fines',
+        table_name: 'late_fines',
+        record_id: selectedIds.join(','),
+        new_value: updateField,
+        performed_by: user?.email || 'admin',
+        performed_by_role: user?.role || 'admin',
+        reason: action === 'waived' ? waiverReason : 'Bulk confirmed late fines'
+      });
+
+      showToast(`Successfully bulk ${action} ${selectedFines.length} late fines!`);
+      setSelectedIds([]);
+      fetchApprovals();
+    } catch (err) {
+      console.error(err);
+      showToast("Failed to bulk update late fines.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Late fines actions handlers
   const handleFineAction = async (fine: LateFine, action: 'waived' | 'confirmed') => {
     let waiverReason = '';
@@ -508,6 +657,74 @@ export default function ApprovalsPage() {
         </div>
       ) : (
         <div className="space-y-3.5">
+          {/* Bulk Selection and Action Header Bar */}
+          {((activeTab === 'ot' && otPending.length > 0) ||
+            (activeTab === 'early_in' && earlyPending.length > 0) ||
+            (activeTab === 'fines' && fines.length > 0)) && (
+            <div className="flex items-center justify-between bg-white border border-[#E8E8E8] rounded-[12px] p-3 mb-2 shadow-sm">
+              <label className="flex items-center space-x-2.5 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={
+                    activeTab === 'ot'
+                      ? selectedIds.length === otPending.length && otPending.length > 0
+                      : activeTab === 'early_in'
+                      ? selectedIds.length === earlyPending.length && earlyPending.length > 0
+                      : selectedIds.length === fines.length && fines.length > 0
+                  }
+                  onChange={() => {
+                    const list = activeTab === 'ot' ? otPending : activeTab === 'early_in' ? earlyPending : fines;
+                    if (selectedIds.length === list.length) {
+                      setSelectedIds([]);
+                    } else {
+                      setSelectedIds(list.map(x => x.id));
+                    }
+                  }}
+                  className="w-4.5 h-4.5 rounded border-gray-300 text-black focus:ring-black cursor-pointer"
+                />
+                <span className="text-xs font-extrabold text-[#1A1A1A]">
+                  Select All ({selectedIds.length}/{activeTab === 'ot' ? otPending.length : activeTab === 'early_in' ? earlyPending.length : fines.length})
+                </span>
+              </label>
+              
+              {selectedIds.length > 0 && (
+                <div className="flex gap-2">
+                  {activeTab === 'fines' ? (
+                    <>
+                      <button
+                        onClick={() => handleBulkFineAction('waived')}
+                        className="bg-white border border-[#E8E8E8] hover:bg-[#FDECEA] hover:text-[#C0392B] hover:border-[#C0392B]/20 text-[#555555] font-extrabold text-[10px] px-3 py-1.5 rounded-[8px] active:scale-95 transition-all shadow-sm cursor-pointer"
+                      >
+                        Waive Selected
+                      </button>
+                      <button
+                        onClick={() => handleBulkFineAction('confirmed')}
+                        className="bg-[#1A1A1A] text-white hover:bg-[#333333] font-extrabold text-[10px] px-3 py-1.5 rounded-[8px] active:scale-95 transition-all shadow-sm cursor-pointer"
+                      >
+                        Confirm Selected
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => handleBulkAdjustmentAction('rejected')}
+                        className="bg-white border border-[#E8E8E8] hover:bg-[#FDECEA] hover:text-[#C0392B] hover:border-[#C0392B]/20 text-[#555555] font-extrabold text-[10px] px-3 py-1.5 rounded-[8px] active:scale-95 transition-all shadow-sm cursor-pointer"
+                      >
+                        Reject Selected
+                      </button>
+                      <button
+                        onClick={() => handleBulkAdjustmentAction('approved')}
+                        className="bg-[#1A1A1A] text-white hover:bg-[#333333] font-extrabold text-[10px] px-3 py-1.5 rounded-[8px] active:scale-95 transition-all shadow-sm cursor-pointer"
+                      >
+                        Approve Selected
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {activeTab === 'ot' && (
             otPending.length === 0 ? (
               <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-8 text-center flex flex-col items-center justify-center my-6 shadow-sm">
@@ -547,11 +764,19 @@ export default function ApprovalsPage() {
                   return (
                     <div key={adj.id} className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col shadow-sm">
                       <div className="flex items-start justify-between mb-3">
-                        <div>
-                          <h3 className="font-bold text-sm text-[#1A1A1A]">{adj.staff?.name}</h3>
-                          <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-0.5">
-                            {adj.staff?.department} • <span className="capitalize">{getBranchLabel(adj.staff?.branch_id)}</span>
-                          </p>
+                        <div className="flex items-start space-x-3">
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.includes(adj.id)}
+                            onChange={() => toggleSelect(adj.id)}
+                            className="w-4.5 h-4.5 rounded border-gray-300 text-black focus:ring-black cursor-pointer mt-1"
+                          />
+                          <div>
+                            <h3 className="font-bold text-sm text-[#1A1A1A]">{adj.staff?.name}</h3>
+                            <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-0.5">
+                              {adj.staff?.department} • <span className="capitalize">{getBranchLabel(adj.staff?.branch_id)}</span>
+                            </p>
+                          </div>
                         </div>
                         <span className="text-[9px] font-bold text-[var(--info)] bg-[var(--info-bg)] border border-[var(--info)]/20 px-2 py-0.5 rounded-[20px]">
                           {formatDate(adj.date)}
@@ -625,14 +850,31 @@ export default function ApprovalsPage() {
                 const shiftStart = adj.staff?.shift?.start_time || 'None';
                 const actualIn = att ? att.check_in_time || 'None' : 'None';
 
+                let earlyInMinsLive = adj.minutes;
+                if (shiftStart !== 'None' && actualIn !== 'None') {
+                  const [sh, sm] = shiftStart.split(':').map(Number);
+                  const [ch, cm] = actualIn.split(':').map(Number);
+                  const shiftStartMins = sh * 60 + sm;
+                  const checkInMins = ch * 60 + cm;
+                  earlyInMinsLive = Math.max(0, shiftStartMins - checkInMins);
+                }
+
                 return (
                   <div key={adj.id} className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col shadow-sm">
                     <div className="flex items-start justify-between mb-3">
-                      <div>
-                        <h3 className="font-bold text-sm text-[#1A1A1A]">{adj.staff?.name}</h3>
-                        <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-0.5">
-                          {adj.staff?.department} • <span className="capitalize">{getBranchLabel(adj.staff?.branch_id)}</span>
-                        </p>
+                      <div className="flex items-start space-x-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.includes(adj.id)}
+                          onChange={() => toggleSelect(adj.id)}
+                          className="w-4.5 h-4.5 rounded border-gray-300 text-black focus:ring-black cursor-pointer mt-1"
+                        />
+                        <div>
+                          <h3 className="font-bold text-sm text-[#1A1A1A]">{adj.staff?.name}</h3>
+                          <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-0.5">
+                            {adj.staff?.department} • <span className="capitalize">{getBranchLabel(adj.staff?.branch_id)}</span>
+                          </p>
+                        </div>
                       </div>
                       <span className="text-[9px] font-bold text-[var(--info)] bg-[var(--info-bg)] border border-[var(--info)]/20 px-2 py-0.5 rounded-[20px]">
                         {formatDate(adj.date)}
@@ -650,7 +892,7 @@ export default function ApprovalsPage() {
                       </div>
                       <div>
                         <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Early By</div>
-                        <div className="text-[var(--success)] font-bold mt-0.5">{adj.minutes} mins</div>
+                        <div className="text-[var(--success)] font-bold mt-0.5">{earlyInMinsLive} mins</div>
                       </div>
                     </div>
 
@@ -687,11 +929,19 @@ export default function ApprovalsPage() {
               fines.map((fine) => (
                 <div key={fine.id} className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col shadow-sm">
                   <div className="flex items-start justify-between mb-3.5">
-                    <div>
-                      <h3 className="font-bold text-sm text-[#1A1A1A]">{fine.staff?.name}</h3>
-                      <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-0.5">
-                        {fine.staff?.department} • <span className="capitalize">{getBranchLabel(fine.staff?.branch_id)}</span>
-                      </p>
+                    <div className="flex items-start space-x-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.includes(fine.id)}
+                        onChange={() => toggleSelect(fine.id)}
+                        className="w-4.5 h-4.5 rounded border-gray-300 text-black focus:ring-black cursor-pointer mt-1"
+                      />
+                      <div>
+                        <h3 className="font-bold text-sm text-[#1A1A1A]">{fine.staff?.name}</h3>
+                        <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-0.5">
+                          {fine.staff?.department} • <span className="capitalize">{getBranchLabel(fine.staff?.branch_id)}</span>
+                        </p>
+                      </div>
                     </div>
                     <span className="text-[9px] font-bold text-[var(--warning)] bg-[var(--warning-bg)] border border-[var(--warning)]/20 px-2 py-0.5 rounded-[20px]">
                       {formatDate(fine.date)}

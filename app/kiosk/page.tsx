@@ -365,11 +365,12 @@ export default function KioskPage() {
         String(now.getHours()).padStart(2, '0') + ':' +
         String(now.getMinutes()).padStart(2, '0');
 
+      const isHourly = staff.pay_type === 'hourly';
       const shiftStart = staff.shift?.start_time || staff.shifts?.start_time || '09:00';
       const shiftEnd = staff.shift?.end_time || staff.shifts?.end_time || '18:00';
-      const otMins = calculateOTMinutes(shiftEnd, actualOut, shiftStart);
+      const otMins = isHourly ? 0 : calculateOTMinutes(shiftEnd, actualOut, shiftStart);
       const actualHrs = calculateActualHours(record.check_in_time, actualOut);
-      const earlyLeaveMins = calculateEarlyLeaveMinutes(shiftEnd, actualOut, shiftStart);
+      const earlyLeaveMins = isHourly ? 0 : calculateEarlyLeaveMinutes(shiftEnd, actualOut, shiftStart);
 
       const isEarlyLeave = earlyLeaveMins > 0;
       const earlyLeaveMinutes = earlyLeaveMins;
@@ -381,10 +382,11 @@ export default function KioskPage() {
         actual_hours_worked: actualHrs,
         early_leave_minutes: earlyLeaveMins,
         check_out_photo: photoUrl || null,
-        short_attendance: isShortAttendance
+        short_attendance: isHourly ? false : isShortAttendance,
+        total_hours_logged: isHourly ? actualHrs : 0
       };
 
-      if (otMins > 0) {
+      if (!isHourly && otMins > 0) {
         checkoutRecord.ot_approved = false; // pending approval
       }
 
@@ -529,41 +531,44 @@ export default function KioskPage() {
         const now = new Date();
         const checkInTimeStr = now.toTimeString().split(' ')[0].substring(0, 5); // "HH:MM"
 
+        const isHourly = staff.pay_type === 'hourly';
         const shiftStartStr = staff.shift?.start_time || staff.shifts?.start_time || '09:00'; // "HH:MM"
         const [sh, sm] = shiftStartStr.split(':').map(Number);
         const shiftMins = sh * 60 + sm;
         const currentMins = now.getHours() * 60 + now.getMinutes();
 
-        // Block check-in if time > shift_end + 2 hours
-        const shiftEndStr = staff.shift?.end_time || staff.shifts?.end_time || '18:00';
-        const [seH, seM] = shiftEndStr.split(':').map(Number);
-        
-        let shiftEndToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), seH, seM, 0);
-        if (seH * 60 + seM <= sh * 60 + sm) {
-          shiftEndToday.setDate(shiftEndToday.getDate() + 1);
-        }
-        const blockTime = new Date(shiftEndToday.getTime() + 2 * 60 * 60 * 1000);
-        
-        if (now.getTime() > blockTime.getTime()) {
-          setErrorMsg(`Check-in is blocked. Your shift ended at ${formatTime12hr(shiftEndStr)}, and check-in is only allowed up to 2 hours after shift end.`);
-          setKioskState('ERROR');
-          setTimeout(() => resetKiosk(), 5000);
-          return;
+        if (!isHourly) {
+          // Block check-in if time > shift_end + 2 hours
+          const shiftEndStr = staff.shift?.end_time || staff.shifts?.end_time || '18:00';
+          const [seH, seM] = shiftEndStr.split(':').map(Number);
+          
+          let shiftEndToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), seH, seM, 0);
+          if (seH * 60 + seM <= sh * 60 + sm) {
+            shiftEndToday.setDate(shiftEndToday.getDate() + 1);
+          }
+          const blockTime = new Date(shiftEndToday.getTime() + 2 * 60 * 60 * 1000);
+          
+          if (now.getTime() > blockTime.getTime()) {
+            setErrorMsg(`Check-in is blocked. Your shift ended at ${formatTime12hr(shiftEndStr)}, and check-in is only allowed up to 2 hours after shift end.`);
+            setKioskState('ERROR');
+            setTimeout(() => resetKiosk(), 5000);
+            return;
+          }
         }
 
         // Calculate early in
         let earlyInMinutes = 0;
-        if (currentMins < shiftMins) {
+        if (!isHourly && currentMins < shiftMins) {
           earlyInMinutes = shiftMins - currentMins;
         }
 
         // Calculate minutes late using calculateLateMinutes
-        const minutesLate = calculateLateMinutes(checkInTimeStr, shiftStartStr);
+        const minutesLate = isHourly ? 0 : calculateLateMinutes(checkInTimeStr, shiftStartStr);
         const lateMins = minutesLate; // late_salary_deduction_minutes
         let status: 'present' | 'late' = 'present';
         let colorCode: 'green' | 'yellow' | 'orange' | 'red' = 'green';
 
-        if (minutesLate > 0) {
+        if (!isHourly && minutesLate > 0) {
           status = 'late';
           
           if (minutesLate <= 15) {
@@ -582,7 +587,7 @@ export default function KioskPage() {
           .eq('staff_id', staff.id)
           .maybeSingle();
 
-        const isExempt = !!exemption;
+        const isExempt = !!exemption || isHourly;
         let fineAmount = 0;
 
         if (colorCode !== 'green' && !isExempt) {
@@ -941,25 +946,30 @@ export default function KioskPage() {
         return;
       }
 
-      // 3. Fetch break_settings from Supabase
+      // 3. Fetch break_settings from Supabase for this branch
+      const branchId = staff.branch_id || 'daily';
       const { data: breakSettings, error: settingsErr } = await supabase
         .from('break_settings')
         .select('*')
-        .limit(1)
+        .eq('branch_id', branchId)
         .maybeSingle();
 
       if (settingsErr) throw settingsErr;
       
       const settings = breakSettings || {
+        branch_id: branchId,
         morning_tea_duration: 10,
         morning_tea_start: '09:30',
         morning_tea_end: '11:30',
+        morning_tea_enabled: true,
         food_break_duration: 25,
         food_break_start: '12:00',
         food_break_end: '15:00',
+        food_break_enabled: true,
         evening_tea_duration: 10,
         evening_tea_start: '16:00',
         evening_tea_end: '18:30',
+        evening_tea_enabled: true,
       };
 
       // 4. Determine break type by current time
@@ -983,14 +993,47 @@ export default function KioskPage() {
       let breakLabel = 'Unscheduled';
 
       if (current_time_mins >= morning_start && current_time_mins <= morning_end) {
+        if (settings.morning_tea_enabled === false) {
+          setResultData({
+            status: 'red',
+            icon: 'alert-triangle',
+            title: 'Break Disabled',
+            message: 'Morning Tea break is disabled for this branch.'
+          });
+          setKioskState('RESULT');
+          setTimeout(() => resetKiosk(), 4000);
+          return;
+        }
         break_type = 'morning_tea';
         allowed = settings.morning_tea_duration;
         breakLabel = 'Morning Tea';
       } else if (current_time_mins >= food_start && current_time_mins <= food_end) {
+        if (settings.food_break_enabled === false) {
+          setResultData({
+            status: 'red',
+            icon: 'alert-triangle',
+            title: 'Break Disabled',
+            message: 'Food Break is disabled for this branch.'
+          });
+          setKioskState('RESULT');
+          setTimeout(() => resetKiosk(), 4000);
+          return;
+        }
         break_type = 'food_break';
         allowed = settings.food_break_duration;
         breakLabel = 'Food Break';
       } else if (current_time_mins >= evening_start && current_time_mins <= evening_end) {
+        if (settings.evening_tea_enabled === false) {
+          setResultData({
+            status: 'red',
+            icon: 'alert-triangle',
+            title: 'Break Disabled',
+            message: 'Evening Tea break is disabled for this branch.'
+          });
+          setKioskState('RESULT');
+          setTimeout(() => resetKiosk(), 4000);
+          return;
+        }
         break_type = 'evening_tea';
         allowed = settings.evening_tea_duration;
         breakLabel = 'Evening Tea';
@@ -1356,60 +1399,62 @@ export default function KioskPage() {
         )}
 
         {kioskState === 'CAMERA' && (
-          <div className="absolute inset-0 bg-[#1A1A1A] z-50 flex flex-col">
-            <button
-              type="button"
-              onClick={resetKiosk}
-              className="absolute top-6 left-6 text-white font-bold bg-[#222222]/80 border border-[#333333] px-4 py-2 rounded-[20px] text-xs z-50 active:scale-95"
-            >
-              Cancel
-            </button>
+          <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 md:p-8 backdrop-blur-sm">
+            <div className="relative w-full max-w-xl h-full max-h-[85vh] bg-[#222222] rounded-[24px] border border-[#333333] overflow-hidden flex flex-col shadow-2xl">
+              <button
+                type="button"
+                onClick={resetKiosk}
+                className="absolute top-4 left-4 text-white font-bold bg-[#333333]/80 hover:bg-[#444444] border border-[#444444] px-4 py-2 rounded-[20px] text-xs z-50 active:scale-95 transition-all"
+              >
+                Cancel
+              </button>
 
-            {cameraError ? (
-              <div className="flex-1 flex flex-col items-center justify-center p-6 text-center space-y-4">
-                <Camera size={48} strokeWidth={1.5} className="text-[#999999]" />
-                <h3 className="text-lg font-bold">Camera access required</h3>
-                <p className="text-sm text-[#999999]">
-                  Please allow camera permissions in your browser settings to verify your identity.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => startCamera(flow)}
-                  className="bg-white text-[#1A1A1A] font-bold px-6 py-2.5 rounded-[12px] text-sm active:scale-95"
-                >
-                  Retry Camera
-                </button>
-              </div>
-            ) : (
-              <>
-                <div className="flex-1 relative flex items-center justify-center overflow-hidden">
-                  <video
-                    ref={videoRef}
-                    autoPlay
-                    playsInline
-                    muted
-                    className="absolute w-full h-full object-cover"
-                  />
-                  <div className="absolute inset-0 bg-black/40" />
-
-                  {/* Circular Face Overlay */}
-                  <div className="z-10 w-64 h-64 rounded-full border-4 border-white shadow-[0_0_0_9999px_rgba(26,26,26,0.85)] flex items-center justify-center relative">
-                    <div className="absolute inset-0 border-2 border-transparent rounded-full animate-pulse" />
-                  </div>
-                </div>
-
-                <div className="p-6 bg-[#222222] border-t border-[#333333] flex justify-center pb-12">
+              {cameraError ? (
+                <div className="flex-1 flex flex-col items-center justify-center p-6 text-center space-y-4 text-white">
+                  <Camera size={48} strokeWidth={1.5} className="text-[#999999]" />
+                  <h3 className="text-lg font-bold">Camera access required</h3>
+                  <p className="text-sm text-[#999999]">
+                    Please allow camera permissions in your browser settings to verify your identity.
+                  </p>
                   <button
                     type="button"
-                    onClick={handleCapture}
-                    className="bg-white hover:bg-gray-200 text-[#1A1A1A] font-bold text-base py-3.5 px-10 rounded-[28px] active:scale-95 transition-transform flex items-center space-x-2 shadow-lg"
+                    onClick={() => startCamera(flow)}
+                    className="bg-white text-[#1A1A1A] font-bold px-6 py-2.5 rounded-[12px] text-sm active:scale-95"
                   >
-                    <Camera size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
-                    <span>Take Photo</span>
+                    Retry Camera
                   </button>
                 </div>
-              </>
-            )}
+              ) : (
+                <>
+                  <div className="flex-1 relative flex items-center justify-center overflow-hidden bg-black">
+                    <video
+                      ref={videoRef}
+                      autoPlay
+                      playsInline
+                      muted
+                      className="absolute w-full h-full object-cover"
+                    />
+                    <div className="absolute inset-0 bg-black/35" />
+
+                    {/* Circular Face Overlay */}
+                    <div className="z-10 w-56 h-56 md:w-64 md:h-64 rounded-full border-4 border-white shadow-[0_0_0_9999px_rgba(26,26,26,0.85)] flex items-center justify-center relative">
+                      <div className="absolute inset-0 border-2 border-transparent rounded-full animate-pulse" />
+                    </div>
+                  </div>
+
+                  <div className="p-5 bg-[#222222] border-t border-[#333333] flex justify-center pb-8 w-full">
+                    <button
+                      type="button"
+                      onClick={handleCapture}
+                      className="bg-white hover:bg-gray-200 text-[#1A1A1A] font-bold text-base py-3.5 px-10 rounded-[28px] active:scale-95 transition-transform flex items-center space-x-2 shadow-lg"
+                    >
+                      <Camera size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
+                      <span>Take Photo</span>
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
         )}
 
@@ -1502,7 +1547,7 @@ export default function KioskPage() {
 
         {/* Result Overlay */}
         {kioskState === 'RESULT' && resultData && staff && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4">
             <div
               className={`p-8 rounded-[14px] max-w-[300px] w-full text-center shadow-lg flex flex-col items-center border ${
                 resultData.status === 'green'

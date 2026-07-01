@@ -40,6 +40,8 @@ interface StaffMember {
     end_time: string;
     hours: number;
   };
+  pay_type?: string;
+  standard_hours?: number;
 }
 
 interface AttendanceRecord {
@@ -307,6 +309,7 @@ export default function DashboardPage() {
 
       // Check each staff member
       for (const s of staff) {
+        if (s.pay_type === 'hourly') continue;
         if (!s.shift?.start_time) continue;
 
         // Parse shift start time today
@@ -314,8 +317,8 @@ export default function DashboardPage() {
         const shiftStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), sh, sm);
         const minutesDiff = (now.getTime() - shiftStart.getTime()) / (60 * 1000);
 
-        // If shift started 60+ mins ago
-        if (minutesDiff >= 60) {
+        // If shift started 30+ mins ago
+        if (minutesDiff >= 30) {
           // Check if checked in
           const checkedIn = attendance.some((a) => a.staff_id === s.id && a.check_in_time);
           if (!checkedIn) {
@@ -344,7 +347,7 @@ export default function DashboardPage() {
                 await createNotification({
                   type: 'absent_alert',
                   title: 'Staff Absent Alert',
-                  message: `${s.name} is absent today (no check-in after 60 mins of shift start).`,
+                  message: `${s.name} is absent today (no check-in after 30 mins of shift start).`,
                   branchId: s.branch_id,
                   staffId: s.id,
                   relatedId: todayStr,
@@ -357,7 +360,7 @@ export default function DashboardPage() {
                     staff_id: s.id,
                     staff_name: s.name,
                     branch_id: s.branch_id,
-                    description: `${s.name} was marked absent today (no check-in after 60 mins of shift start).`
+                    description: `${s.name} was marked absent today (no check-in after 30 mins of shift start).`
                   });
                 } catch (e) {
                   console.error('Silent insert wall event failed:', e);
@@ -430,6 +433,7 @@ export default function DashboardPage() {
 
     branchStaff.forEach((s) => {
       const att = branchAttendance.find((a) => a.staff_id === s.id);
+      const isHourly = s.pay_type === 'hourly';
       if (att) {
         if (att.check_in_time) {
           present++;
@@ -440,10 +444,30 @@ export default function DashboardPage() {
             checkedOut++;
           }
         } else {
-          absent++;
+          if (!isHourly) {
+            const shiftStartStr = s.shift?.start_time || '09:00';
+            const [sh, sm] = shiftStartStr.split(':').map(Number);
+            const now = new Date();
+            const shiftStartToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), sh, sm);
+            const minutesDiff = (now.getTime() - shiftStartToday.getTime()) / (60 * 1000);
+            
+            if (minutesDiff >= 30) {
+              absent++;
+            }
+          }
         }
       } else {
-        absent++;
+        if (!isHourly) {
+          const shiftStartStr = s.shift?.start_time || '09:00';
+          const [sh, sm] = shiftStartStr.split(':').map(Number);
+          const now = new Date();
+          const shiftStartToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), sh, sm);
+          const minutesDiff = (now.getTime() - shiftStartToday.getTime()) / (60 * 1000);
+          
+          if (minutesDiff >= 30) {
+            absent++;
+          }
+        }
       }
     });
 
@@ -475,8 +499,19 @@ export default function DashboardPage() {
     });
 
   const absentStaffAlerts = activeBranchStaff.filter((s) => {
+    const isHourly = s.pay_type === 'hourly';
+    if (isHourly) return false;
+
     const att = attendanceList.find((a) => a.staff_id === s.id);
-    return !att || !att.check_in_time;
+    if (att && att.check_in_time) return false;
+
+    const shiftStartStr = s.shift?.start_time || '09:00';
+    const [sh, sm] = shiftStartStr.split(':').map(Number);
+    const now = new Date();
+    const shiftStartToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), sh, sm);
+    const minutesDiff = (now.getTime() - shiftStartToday.getTime()) / (60 * 1000);
+
+    return minutesDiff >= 30;
   });
 
   const handleCreateAnnouncement = async (e: React.FormEvent) => {

@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth-context';
-import { calculateSalary } from '@/lib/salary';
+import { calculateSalary, calculateHourlySalary, calculateMinutesWorked } from '@/lib/salary';
 import { Staff, SalaryConfirmation } from './types';
 import { formatCurrency, getCurrentMonthStr, formatMonthDisplay } from './utils';
 import { Check, Search, AlertCircle } from 'lucide-react';
@@ -31,6 +31,7 @@ export default function BulkConfirmTab({
   
   const [salaryData, setSalaryData] = useState<Record<string, any>>({});
   const [extraLeaves, setExtraLeaves] = useState<Record<string, number>>({});
+  const [selectedStaffIds, setSelectedStaffIds] = useState<string[]>([]);
   const [filterBranch, setFilterBranch] = useState<'all' | 'daily' | 'hypermarket'>('all');
   const [confirmingFines, setConfirmingFines] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -148,7 +149,8 @@ export default function BulkConfirmTab({
     const newSalaryData: Record<string, any> = {};
     
     staffList.forEach((s) => {
-      if (!s.shift) return;
+      const isHourly = s.pay_type === 'hourly';
+      if (!s.shift && !isHourly) return;
       
       const year = parseInt(month.split('-')[0]);
       const monthNum = parseInt(month.split('-')[1]);
@@ -157,134 +159,166 @@ export default function BulkConfirmTab({
       // Filter attendance records for current staff
       const staffAtt = attendanceRecords.filter((r) => r.staff_id === s.id);
       
-      // Real days worked (present/late, not weekly off or holiday)
-      const daysActuallyWorked = staffAtt.filter(
-        (r) => r.check_in_time !== null &&
-        r.day_type !== 'weekly_off' &&
-        r.day_type !== 'holiday'
-      ).length;
-
-      // Count genuine absent days and approved leave days
-      const staffLeaves = leaveRequests.filter(l => l.staff_id === s.id && l.status === 'approved');
-      let genuineAbsentDays = 0;
-
-      for (let d = 1; d <= daysInMonth; d++) {
-        const dateStr = `${month}-${String(d).padStart(2, '0')}`;
-        const att = staffAtt.find(r => r.date === dateStr);
-        const hasLeave = staffLeaves.some(l => l.date === dateStr);
-
-        if (att) {
-          // If record exists, is it status absent, and not weekly off, not holiday, and no approved leave?
-          if (att.status === 'absent' && att.day_type !== 'weekly_off' && att.day_type !== 'holiday' && !hasLeave) {
-            genuineAbsentDays++;
+      if (isHourly) {
+        const standardHours = Number(s.standard_hours || 234);
+        const totalHoursWorked = staffAtt.reduce((sum, r) => {
+          if (r.total_hours_logged !== null && r.total_hours_logged !== undefined && Number(r.total_hours_logged) > 0) {
+            return sum + Number(r.total_hours_logged);
           }
-        } else {
-          // If no record exists, and no approved leave exists, it is absent
-          if (!hasLeave) {
-            genuineAbsentDays++;
+          if (r.check_in_time && r.check_out_time) {
+            return sum + (calculateMinutesWorked(r.check_in_time, r.check_out_time) / 60);
+          }
+          return sum;
+        }, 0);
+
+        const hourlyResult = calculateHourlySalary(s.monthly_salary, standardHours, totalHoursWorked);
+        newSalaryData[s.id] = {
+          is_hourly: true,
+          net_salary: hourlyResult.netSalary,
+          hourly_rate: hourlyResult.hourlyRate,
+          total_hours: hourlyResult.totalHours,
+          standard_hours: standardHours,
+          ot_pay: 0,
+          early_in_pay: 0,
+          leave_deduction: 0,
+          extra_days_pay: 0,
+          confirmed_fines: 0,
+          confirmed_special_fines: 0,
+          paid_days: 0,
+          early_leave_deduction: 0,
+          late_salary_deduction: 0,
+          ot_minutes: 0,
+        };
+      } else {
+        // Real days worked (present/late, not weekly off or holiday)
+        const daysActuallyWorked = staffAtt.filter(
+          (r) => r.check_in_time !== null &&
+          r.day_type !== 'weekly_off' &&
+          r.day_type !== 'holiday'
+        ).length;
+
+        // Count genuine absent days and approved leave days
+        const staffLeaves = leaveRequests.filter(l => l.staff_id === s.id && l.status === 'approved');
+        let genuineAbsentDays = 0;
+
+        for (let d = 1; d <= daysInMonth; d++) {
+          const dateStr = `${month}-${String(d).padStart(2, '0')}`;
+          const att = staffAtt.find(r => r.date === dateStr);
+          const hasLeave = staffLeaves.some(l => l.date === dateStr);
+
+          if (att) {
+            // If record exists, is it status absent, and not weekly off, not holiday, and no approved leave?
+            if (att.status === 'absent' && att.day_type !== 'weekly_off' && att.day_type !== 'holiday' && !hasLeave) {
+              genuineAbsentDays++;
+            }
+          } else {
+            // If no record exists, and no approved leave exists, it is absent
+            if (!hasLeave) {
+              genuineAbsentDays++;
+            }
           }
         }
-      }
 
-      // Quota logic
-      const offDaysPerMonth = s.off_days_per_month as 0 | 2 | 4;
-      let earnedQuota = 0;
-      if (offDaysPerMonth === 4) {
-        earnedQuota = Math.min(Math.floor(daysActuallyWorked / 6), 4);
-      } else if (offDaysPerMonth === 2) {
-        earnedQuota = Math.min(Math.floor(daysActuallyWorked / 12), 2);
-      }
-
-      // Weekly offs taken (unique dates marked as weekly off in attendance, or as a weekly off leave request)
-      const weeklyOffDates = new Set([
-        ...staffAtt.filter(r => r.day_type === 'weekly_off').map(r => r.date),
-        ...staffLeaves.filter(l => l.is_weekly_off === true).map(l => l.date)
-      ]);
-      const weeklyOffsTaken = weeklyOffDates.size;
-      const weeklyOffsUsed = Math.min(weeklyOffsTaken, earnedQuota);
-
-      // absences = calendarDays - daysActuallyWorked
-      const absences = daysInMonth - daysActuallyWorked;
-
-      // deductedDays = absences - weeklyOffsUsed + manualExtraLeaves
-      const manualExtraLeaves = extraLeaves[s.id] || 0;
-      const deductedDays = Math.max(0, absences - weeklyOffsUsed) + manualExtraLeaves;
-
-      const missingDays = deductedDays;
-
-      // Approved OT minutes only
-      const approvedOTMinutes = staffAtt
-        .filter((r) => r.ot_approved === true)
-        .reduce((sum, r) => sum + (r.ot_minutes || 0), 0) || 0;
-
-      // Approved early check-in minutes only
-      const approvedEarlyInMinutes = staffAtt
-        .filter((r) => r.early_in_approved === true)
-        .reduce((sum, r) => sum + (r.early_in_minutes || 0), 0) || 0;
-
-      // Early leave minutes total
-      const earlyLeaveMinutes = staffAtt.reduce(
-        (sum, r) => sum + (r.early_leave_minutes || 0), 0
-      ) || 0;
-
-      // Calculate confirmed late fines (with partial waive support)
-      const staffLateFines = lateFines.filter(
-        (lf) => lf.staff_id === s.id && lf.confirmed
-      );
-      const totalLateFinesAmt = staffLateFines.reduce((sum, lf) => {
-        const amt = Number(lf.fine_amount);
-        const waivedAmt = Number(lf.waived_amount || 0);
-        return sum + (lf.waived ? 0 : Math.max(0, amt - waivedAmt));
-      }, 0);
-
-      // Calculate confirmed special fines (with partial waive support)
-      const staffSpecialFines = specialFines.filter(
-        (sf) => sf.staff_id === s.id && sf.confirmed
-      );
-      const totalSpecialFinesAmt = staffSpecialFines.reduce((sum, sf) => {
-        const amt = Number(sf.edited_amount ?? sf.amount);
-        const waivedAmt = Number(sf.waived_amount || 0);
-        return sum + (sf.waived ? 0 : Math.max(0, amt - waivedAmt));
-      }, 0);
-
-      const shiftHours = s.shift?.hours || 9;
-
-      const breakdown = calculateSalary(
-        {
-          monthlySalary: s.monthly_salary,
-          offDaysPerMonth,
-          shiftHours,
-          year,
-          month: monthNum,
-        },
-        {
-          daysActuallyWorked,
-          confirmedLateFines: totalLateFinesAmt,
-          confirmedSpecialFines: totalSpecialFinesAmt,
-          approvedOTMinutes,
-          approvedEarlyInMinutes,
-          earlyLeaveMinutes,
-          missingDays,
-          late_salary_deduction_minutes: staffAtt.reduce((sum, r) => sum + (r.late_salary_deduction_minutes || 0), 0),
-          leaves_taken: staffLeaves.filter(l => !l.is_weekly_off).length,
+        // Quota logic
+        const offDaysPerMonth = s.off_days_per_month as 0 | 2 | 4;
+        let earnedQuota = 0;
+        if (offDaysPerMonth === 4) {
+          earnedQuota = Math.min(Math.floor(daysActuallyWorked / 6), 4);
+        } else if (offDaysPerMonth === 2) {
+          earnedQuota = Math.min(Math.floor(daysActuallyWorked / 12), 2);
         }
-      );
 
-      const netSalary = Math.max(0, breakdown.netSalary);
+        // Weekly offs taken (unique dates marked as weekly off in attendance, or as a weekly off leave request)
+        const weeklyOffDates = new Set([
+          ...staffAtt.filter(r => r.day_type === 'weekly_off').map(r => r.date),
+          ...staffLeaves.filter(l => l.is_weekly_off === true).map(l => l.date)
+        ]);
+        const weeklyOffsTaken = weeklyOffDates.size;
+        const weeklyOffsUsed = Math.min(weeklyOffsTaken, earnedQuota);
 
-      newSalaryData[s.id] = {
-        net_salary: netSalary,
-        ot_pay: breakdown.otPay,
-        early_in_pay: breakdown.earlyInPay,
-        leave_deduction: breakdown.missingDays * breakdown.dailyRate,
-        extra_days_pay: breakdown.extraDaysWorked * breakdown.dailyRate,
-        confirmed_fines: totalLateFinesAmt,
-        confirmed_special_fines: totalSpecialFinesAmt,
-        paid_days: breakdown.paidDays,
-        early_leave_deduction: breakdown.earlyLeaveDeduction,
-        late_salary_deduction: breakdown.lateSalaryDeduction,
-        ot_minutes: approvedOTMinutes,
-      };
+        // absences = calendarDays - daysActuallyWorked
+        const absences = daysInMonth - daysActuallyWorked;
+
+        // deductedDays = absences - weeklyOffsUsed + manualExtraLeaves
+        const manualExtraLeaves = extraLeaves[s.id] || 0;
+        const deductedDays = Math.max(0, absences - weeklyOffsUsed) + manualExtraLeaves;
+
+        const missingDays = deductedDays;
+
+        // Approved OT minutes only
+        const approvedOTMinutes = staffAtt
+          .filter((r) => r.ot_approved === true)
+          .reduce((sum, r) => sum + (r.ot_minutes || 0), 0) || 0;
+
+        // Approved early check-in minutes only
+        const approvedEarlyInMinutes = staffAtt
+          .filter((r) => r.early_in_approved === true)
+          .reduce((sum, r) => sum + (r.early_in_minutes || 0), 0) || 0;
+
+        // Early leave minutes total
+        const earlyLeaveMinutes = staffAtt.reduce(
+          (sum, r) => sum + (r.early_leave_minutes || 0), 0
+        ) || 0;
+
+        // Calculate confirmed late fines (with partial waive support)
+        const staffLateFines = lateFines.filter(
+          (lf) => lf.staff_id === s.id && lf.confirmed
+        );
+        const totalLateFinesAmt = staffLateFines.reduce((sum, lf) => {
+          const amt = Number(lf.fine_amount);
+          const waivedAmt = Number(lf.waived_amount || 0);
+          return sum + (lf.waived ? 0 : Math.max(0, amt - waivedAmt));
+        }, 0);
+
+        // Calculate confirmed special fines (with partial waive support)
+        const staffSpecialFines = specialFines.filter(
+          (sf) => sf.staff_id === s.id && sf.confirmed
+        );
+        const totalSpecialFinesAmt = staffSpecialFines.reduce((sum, sf) => {
+          const amt = Number(sf.edited_amount ?? sf.amount);
+          const waivedAmt = Number(sf.waived_amount || 0);
+          return sum + (sf.waived ? 0 : Math.max(0, amt - waivedAmt));
+        }, 0);
+
+        const shiftHours = s.shift?.hours || 9;
+
+        const breakdown = calculateSalary(
+          {
+            monthlySalary: s.monthly_salary,
+            offDaysPerMonth,
+            shiftHours,
+            year,
+            month: monthNum,
+          },
+          {
+            daysActuallyWorked,
+            confirmedLateFines: totalLateFinesAmt,
+            confirmedSpecialFines: totalSpecialFinesAmt,
+            approvedOTMinutes,
+            approvedEarlyInMinutes,
+            earlyLeaveMinutes,
+            missingDays,
+            late_salary_deduction_minutes: staffAtt.reduce((sum, r) => sum + (r.late_salary_deduction_minutes || 0), 0),
+            leaves_taken: staffLeaves.filter(l => !l.is_weekly_off).length,
+          }
+        );
+
+        const netSalary = Math.max(0, breakdown.netSalary);
+
+        newSalaryData[s.id] = {
+          net_salary: netSalary,
+          ot_pay: breakdown.otPay,
+          early_in_pay: breakdown.earlyInPay,
+          leave_deduction: breakdown.missingDays * breakdown.dailyRate,
+          extra_days_pay: breakdown.extraDaysWorked * breakdown.dailyRate,
+          confirmed_fines: totalLateFinesAmt,
+          confirmed_special_fines: totalSpecialFinesAmt,
+          paid_days: breakdown.paidDays,
+          early_leave_deduction: breakdown.earlyLeaveDeduction,
+          late_salary_deduction: breakdown.lateSalaryDeduction,
+          ot_minutes: approvedOTMinutes,
+        };
+      }
     });
     
     setSalaryData(newSalaryData);
@@ -297,31 +331,51 @@ export default function BulkConfirmTab({
     });
   };
 
-  const handleConfirmAll = async () => {
+  const handleConfirmSelected = async (targetStaffIds?: string[]) => {
     if (!user) return;
+    
+    const idsToConfirm = targetStaffIds || selectedStaffIds;
+    if (idsToConfirm.length === 0) {
+      alert('Please select at least one staff member to confirm.');
+      return;
+    }
+
+    const staffToConfirm = filteredStaff.filter((s) => idsToConfirm.includes(s.id) && !confirmations.find((c) => c.staff_id === s.id));
+    if (staffToConfirm.length === 0) {
+      alert('All selected staff members are already confirmed.');
+      return;
+    }
+
+    if (!confirm(`Confirm salary for ${staffToConfirm.length} selected staff member(s)?`)) {
+      return;
+    }
+
     setConfirming(true);
     try {
-      const unconfirmed = filteredStaff.filter((s) => !confirmations.find((c) => c.staff_id === s.id));
-      
-      const payload = unconfirmed.map((s) => {
+      const payload = staffToConfirm.map((s) => {
         const bd = salaryData[s.id];
+        const isHourly = s.pay_type === 'hourly';
         return {
           staff_id: s.id,
           month: month,
           net_salary: bd.net_salary,
           base_salary: s.monthly_salary,
-          paid_days: bd.paid_days || 30,
-          leave_deduction: bd.leave_deduction,
-          ot_pay: bd.ot_pay,
-          early_in_pay: bd.early_in_pay || 0,
-          early_leave_deduction: bd.early_leave_deduction || 0,
-          extra_leave_days: extraLeaves[s.id] || 0,
-          ot_minutes: bd.ot_minutes || 0,
-          confirmed_fines: bd.confirmed_fines || 0,
-          confirmed_special_fines: bd.confirmed_special_fines || 0,
+          paid_days: isHourly ? 0 : (bd.paid_days || 30),
+          leave_deduction: isHourly ? 0 : bd.leave_deduction,
+          ot_pay: isHourly ? 0 : bd.ot_pay,
+          early_in_pay: isHourly ? 0 : (bd.early_in_pay || 0),
+          early_leave_deduction: isHourly ? 0 : (bd.early_leave_deduction || 0),
+          extra_leave_days: isHourly ? 0 : (extraLeaves[s.id] || 0),
+          ot_minutes: isHourly ? 0 : (bd.ot_minutes || 0),
+          confirmed_fines: isHourly ? 0 : (bd.confirmed_fines || 0),
+          confirmed_special_fines: isHourly ? 0 : (bd.confirmed_special_fines || 0),
           confirmed_by: user.email || 'Admin',
           is_locked: true,
-          late_salary_deduction: bd.late_salary_deduction || 0
+          late_salary_deduction: isHourly ? 0 : (bd.late_salary_deduction || 0),
+          is_hourly: isHourly,
+          total_hours_logged: isHourly ? (bd.total_hours_logged || 0) : 0,
+          standard_hours: isHourly ? (bd.standard_hours || 0) : 0,
+          hourly_rate: isHourly ? (bd.hourly_rate || 0) : 0,
         };
       });
 
@@ -340,7 +394,7 @@ export default function BulkConfirmTab({
 
         // Silent wall event logging
         try {
-          const events = unconfirmed.map(s => {
+          const events = staffToConfirm.map(s => {
             const bd = salaryData[s.id];
             return {
               event_type: 'salary_confirmed',
@@ -356,7 +410,8 @@ export default function BulkConfirmTab({
         }
 
         await fetchData();
-        alert('All salaries confirmed successfully!');
+        setSelectedStaffIds([]); // Clear selection
+        alert('Selected salaries confirmed successfully!');
         if (onConfirmationsUpdated) {
           onConfirmationsUpdated();
         }
@@ -367,6 +422,16 @@ export default function BulkConfirmTab({
     } finally {
       setConfirming(false);
     }
+  };
+
+  const handleConfirmAll = async () => {
+    const unconfirmed = filteredStaff.filter((s) => !confirmations.find((c) => c.staff_id === s.id));
+    if (unconfirmed.length === 0) {
+      alert('No unconfirmed salaries for this month.');
+      return;
+    }
+    const unconfirmedIds = unconfirmed.map(s => s.id);
+    await handleConfirmSelected(unconfirmedIds);
   };
 
   const handleConfirmAllFines = async () => {
@@ -511,6 +576,35 @@ export default function BulkConfirmTab({
         })}
       </div>
 
+      {/* Select All / Checkbox controls */}
+      <div className="flex justify-between items-center bg-white border border-[#E8E8E8] rounded-xl p-3 print:hidden shadow-sm">
+        <label className="flex items-center space-x-2.5 text-xs font-bold text-[#1A1A1A] cursor-pointer">
+          <input
+            type="checkbox"
+            checked={filteredStaff.length > 0 && selectedStaffIds.length === filteredStaff.filter(s => !confirmations.find(c => c.staff_id === s.id)).length}
+            onChange={(e) => {
+              const unconfirmedFiltered = filteredStaff.filter(s => !confirmations.find(c => c.staff_id === s.id));
+              if (e.target.checked) {
+                setSelectedStaffIds(unconfirmedFiltered.map(s => s.id));
+              } else {
+                setSelectedStaffIds([]);
+              }
+            }}
+            className="w-4 h-4 rounded border-gray-300 text-[#1A1A1A] focus:ring-[#1A1A1A]"
+          />
+          <span>Select All Unconfirmed ({filteredStaff.filter(s => !confirmations.find(c => c.staff_id === s.id)).length})</span>
+        </label>
+        {selectedStaffIds.length > 0 && (
+          <button
+            onClick={() => handleConfirmSelected()}
+            disabled={confirming}
+            className="bg-[#1A1A1A] hover:bg-[#333333] text-white text-xs font-bold px-3 py-1.5 rounded-lg active:scale-95 transition-all cursor-pointer"
+          >
+            Confirm Selected ({selectedStaffIds.length})
+          </button>
+        )}
+      </div>
+
       {/* Cards list */}
       <div className="space-y-3">
         {filteredStaff.map((s) => {
@@ -525,6 +619,20 @@ export default function BulkConfirmTab({
             >
               {/* Profile Card Header */}
               <div className="flex items-center space-x-3">
+                {!isConfirmed && (
+                  <input
+                    type="checkbox"
+                    checked={selectedStaffIds.includes(s.id)}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setSelectedStaffIds(prev => [...prev, s.id]);
+                      } else {
+                        setSelectedStaffIds(prev => prev.filter(id => id !== s.id));
+                      }
+                    }}
+                    className="w-4 h-4 rounded border-gray-300 text-[#1A1A1A] focus:ring-[#1A1A1A] mr-1.5"
+                  />
+                )}
                 <div className="w-10 h-10 rounded-full bg-[#1A1A1A] text-white font-bold text-base flex items-center justify-center flex-shrink-0">
                   {s.name.charAt(0).toUpperCase()}
                 </div>
@@ -534,66 +642,96 @@ export default function BulkConfirmTab({
                   </h3>
                   <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-1">
                     {s.department} • <span className="capitalize">{s.branch?.name || s.branch_id}</span>
+                    {s.pay_type === 'hourly' && <span className="ml-1.5 bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-wider">Hourly</span>}
                   </p>
                 </div>
               </div>
 
               {/* Salary items grid breakdown */}
-              <div className="grid grid-cols-2 gap-2 text-xs bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3">
-                <div className="flex flex-col">
-                  <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Base</span>
-                  <span className="text-[#1A1A1A] font-bold mt-0.5">
-                    {formatCurrency(s.monthly_salary)}
-                  </span>
+              {bd.is_hourly ? (
+                <div className="grid grid-cols-2 gap-2 text-xs bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3">
+                  <div className="flex flex-col">
+                    <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Total Hours Logged</span>
+                    <span className="text-[#1A1A1A] font-bold mt-0.5">
+                      {bd.total_hours} hrs
+                    </span>
+                  </div>
+                  <div className="flex flex-col items-end">
+                    <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Hourly Rate</span>
+                    <span className="text-[#1A1A1A] font-bold mt-0.5">
+                      {formatCurrency(bd.hourly_rate)}/hr
+                    </span>
+                  </div>
+                  <div className="flex flex-row justify-between items-center col-span-2 border-t border-[#E8E8E8] pt-2 mt-1">
+                    <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Net Salary</span>
+                    <span className="text-[#1A1A1A] font-bold text-sm">
+                      {formatCurrency(bd.net_salary)}
+                    </span>
+                  </div>
                 </div>
-                <div className="flex flex-col items-end">
-                  <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">OT Pay</span>
-                  <span className={`font-bold mt-0.5 ${bd.ot_pay > 0 ? 'text-[var(--success)]' : 'text-[#555555]'}`}>
-                    +{formatCurrency(bd.ot_pay)}
-                  </span>
+              ) : (
+                <div className="grid grid-cols-2 gap-2 text-xs bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3">
+                  <div className="flex flex-col">
+                    <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Base</span>
+                    <span className="text-[#1A1A1A] font-bold mt-0.5">
+                      {formatCurrency(s.monthly_salary)}
+                    </span>
+                  </div>
+                  <div className="flex flex-col items-end">
+                    <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">OT Pay</span>
+                    <span className={`font-bold mt-0.5 ${bd.ot_pay > 0 ? 'text-[var(--success)]' : 'text-[#555555]'}`}>
+                      +{formatCurrency(bd.ot_pay)}
+                    </span>
+                  </div>
+                  <div className="flex flex-col">
+                    {bd.extra_days_pay > 0 ? (
+                      <>
+                        <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Extra Days Worked</span>
+                        <span className="text-[var(--success)] font-bold mt-0.5">
+                          +{formatCurrency(bd.extra_days_pay)}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Leaves Deducted</span>
+                        <span className={`font-bold mt-0.5 ${bd.leave_deduction > 0 ? 'text-[var(--danger)]' : 'text-[#555555]'}`}>
+                          -{formatCurrency(bd.leave_deduction)}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                  <div className="flex flex-col items-end">
+                    <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Early-In Pay</span>
+                    <span className={`font-bold mt-0.5 ${bd.early_in_pay > 0 ? 'text-[var(--success)]' : 'text-[#555555]'}`}>
+                      +{formatCurrency(bd.early_in_pay || 0)}
+                    </span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Late Fines</span>
+                    <span className={`font-bold mt-0.5 ${bd.confirmed_fines > 0 ? 'text-[var(--danger)]' : 'text-[#555555]'}`}>
+                      -{formatCurrency(bd.confirmed_fines)}
+                    </span>
+                  </div>
+                  <div className="flex flex-col items-end">
+                    <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Early Leave Deduct</span>
+                    <span className={`font-bold mt-0.5 ${bd.early_leave_deduction > 0 ? 'text-[var(--danger)]' : 'text-[#555555]'}`}>
+                      -{formatCurrency(bd.early_leave_deduction || 0)}
+                    </span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Special Fines</span>
+                    <span className={`font-bold mt-0.5 ${bd.confirmed_special_fines > 0 ? 'text-[var(--danger)]' : 'text-[#555555]'}`}>
+                      -{formatCurrency(bd.confirmed_special_fines)}
+                    </span>
+                  </div>
+                  <div className="flex flex-row justify-between items-center col-span-2 border-t border-[#E8E8E8] pt-2 mt-1">
+                    <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Net Salary</span>
+                    <span className="text-[#1A1A1A] font-bold text-sm">
+                      {formatCurrency(bd.net_salary)}
+                    </span>
+                  </div>
                 </div>
-                <div className="flex flex-col">
-                  {bd.extra_days_pay > 0 ? (
-                    <>
-                      <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Extra Days Worked</span>
-                      <span className="text-[var(--success)] font-bold mt-0.5">
-                        +{formatCurrency(bd.extra_days_pay)}
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Leaves Deducted</span>
-                      <span className={`font-bold mt-0.5 ${bd.leave_deduction > 0 ? 'text-[var(--danger)]' : 'text-[#555555]'}`}>
-                        -{formatCurrency(bd.leave_deduction)}
-                      </span>
-                    </>
-                  )}
-                </div>
-                <div className="flex flex-col items-end">
-                  <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Early Leave Deduct</span>
-                  <span className={`font-bold mt-0.5 ${bd.early_leave_deduction > 0 ? 'text-[var(--danger)]' : 'text-[#555555]'}`}>
-                    -{formatCurrency(bd.early_leave_deduction || 0)}
-                  </span>
-                </div>
-                <div className="flex flex-col">
-                  <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Late Fines</span>
-                  <span className={`font-bold mt-0.5 ${bd.confirmed_fines > 0 ? 'text-[var(--danger)]' : 'text-[#555555]'}`}>
-                    -{formatCurrency(bd.confirmed_fines)}
-                  </span>
-                </div>
-                <div className="flex flex-col items-end">
-                  <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Special Fines</span>
-                  <span className={`font-bold mt-0.5 ${bd.confirmed_special_fines > 0 ? 'text-[var(--danger)]' : 'text-[#555555]'}`}>
-                    -{formatCurrency(bd.confirmed_special_fines)}
-                  </span>
-                </div>
-                <div className="flex flex-row justify-between items-center col-span-2 border-t border-[#E8E8E8] pt-2 mt-1">
-                  <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Net Salary</span>
-                  <span className="text-[#1A1A1A] font-bold text-sm">
-                    {formatCurrency(bd.net_salary)}
-                  </span>
-                </div>
-              </div>
+              )}
 
               {/* Actions row */}
               <div className="flex items-center justify-between pt-3 border-t border-[#E8E8E8] print:hidden">

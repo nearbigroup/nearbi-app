@@ -19,6 +19,60 @@ export function calculateEarlyLeaveDeduction(
   return Math.round(deduction * 100) / 100;
 }
 
+export function calculateBonusDays(
+  daysWorked: number,
+  offDaysPerMonth: 0 | 2 | 4
+): number {
+  if (offDaysPerMonth === 4) {
+    return Math.min(Math.floor(daysWorked / 6), 4);
+  }
+  if (offDaysPerMonth === 2) {
+    return Math.min(Math.floor(daysWorked / 12), 2);
+  }
+  return 0;
+}
+
+export function calculatePaidDays(
+  daysWorked: number,
+  offDaysPerMonth: 0 | 2 | 4,
+  calendarDays: number
+): number {
+  const bonusDays = calculateBonusDays(daysWorked, offDaysPerMonth);
+  const paidDays = daysWorked + bonusDays;
+
+  // SAFETY CAP — never exceed calendar days + off days
+  // regardless of any data anomaly
+  const hardCap = calendarDays + offDaysPerMonth;
+  return Math.min(paidDays, hardCap);
+}
+
+export function calculateHourlySalary(
+  monthlySalary: number,
+  standardHours: number,
+  totalHoursWorked: number
+): {
+  hourlyRate: number;
+  totalHours: number;
+  netSalary: number;
+} {
+  const hourlyRate = monthlySalary / standardHours;
+  const netSalary = totalHoursWorked * hourlyRate;
+  return {
+    hourlyRate: Math.round(hourlyRate * 100) / 100,
+    totalHours: Math.round(totalHoursWorked * 100) / 100,
+    netSalary: Math.round(netSalary * 100) / 100
+  };
+}
+
+export function calculateEarlyInPay(
+  earlyInMinutes: number,
+  hourlyRate: number
+): number {
+  if (!earlyInMinutes || earlyInMinutes <= 0) return 0;
+  const pay = (earlyInMinutes / 60) * hourlyRate;
+  return Math.round(pay * 100) / 100;
+}
+
 export function calculateSalary(
   config: {
     monthlySalary: number;
@@ -56,7 +110,6 @@ export function calculateSalary(
     approvedEarlyInMinutes,
     earlyLeaveMinutes,
     late_salary_deduction_minutes = 0,
-    leaves_taken = 0,
   } = attendance;
 
   // Daily rate based on ACTUAL calendar days
@@ -66,46 +119,17 @@ export function calculateSalary(
   // Hourly rate = daily rate / shift hours
   const hourlyRate = dailyRate / shiftHours;
 
-  // Required working days
-  const requiredWorkingDays = calendarDays - offDaysPerMonth;
+  const paidDays = calculatePaidDays(daysActuallyWorked, offDaysPerMonth, calendarDays);
+  const missingDays = Math.max(0, calendarDays - paidDays);
 
-  // Maximum paid days cap
-  const maxPaidDays = calendarDays;
-
-  // Weekly off calculations
-  let earnedQuota = 0;
-  if (offDaysPerMonth === 4) {
-    earnedQuota = Math.min(Math.floor(daysActuallyWorked / 6), 4);
-  } else if (offDaysPerMonth === 2) {
-    earnedQuota = Math.min(Math.floor(daysActuallyWorked / 12), 2);
-  }
-
-  // Calculate paid days and missing days
-  let paidDays: number;
-  let missingDays: number;
-
-  if (attendance.missingDays !== undefined) {
-    // If missingDays (deductedDays) is explicitly passed
-    missingDays = attendance.missingDays;
-    const absentDays = Math.max(0, missingDays - leaves_taken);
-    paidDays = Math.max(0, calendarDays - absentDays);
-  } else {
-    // Default dynamic calculation
-    const weeklyOffsTaken = attendance.weeklyOffsTaken ?? 0;
-    const weeklyOffsUsed = Math.min(weeklyOffsTaken, earnedQuota);
-    paidDays = daysActuallyWorked + weeklyOffsUsed + leaves_taken;
-    paidDays = Math.min(paidDays, maxPaidDays);
-    missingDays = calendarDays - (daysActuallyWorked + weeklyOffsUsed);
-  }
-
-  // Gross pay (includes leaves, which will be deducted separately)
+  // Gross pay
   const grossPay = paidDays * dailyRate;
 
   // OT pay
   const otPay = (approvedOTMinutes / 60) * hourlyRate;
 
   // Early check-in pay (approved only)
-  const earlyInPay = (approvedEarlyInMinutes / 60) * hourlyRate;
+  const earlyInPay = calculateEarlyInPay(approvedEarlyInMinutes, hourlyRate);
 
   // Early leave deduction (automatic always)
   const earlyLeaveDeduction = calculateEarlyLeaveDeduction(
@@ -118,7 +142,7 @@ export function calculateSalary(
   const lateSalaryDeduction = (late_salary_deduction_minutes / 60) * hourlyRate;
 
   // Leave deduction (always salary deducted)
-  const leaveDeduction = leaves_taken * dailyRate;
+  const leaveDeduction = missingDays * dailyRate;
 
   // Net salary
   const netSalary = grossPay
@@ -126,23 +150,19 @@ export function calculateSalary(
     + earlyInPay
     - earlyLeaveDeduction
     - lateSalaryDeduction
-    - leaveDeduction
     - confirmedLateFines
     - confirmedSpecialFines;
-
-  // Adjust paidDays returned to represent net paid days for DB compatibility
-  const netPaidDays = Math.max(0, paidDays - leaves_taken);
 
   return {
     calendarDays,
     dailyRate: Math.round(dailyRate * 100) / 100,
     hourlyRate: Math.round(hourlyRate * 100) / 100,
-    requiredWorkingDays,
-    maxPaidDays,
+    requiredWorkingDays: calendarDays - offDaysPerMonth,
+    maxPaidDays: calendarDays,
     daysActuallyWorked,
     extraDaysWorked: 0,
     missingDays,
-    paidDays: netPaidDays,
+    paidDays,
     grossPay: Math.round(grossPay * 100) / 100,
     otPay: Math.round(otPay * 100) / 100,
     earlyInPay: Math.round(earlyInPay * 100) / 100,
@@ -152,7 +172,7 @@ export function calculateSalary(
     confirmedLateFines,
     confirmedSpecialFines,
     netSalary: Math.round(netSalary * 100) / 100,
-    earnedQuota,
+    earnedQuota: calculateBonusDays(daysActuallyWorked, offDaysPerMonth),
   };
 }
 

@@ -1,10 +1,10 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { useAuth } from '@/lib/auth-context';
+import { useAuth, VALID_USERS } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
-import { Lock, Plus, Trash2, CheckCircle2, Circle, Search } from 'lucide-react';
+import { Lock, Plus, Trash2, CheckCircle2, Circle, Search, X } from 'lucide-react';
 import { calculateLateMinutes } from '@/lib/salary';
 
 interface FineSettings {
@@ -17,15 +17,19 @@ interface FineSettings {
 
 interface BreakSettings {
   id?: string;
+  branch_id?: string;
   morning_tea_duration: number;
   morning_tea_start: string;
   morning_tea_end: string;
+  morning_tea_enabled?: boolean;
   food_break_duration: number;
   food_break_start: string;
   food_break_end: string;
+  food_break_enabled?: boolean;
   evening_tea_duration: number;
   evening_tea_start: string;
   evening_tea_end: string;
+  evening_tea_enabled?: boolean;
 }
 
 interface Staff {
@@ -86,16 +90,21 @@ export default function SettingsPage() {
 
   const [savingSettings, setSavingSettings] = useState(false);
 
+  const [selectedBreakBranch, setSelectedBreakBranch] = useState<'daily' | 'hypermarket'>('daily');
+
   const [breakSettings, setBreakSettings] = useState<BreakSettings>({
     morning_tea_duration: 10,
     morning_tea_start: '09:30',
     morning_tea_end: '11:30',
+    morning_tea_enabled: true,
     food_break_duration: 25,
     food_break_start: '12:00',
     food_break_end: '15:00',
+    food_break_enabled: true,
     evening_tea_duration: 10,
     evening_tea_start: '16:00',
     evening_tea_end: '18:30',
+    evening_tea_enabled: true,
   });
   const [savingBreakSettings, setSavingBreakSettings] = useState(false);
 
@@ -108,6 +117,16 @@ export default function SettingsPage() {
     skipped: number;
   } | null>(null);
   const [recalcConfirmOpen, setRecalcConfirmOpen] = useState(false);
+
+  // Credentials & Login Permission Manager states (Fix 13 & Fix 16)
+  const [systemUsers, setSystemUsers] = useState<any[]>([]);
+  const [blockedUsers, setBlockedUsers] = useState<string[]>([]);
+  const [newCredEmail, setNewCredEmail] = useState('');
+  const [newCredName, setNewCredName] = useState('');
+  const [newCredPassword, setNewCredPassword] = useState('');
+  const [newCredRole, setNewCredRole] = useState<'admin' | 'ops_manager' | 'staff_executive' | 'kiosk'>('staff_executive');
+  const [newCredBranch, setNewCredBranch] = useState<string>('all');
+  const [showAddCredModal, setShowAddCredModal] = useState(false);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -165,21 +184,26 @@ export default function SettingsPage() {
         const { data: breakData, error: breakE } = await supabase
           .from('break_settings')
           .select('*')
-          .limit(1);
+          .eq('branch_id', selectedBreakBranch)
+          .maybeSingle();
 
         if (breakE) throw breakE;
 
-        if (!breakData || breakData.length === 0) {
+        if (!breakData) {
           const defaultBreak = {
+            branch_id: selectedBreakBranch,
             morning_tea_duration: 10,
             morning_tea_start: '09:30',
             morning_tea_end: '11:30',
+            morning_tea_enabled: true,
             food_break_duration: 25,
             food_break_start: '12:00',
             food_break_end: '15:00',
+            food_break_enabled: true,
             evening_tea_duration: 10,
             evening_tea_start: '16:00',
             evening_tea_end: '18:30',
+            evening_tea_enabled: true,
           };
           
           const { data: insertedData, error: insertE } = await supabase
@@ -193,12 +217,15 @@ export default function SettingsPage() {
           } else if (insertedData) {
             setBreakSettings(insertedData);
           }
-        } else if (breakData[0]) {
-          setBreakSettings(breakData[0]);
+        } else {
+          setBreakSettings(breakData);
         }
       } catch (err: any) {
         console.error('Break settings fetch error:', err);
       }
+
+      // 5. Load custom/blocked credentials
+      loadCredentials();
 
     } catch (err: any) {
       console.error('Settings fetch error:', err);
@@ -208,11 +235,156 @@ export default function SettingsPage() {
     }
   };
 
+  const loadCredentials = () => {
+    if (typeof window === 'undefined') return;
+    try {
+      const customUsersJson = localStorage.getItem('nearbi_custom_users');
+      const customUsers = customUsersJson ? JSON.parse(customUsersJson) : {};
+      
+      const merged = {
+        ...VALID_USERS,
+        ...customUsers
+      };
+
+      const usersArray = Object.keys(merged).map((email) => ({
+        email,
+        name: merged[email].name,
+        role: merged[email].role,
+        branch: merged[email].branch,
+        password: merged[email].password,
+        isCustom: Object.prototype.hasOwnProperty.call(customUsers, email)
+      }));
+
+      setSystemUsers(usersArray);
+
+      const blockedJson = localStorage.getItem('nearbi_blocked_users');
+      setBlockedUsers(blockedJson ? JSON.parse(blockedJson) : []);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleAddCredential = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCredEmail || !newCredName || !newCredPassword) {
+      alert("Please fill all required fields.");
+      return;
+    }
+    const emailKey = newCredEmail.toLowerCase().trim();
+    try {
+      const customUsersJson = localStorage.getItem('nearbi_custom_users');
+      const customUsers = customUsersJson ? JSON.parse(customUsersJson) : {};
+      
+      customUsers[emailKey] = {
+        email: emailKey,
+        name: newCredName,
+        password: newCredPassword,
+        role: newCredRole,
+        branch: newCredBranch === 'all' ? null : newCredBranch
+      };
+
+      localStorage.setItem('nearbi_custom_users', JSON.stringify(customUsers));
+      showToast('User credential saved ✓');
+      setShowAddCredModal(false);
+      
+      // Clear fields
+      setNewCredEmail('');
+      setNewCredName('');
+      setNewCredPassword('');
+      setNewCredRole('staff_executive');
+      setNewCredBranch('all');
+
+      loadCredentials();
+    } catch (err) {
+      console.error(err);
+      alert("Failed to save credential.");
+    }
+  };
+
+  const handleDeleteCredential = (email: string) => {
+    if (!confirm(`Are you sure you want to delete credentials for ${email}?`)) return;
+    try {
+      const customUsersJson = localStorage.getItem('nearbi_custom_users');
+      const customUsers = customUsersJson ? JSON.parse(customUsersJson) : {};
+      
+      delete customUsers[email.toLowerCase().trim()];
+
+      localStorage.setItem('nearbi_custom_users', JSON.stringify(customUsers));
+      showToast('Credential deleted ✓');
+      loadCredentials();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleToggleBlockUser = (email: string) => {
+    const targetEmail = email.toLowerCase().trim();
+    if (targetEmail === 'adminnearbi@gmail.com') {
+      alert("Cannot block the primary owner account.");
+      return;
+    }
+    try {
+      const blockedJson = localStorage.getItem('nearbi_blocked_users');
+      let blocked: string[] = blockedJson ? JSON.parse(blockedJson) : [];
+      
+      if (blocked.includes(targetEmail)) {
+        blocked = blocked.filter(e => e !== targetEmail);
+        showToast('User unblocked ✓');
+      } else {
+        blocked.push(targetEmail);
+        showToast('User blocked ✓');
+      }
+
+      localStorage.setItem('nearbi_blocked_users', JSON.stringify(blocked));
+      setBlockedUsers(blocked);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   useEffect(() => {
     if (isLoading || !canSeeSalaryBreakdown) return;
     setLoading(true);
     fetchData();
   }, [isLoading, canSeeSalaryBreakdown]);
+
+  useEffect(() => {
+    if (isLoading || !canSeeSalaryBreakdown) return;
+    const loadScopedBreaks = async () => {
+      try {
+        const { data: breakData, error: breakE } = await supabase
+          .from('break_settings')
+          .select('*')
+          .eq('branch_id', selectedBreakBranch)
+          .maybeSingle();
+
+        if (breakE) throw breakE;
+
+        if (!breakData) {
+          setBreakSettings({
+            branch_id: selectedBreakBranch,
+            morning_tea_duration: 10,
+            morning_tea_start: '09:30',
+            morning_tea_end: '11:30',
+            morning_tea_enabled: true,
+            food_break_duration: 25,
+            food_break_start: '12:00',
+            food_break_end: '15:00',
+            food_break_enabled: true,
+            evening_tea_duration: 10,
+            evening_tea_start: '16:00',
+            evening_tea_end: '18:30',
+            evening_tea_enabled: true,
+          });
+        } else {
+          setBreakSettings(breakData);
+        }
+      } catch (err) {
+        console.error('Error fetching scoped breaks:', err);
+      }
+    };
+    loadScopedBreaks();
+  }, [selectedBreakBranch, isLoading, canSeeSalaryBreakdown]);
 
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -589,15 +761,19 @@ export default function SettingsPage() {
     setSavingBreakSettings(true);
     try {
       const payload: any = {
+        branch_id: selectedBreakBranch,
         morning_tea_duration: Number(breakSettings.morning_tea_duration),
         morning_tea_start: breakSettings.morning_tea_start,
         morning_tea_end: breakSettings.morning_tea_end,
+        morning_tea_enabled: breakSettings.morning_tea_enabled !== false,
         food_break_duration: Number(breakSettings.food_break_duration),
         food_break_start: breakSettings.food_break_start,
         food_break_end: breakSettings.food_break_end,
+        food_break_enabled: breakSettings.food_break_enabled !== false,
         evening_tea_duration: Number(breakSettings.evening_tea_duration),
         evening_tea_start: breakSettings.evening_tea_start,
         evening_tea_end: breakSettings.evening_tea_end,
+        evening_tea_enabled: breakSettings.evening_tea_enabled !== false,
         updated_by: user?.email || 'Admin',
         updated_at: new Date().toISOString(),
       };
@@ -1009,144 +1185,196 @@ export default function SettingsPage() {
 
           {/* Break Settings Card */}
           <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-5 shadow-sm space-y-4">
-            <h2 className="text-[#1A1A1A] font-bold text-sm">
-              3. Break Schedule Settings
-            </h2>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+              <h2 className="text-[#1A1A1A] font-bold text-sm">
+                3. Break Schedule Settings
+              </h2>
+              <div className="flex items-center space-x-2">
+                <span className="text-[10px] font-bold text-[var(--text-muted)] uppercase">Branch:</span>
+                <select
+                  value={selectedBreakBranch}
+                  onChange={(e) => setSelectedBreakBranch(e.target.value as any)}
+                  className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-lg px-2 py-1 text-xs font-bold text-[#1A1A1A] focus:outline-none"
+                >
+                  <option value="daily">Nearbi Daily</option>
+                  <option value="hypermarket">Nearbi Hypermarket</option>
+                </select>
+              </div>
+            </div>
 
             <form onSubmit={handleSaveBreakSettings} className="space-y-4">
               {/* Morning Tea */}
               <div className="space-y-2 border-b border-[var(--border)] pb-3">
-                <h3 className="text-xs font-bold text-[#1A1A1A] uppercase tracking-wider">Morning Tea</h3>
-                <div className="grid grid-cols-3 gap-2">
-                  <div>
-                    <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
-                      Duration (mins)
-                    </label>
+                <div className="flex justify-between items-center">
+                  <h3 className="text-xs font-bold text-[#1A1A1A] uppercase tracking-wider">Morning Tea</h3>
+                  <label className="flex items-center space-x-2 cursor-pointer select-none">
                     <input
-                      type="number"
-                      value={breakSettings.morning_tea_duration}
-                      onChange={(e) => setBreakSettings({ ...breakSettings, morning_tea_duration: Number(e.target.value) })}
-                      className="w-full text-[#1A1A1A] font-bold"
-                      required
+                      type="checkbox"
+                      checked={breakSettings.morning_tea_enabled !== false}
+                      onChange={(e) => setBreakSettings({ ...breakSettings, morning_tea_enabled: e.target.checked })}
+                      className="w-4 h-4 rounded border-gray-300 text-black focus:ring-black cursor-pointer"
                     />
-                  </div>
-                  <div>
-                    <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
-                      Start Time
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="09:30"
-                      value={breakSettings.morning_tea_start}
-                      onChange={(e) => setBreakSettings({ ...breakSettings, morning_tea_start: e.target.value })}
-                      className="w-full text-[#1A1A1A] font-bold"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
-                      End Time
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="11:30"
-                      value={breakSettings.morning_tea_end}
-                      onChange={(e) => setBreakSettings({ ...breakSettings, morning_tea_end: e.target.value })}
-                      className="w-full text-[#1A1A1A] font-bold"
-                      required
-                    />
-                  </div>
+                    <span className="text-[10px] font-extrabold text-[#1A1A1A] uppercase">Enabled</span>
+                  </label>
                 </div>
+                {breakSettings.morning_tea_enabled !== false && (
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                        Duration (mins)
+                      </label>
+                      <input
+                        type="number"
+                        value={breakSettings.morning_tea_duration}
+                        onChange={(e) => setBreakSettings({ ...breakSettings, morning_tea_duration: Number(e.target.value) })}
+                        className="w-full text-[#1A1A1A] font-bold"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                        Start Time
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="09:30"
+                        value={breakSettings.morning_tea_start}
+                        onChange={(e) => setBreakSettings({ ...breakSettings, morning_tea_start: e.target.value })}
+                        className="w-full text-[#1A1A1A] font-bold"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                        End Time
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="11:30"
+                        value={breakSettings.morning_tea_end}
+                        onChange={(e) => setBreakSettings({ ...breakSettings, morning_tea_end: e.target.value })}
+                        className="w-full text-[#1A1A1A] font-bold"
+                        required
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Food Break */}
               <div className="space-y-2 border-b border-[var(--border)] pb-3">
-                <h3 className="text-xs font-bold text-[#1A1A1A] uppercase tracking-wider">Food Break</h3>
-                <div className="grid grid-cols-3 gap-2">
-                  <div>
-                    <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
-                      Duration (mins)
-                    </label>
+                <div className="flex justify-between items-center">
+                  <h3 className="text-xs font-bold text-[#1A1A1A] uppercase tracking-wider">Food Break</h3>
+                  <label className="flex items-center space-x-2 cursor-pointer select-none">
                     <input
-                      type="number"
-                      value={breakSettings.food_break_duration}
-                      onChange={(e) => setBreakSettings({ ...breakSettings, food_break_duration: Number(e.target.value) })}
-                      className="w-full text-[#1A1A1A] font-bold"
-                      required
+                      type="checkbox"
+                      checked={breakSettings.food_break_enabled !== false}
+                      onChange={(e) => setBreakSettings({ ...breakSettings, food_break_enabled: e.target.checked })}
+                      className="w-4 h-4 rounded border-gray-300 text-black focus:ring-black cursor-pointer"
                     />
-                  </div>
-                  <div>
-                    <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
-                      Start Time
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="12:00"
-                      value={breakSettings.food_break_start}
-                      onChange={(e) => setBreakSettings({ ...breakSettings, food_break_start: e.target.value })}
-                      className="w-full text-[#1A1A1A] font-bold"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
-                      End Time
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="15:00"
-                      value={breakSettings.food_break_end}
-                      onChange={(e) => setBreakSettings({ ...breakSettings, food_break_end: e.target.value })}
-                      className="w-full text-[#1A1A1A] font-bold"
-                      required
-                    />
-                  </div>
+                    <span className="text-[10px] font-extrabold text-[#1A1A1A] uppercase">Enabled</span>
+                  </label>
                 </div>
+                {breakSettings.food_break_enabled !== false && (
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                        Duration (mins)
+                      </label>
+                      <input
+                        type="number"
+                        value={breakSettings.food_break_duration}
+                        onChange={(e) => setBreakSettings({ ...breakSettings, food_break_duration: Number(e.target.value) })}
+                        className="w-full text-[#1A1A1A] font-bold"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                        Start Time
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="12:00"
+                        value={breakSettings.food_break_start}
+                        onChange={(e) => setBreakSettings({ ...breakSettings, food_break_start: e.target.value })}
+                        className="w-full text-[#1A1A1A] font-bold"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                        End Time
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="15:00"
+                        value={breakSettings.food_break_end}
+                        onChange={(e) => setBreakSettings({ ...breakSettings, food_break_end: e.target.value })}
+                        className="w-full text-[#1A1A1A] font-bold"
+                        required
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Evening Tea */}
               <div className="space-y-2 pb-2">
-                <h3 className="text-xs font-bold text-[#1A1A1A] uppercase tracking-wider">Evening Tea</h3>
-                <div className="grid grid-cols-3 gap-2">
-                  <div>
-                    <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
-                      Duration (mins)
-                    </label>
+                <div className="flex justify-between items-center">
+                  <h3 className="text-xs font-bold text-[#1A1A1A] uppercase tracking-wider">Evening Tea</h3>
+                  <label className="flex items-center space-x-2 cursor-pointer select-none">
                     <input
-                      type="number"
-                      value={breakSettings.evening_tea_duration}
-                      onChange={(e) => setBreakSettings({ ...breakSettings, evening_tea_duration: Number(e.target.value) })}
-                      className="w-full text-[#1A1A1A] font-bold"
-                      required
+                      type="checkbox"
+                      checked={breakSettings.evening_tea_enabled !== false}
+                      onChange={(e) => setBreakSettings({ ...breakSettings, evening_tea_enabled: e.target.checked })}
+                      className="w-4 h-4 rounded border-gray-300 text-black focus:ring-black cursor-pointer"
                     />
-                  </div>
-                  <div>
-                    <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
-                      Start Time
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="16:00"
-                      value={breakSettings.evening_tea_start}
-                      onChange={(e) => setBreakSettings({ ...breakSettings, evening_tea_start: e.target.value })}
-                      className="w-full text-[#1A1A1A] font-bold"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
-                      End Time
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="18:30"
-                      value={breakSettings.evening_tea_end}
-                      onChange={(e) => setBreakSettings({ ...breakSettings, evening_tea_end: e.target.value })}
-                      className="w-full text-[#1A1A1A] font-bold"
-                      required
-                    />
-                  </div>
+                    <span className="text-[10px] font-extrabold text-[#1A1A1A] uppercase">Enabled</span>
+                  </label>
                 </div>
+                {breakSettings.evening_tea_enabled !== false && (
+                  <div className="grid grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                        Duration (mins)
+                      </label>
+                      <input
+                        type="number"
+                        value={breakSettings.evening_tea_duration}
+                        onChange={(e) => setBreakSettings({ ...breakSettings, evening_tea_duration: Number(e.target.value) })}
+                        className="w-full text-[#1A1A1A] font-bold"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                        Start Time
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="16:00"
+                        value={breakSettings.evening_tea_start}
+                        onChange={(e) => setBreakSettings({ ...breakSettings, evening_tea_start: e.target.value })}
+                        className="w-full text-[#1A1A1A] font-bold"
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-1">
+                        End Time
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="18:30"
+                        value={breakSettings.evening_tea_end}
+                        onChange={(e) => setBreakSettings({ ...breakSettings, evening_tea_end: e.target.value })}
+                        className="w-full text-[#1A1A1A] font-bold"
+                        required
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               <button
@@ -1363,6 +1591,113 @@ export default function SettingsPage() {
             </div>
           )}
 
+          {/* Credentials & Access Manager Section (Admin Only) */}
+          {user?.role === 'admin' && (
+            <div className="space-y-4 pt-6">
+              <div>
+                <h2 className="text-[#1A1A1A] font-extrabold text-sm tracking-wider uppercase">
+                  Credentials & Login Access Manager
+                </h2>
+                <div className="text-[#E8E8E8] text-xs font-semibold select-none leading-none my-1">
+                  ─────────────────────────────
+                </div>
+              </div>
+
+              <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-5 shadow-sm space-y-4">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                  <p className="text-[var(--text-muted)] text-[10px] font-semibold leading-normal max-w-md">
+                    Manage system login user accounts and block/unblock their login access.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddCredModal(true)}
+                    className="min-h-[38px] px-4 bg-[#1A1A1A] text-white hover:bg-[#333333] font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer flex items-center space-x-1"
+                  >
+                    <Plus size={14} />
+                    <span>Add Login User</span>
+                  </button>
+                </div>
+
+                <div className="overflow-x-auto border border-[#E8E8E8] rounded-[12px]">
+                  <table className="w-full text-left text-xs whitespace-nowrap border-collapse">
+                    <thead>
+                      <tr className="text-[#999999] uppercase font-bold text-[9px] bg-[#F2F2F2] border-b border-[#E8E8E8]">
+                        <th className="p-3">Name</th>
+                        <th className="p-3">Email / Username</th>
+                        <th className="p-3">Password</th>
+                        <th className="p-3">Role</th>
+                        <th className="p-3">Scope / Branch</th>
+                        <th className="p-3">Type</th>
+                        <th className="p-3">Status</th>
+                        <th className="p-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#E8E8E8]">
+                      {systemUsers.map((u) => {
+                        const isBlocked = blockedUsers.includes(u.email);
+                        return (
+                          <tr key={u.email} className="hover:bg-[#F8F8F8] transition-colors">
+                            <td className="p-3 font-bold text-[#1A1A1A]">{u.name}</td>
+                            <td className="p-3 font-mono text-[#555555]">{u.email}</td>
+                            <td className="p-3 font-mono text-[#555555]">{u.password}</td>
+                            <td className="p-3 capitalize text-[#555555]">{u.role.replace('_', ' ')}</td>
+                            <td className="p-3 text-[#555555]">
+                              {u.branch ? (u.branch === 'daily' ? 'Nearbi Daily' : 'Hypermarket') : 'All Branches'}
+                            </td>
+                            <td className="p-3">
+                              {u.isCustom ? (
+                                <span className="text-[#B8860B] font-bold uppercase text-[9px] bg-[#FDF8E7] border border-[#B8860B]/20 px-2 py-0.5 rounded-[20px]">
+                                  Custom
+                                </span>
+                              ) : (
+                                <span className="text-[#555555] font-bold uppercase text-[9px] bg-[#F2F2F2] border border-[#E8E8E8] px-2 py-0.5 rounded-[20px]">
+                                  Default
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-3">
+                              {isBlocked ? (
+                                <span className="text-[#C0392B] font-bold uppercase text-[9px] bg-[#FDECEA] border border-[#C0392B]/20 px-2 py-0.5 rounded-[20px]">
+                                  Blocked
+                                </span>
+                              ) : (
+                                <span className="text-[#2D7A3A] font-bold uppercase text-[9px] bg-[#EDF7EF] border border-[#2D7A3A]/20 px-2 py-0.5 rounded-[20px]">
+                                  Active
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-3 text-right flex justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => handleToggleBlockUser(u.email)}
+                                className={`px-2.5 py-1.5 font-bold text-[10px] rounded-md transition-all active:scale-95 cursor-pointer border ${
+                                  isBlocked
+                                    ? 'bg-[#EDF7EF] border-[#2D7A3A]/20 text-[#2D7A3A] hover:bg-[#EDF7EF]/80'
+                                    : 'bg-[var(--danger-bg)] border-[var(--danger)]/20 text-[var(--danger)] hover:bg-[var(--danger-bg)]/80'
+                                }`}
+                              >
+                                {isBlocked ? 'Unblock' : 'Block'}
+                              </button>
+                              {u.isCustom && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteCredential(u.email)}
+                                  className="p-1.5 text-[var(--danger)] hover:bg-[var(--danger-bg)] rounded transition-colors active:scale-95 cursor-pointer"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Danger Zone Section (Admin Only) */}
           {user?.role === 'admin' && (
             <div className="space-y-4 pt-6">
@@ -1506,6 +1841,117 @@ export default function SettingsPage() {
                 {executingDanger ? 'Deleting...' : 'Confirm'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add User Credential Modal */}
+      {showAddCredModal && (
+        <div className="fixed inset-0 z-[12000] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-white border border-[#E8E8E8] rounded-[20px] max-w-sm w-full p-6 flex flex-col space-y-4 shadow-2xl">
+            <div className="flex justify-between items-center">
+              <h3 className="text-[#1A1A1A] text-base font-bold">Add Login User</h3>
+              <button
+                type="button"
+                onClick={() => setShowAddCredModal(false)}
+                className="text-[#999999] hover:text-[#1A1A1A] cursor-pointer"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddCredential} className="space-y-3.5">
+              <div>
+                <label className="block text-[10px] font-bold text-[#999999] uppercase tracking-wider mb-1">
+                  Display Name
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={newCredName}
+                  onChange={(e) => setNewCredName(e.target.value)}
+                  placeholder="e.g. Finance Head"
+                  className="w-full text-[#1A1A1A] font-bold bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-xs focus:outline-none focus:border-[#1A1A1A]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-[#999999] uppercase tracking-wider mb-1">
+                  Email / Username
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={newCredEmail}
+                  onChange={(e) => setNewCredEmail(e.target.value)}
+                  placeholder="e.g. finance@nearbi.com"
+                  className="w-full text-[#1A1A1A] font-bold bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-xs focus:outline-none focus:border-[#1A1A1A]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-[#999999] uppercase tracking-wider mb-1">
+                  Password
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={newCredPassword}
+                  onChange={(e) => setNewCredPassword(e.target.value)}
+                  placeholder="e.g. securePass123"
+                  className="w-full text-[#1A1A1A] font-bold bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-xs focus:outline-none focus:border-[#1A1A1A]"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-bold text-[#999999] uppercase tracking-wider mb-1">
+                    Role
+                  </label>
+                  <select
+                    value={newCredRole}
+                    onChange={(e) => setNewCredRole(e.target.value as any)}
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-xs focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
+                  >
+                    <option value="staff_executive">HR Executive</option>
+                    <option value="ops_manager">Operations Manager</option>
+                    <option value="kiosk">Kiosk</option>
+                    <option value="admin">Admin / Owner</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-[#999999] uppercase tracking-wider mb-1">
+                    Scope / Branch
+                  </label>
+                  <select
+                    value={newCredBranch}
+                    onChange={(e) => setNewCredBranch(e.target.value)}
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-xs focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A] font-bold"
+                  >
+                    <option value="all">All Branches</option>
+                    <option value="daily">Nearbi Daily Only</option>
+                    <option value="hypermarket">Nearbi Hypermarket Only</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAddCredModal(false)}
+                  className="flex-1 min-h-[40px] bg-white border border-[#E8E8E8] text-[#1A1A1A] hover:bg-[#F8F8F8] font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 min-h-[40px] bg-[#1A1A1A] text-white hover:bg-[#333333] font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
+                >
+                  Save User
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

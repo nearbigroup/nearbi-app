@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { createAuditLog } from '@/lib/audit';
-import { Megaphone, Users, User, CheckCircle, Clock, AlertCircle, Plus, Eye, ChevronRight, X, ArrowLeft, Send } from 'lucide-react';
+import { Megaphone, Users, User, CheckCircle, Clock, AlertCircle, Plus, Eye, ChevronRight, X, ArrowLeft, Send, Pencil, Trash2 } from 'lucide-react';
 import Link from 'next/link';
 
 interface Staff {
@@ -53,6 +53,7 @@ export default function AnnouncementsPage() {
 
   // Selected announcement for receipts
   const [selectedAnn, setSelectedAnn] = useState<Announcement | null>(null);
+  const [editingAnn, setEditingAnn] = useState<Announcement | null>(null);
   const [receipts, setReceipts] = useState<ReadReceipt[]>([]);
   const [loadingReceipts, setLoadingReceipts] = useState(false);
 
@@ -168,6 +169,105 @@ export default function AnnouncementsPage() {
       alert('Failed to post announcement.');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const startEdit = (ann: Announcement) => {
+    setEditingAnn(ann);
+    setTitle(ann.title);
+    setMessage(ann.message);
+    if (ann.target_staff_id) {
+      setTargetType('specific');
+      setTargetStaffId(ann.target_staff_id);
+    } else {
+      setTargetType(ann.target as any);
+      setTargetStaffId('');
+    }
+    setIsImportant(ann.is_important);
+    setShowOnKiosk(ann.show_on_kiosk);
+  };
+
+  const handleUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user || !editingAnn || !title.trim() || !message.trim()) return;
+
+    setSubmitting(true);
+    try {
+      const targetVal = targetType === 'specific' ? 'all' : targetType;
+      const staffIdVal = targetType === 'specific' ? targetStaffId : null;
+
+      const { error } = await supabase
+        .from('staff_announcements')
+        .update({
+          title: title.trim(),
+          message: message.trim(),
+          target: targetVal,
+          target_staff_id: staffIdVal,
+          is_important: isImportant,
+          show_on_kiosk: showOnKiosk
+        })
+        .eq('id', editingAnn.id);
+
+      if (error) throw error;
+
+      await createAuditLog({
+        action: 'update',
+        table_name: 'staff_announcements',
+        record_id: editingAnn.id,
+        new_value: { title: title.trim(), target: targetVal, is_important: isImportant, show_on_kiosk: showOnKiosk },
+        performed_by: user.email,
+        performed_by_role: user.role,
+        reason: `Updated announcement "${title.trim()}"`
+      });
+
+      setToastMsg('Announcement updated successfully ✓');
+      setTimeout(() => setToastMsg(''), 3000);
+
+      // Reset states
+      setEditingAnn(null);
+      setTitle('');
+      setMessage('');
+      setTargetType('all');
+      setTargetStaffId('');
+      setIsImportant(false);
+      setShowOnKiosk(false);
+      
+      fetchAnnouncements();
+    } catch (err) {
+      console.error('Error updating announcement:', err);
+      alert('Failed to update announcement.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this announcement? This will also delete all associated read receipt records.')) return;
+    try {
+      // 1. Delete read receipts
+      const { error: readsErr } = await supabase
+        .from('announcement_reads')
+        .delete()
+        .eq('announcement_id', id);
+      if (readsErr) throw readsErr;
+
+      // 2. Delete announcement
+      const { error: annErr } = await supabase
+        .from('staff_announcements')
+        .delete()
+        .eq('id', id);
+      if (annErr) throw annErr;
+
+      setToastMsg('Announcement and read receipts deleted ✓');
+      setTimeout(() => setToastMsg(''), 3000);
+      
+      if (selectedAnn?.id === id) {
+        setSelectedAnn(null);
+      }
+      fetchAnnouncements();
+    } catch (err) {
+      console.error('Error deleting announcement:', err);
+      alert('Failed to delete announcement.');
     }
   };
 
@@ -423,13 +523,33 @@ export default function AnnouncementsPage() {
 
                     <div className="flex justify-between items-center border-t border-[#F0F0F0] pt-2 mt-1">
                       <span className="text-[9.5px] text-[var(--text-muted)] font-semibold">Posted by {ann.created_by.split('@')[0]}</span>
-                      <button
-                        onClick={() => loadReceipts(ann)}
-                        className="text-[#1A5FA8] hover:text-[#134478] text-[10px] font-black uppercase flex items-center gap-1 cursor-pointer"
-                      >
-                        <Eye size={12} />
-                        <span>Read Receipts</span>
-                      </button>
+                      <div className="flex items-center space-x-3.5">
+                        <button
+                          onClick={() => loadReceipts(ann)}
+                          className="text-[#1A5FA8] hover:text-[#134478] text-[10px] font-black uppercase flex items-center gap-1 cursor-pointer"
+                        >
+                          <Eye size={12} />
+                          <span>Read Receipts</span>
+                        </button>
+                        {isAuthorized && (
+                          <>
+                            <button
+                              onClick={() => startEdit(ann)}
+                              className="text-gray-500 hover:text-black transition-colors flex items-center gap-0.5 cursor-pointer"
+                              title="Edit"
+                            >
+                              <Pencil size={12} />
+                            </button>
+                            <button
+                              onClick={() => handleDelete(ann.id)}
+                              className="text-[var(--danger)] hover:text-[#A93226] transition-colors flex items-center gap-0.5 cursor-pointer"
+                              title="Delete"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );
@@ -536,6 +656,122 @@ export default function AnnouncementsPage() {
         </div>
 
       </div>
+
+      {/* Edit Announcement Modal */}
+      {editingAnn && (
+        <div className="fixed inset-0 z-[12000] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-white border border-[#E8E8E8] rounded-[20px] max-w-lg w-full p-6 flex flex-col space-y-4 shadow-2xl">
+            <div className="flex justify-between items-center">
+              <h3 className="text-[#1A1A1A] text-base font-bold">Edit Announcement</h3>
+              <button
+                type="button"
+                onClick={() => setEditingAnn(null)}
+                className="text-[#999999] hover:text-[#1A1A1A] cursor-pointer"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdate} className="space-y-3.5 text-xs">
+              <div>
+                <label className="block text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider mb-1">Title</label>
+                <input
+                  type="text"
+                  value={title}
+                  onChange={e => setTitle(e.target.value)}
+                  placeholder="e.g. Important Branch Meeting Tomorrow"
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3 text-xs font-bold focus:outline-none focus:border-black text-[#1A1A1A]"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider mb-1">Message Body</label>
+                <textarea
+                  rows={4}
+                  value={message}
+                  onChange={e => setMessage(e.target.value)}
+                  placeholder="Type the message contents..."
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3 text-xs font-semibold focus:outline-none focus:border-black text-[#1A1A1A] resize-none"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider mb-1">Target Audience</label>
+                  <select
+                    value={targetType}
+                    onChange={e => setTargetType(e.target.value as any)}
+                    className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3 text-xs font-bold focus:outline-none text-[#1A1A1A]"
+                  >
+                    <option value="all">All Branches</option>
+                    <option value="daily">Nearbi Daily Branch</option>
+                    <option value="hypermarket">Nearbi Hypermarket Branch</option>
+                    <option value="specific">Specific Staff Member</option>
+                  </select>
+                </div>
+
+                {targetType === 'specific' && (
+                  <div>
+                    <label className="block text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider mb-1">Select Staff Member</label>
+                    <select
+                      value={targetStaffId}
+                      onChange={e => setTargetStaffId(e.target.value)}
+                      className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3 text-xs font-bold focus:outline-none text-[#1A1A1A]"
+                      required
+                    >
+                      <option value="">Choose staff...</option>
+                      {staffList.map(s => (
+                        <option key={s.id} value={s.id}>{s.name} ({getBranchLabel(s.branch_id)})</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-col space-y-2 border-t border-[#E8E8E8] pt-3">
+                <label className="flex items-center space-x-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={isImportant}
+                    onChange={e => setIsImportant(e.target.checked)}
+                    className="rounded border-[#E8E8E8] text-[#1A1A1A] focus:ring-0"
+                  />
+                  <span className="font-semibold text-gray-700">Important (Enforce acknowledgment popup on staff portal)</span>
+                </label>
+
+                <label className="flex items-center space-x-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={showOnKiosk}
+                    onChange={e => setShowOnKiosk(e.target.checked)}
+                    className="rounded border-[#E8E8E8] text-[#1A1A1A] focus:ring-0"
+                  />
+                  <span className="font-semibold text-gray-700">Display on Kiosk (Forced check-in acknowledgment overlay)</span>
+                </label>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingAnn(null)}
+                  className="flex-1 min-h-[40px] bg-white border border-[#E8E8E8] text-[#1A1A1A] hover:bg-[#F8F8F8] font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="flex-1 min-h-[40px] bg-[#1A1A1A] text-white hover:bg-black font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
+                >
+                  {submitting ? 'Updating...' : 'Update Announcement'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Global Toast Alert */}
       {toastMsg && (

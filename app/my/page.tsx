@@ -72,15 +72,39 @@ export default function StaffHomePage() {
           .lte('date', `${currentMonth}-${calendarDays}`);
         if (attErr) throw attErr;
 
+        // Fetch approved leaves
+        const { data: leavesData } = await supabase
+          .from('leave_requests')
+          .select('date')
+          .eq('staff_id', user.staffId)
+          .eq('status', 'approved')
+          .gte('date', `${currentMonth}-01`)
+          .lte('date', `${currentMonth}-${calendarDays}`);
+
+        const approvedLeaveDates = new Set(leavesData?.map(l => l.date) || []);
+
         const daysPresent = attData?.filter(a => a.check_in_time && a.status !== 'absent').length || 0;
         const daysLate = attData?.filter(a => a.status === 'late').length || 0;
-        const daysAbsent = attData?.filter(a => a.status === 'absent').length || 0;
+        const daysAbsent = attData?.filter(a => 
+          a.status === 'absent' && 
+          a.day_type !== 'weekly_off' && 
+          a.day_type !== 'holiday' && 
+          !approvedLeaveDates.has(a.date)
+        ).length || 0;
         const earlyExitsCount = attData?.filter(a => (a.early_leave_minutes || 0) > 0).length || 0;
 
         const offDaysCount = sData.off_days_per_month || 4;
-        const requiredWorkingDays = Math.max(0, calendarDays - offDaysCount);
+
+        // Unfair Attendance Score Relative Join Date fix (Fix 7)
+        const joinDate = sData.join_date ? new Date(sData.join_date) : new Date(year, monthNum - 1, 1);
+        const monthStart = new Date(year, monthNum - 1, 1);
+        const startCalcDate = joinDate > monthStart ? joinDate : monthStart;
+        const daysSinceStart = calendarDays - startCalcDate.getDate() + 1;
+        const proratedOffDays = Math.round((offDaysCount * daysSinceStart) / calendarDays);
+        const requiredWorkingDays = Math.max(0, daysSinceStart - proratedOffDays);
+
         const attendancePercentage = requiredWorkingDays > 0 
-          ? Math.round((daysPresent / requiredWorkingDays) * 100) 
+          ? Math.min(100, Math.round((daysPresent / requiredWorkingDays) * 100)) 
           : 100;
 
         setStats({

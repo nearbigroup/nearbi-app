@@ -60,6 +60,23 @@ export const VALID_USERS: Record<string, AuthUser & { password: string }> = {
   },
 };
 
+export const getMergedUsers = (): Record<string, AuthUser & { password: string }> => {
+  if (typeof window === 'undefined') return VALID_USERS;
+  try {
+    const customUsersJson = localStorage.getItem('nearbi_custom_users');
+    if (customUsersJson) {
+      const customUsers = JSON.parse(customUsersJson);
+      return {
+        ...VALID_USERS,
+        ...customUsers
+      };
+    }
+  } catch (err) {
+    console.error('Error parsing custom users from localStorage:', err);
+  }
+  return VALID_USERS;
+};
+
 interface AuthContextType {
   user: AuthUser | null;
   userBranch: string | null;
@@ -151,7 +168,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [user, pathname, isLoading, router]);
 
   const login = async (email: string, pass: string): Promise<boolean> => {
-    const validUser = VALID_USERS[email.toLowerCase().trim()];
+    const normalizedEmail = email.toLowerCase().trim();
+    
+    // Check if blocked (Fix 16)
+    if (typeof window !== 'undefined') {
+      try {
+        const blockedUsersJson = localStorage.getItem('nearbi_blocked_users');
+        if (blockedUsersJson) {
+          const blockedUsers = JSON.parse(blockedUsersJson);
+          if (Array.isArray(blockedUsers) && blockedUsers.includes(normalizedEmail)) {
+            alert("This account is blocked. Please contact the administrator.");
+            return false;
+          }
+        }
+      } catch (err) {
+        console.error('Error checking blocked status:', err);
+      }
+    }
+
+    const mergedUsers = getMergedUsers();
+    const validUser = mergedUsers[normalizedEmail];
     if (validUser && validUser.password === pass) {
       const { password, ...userWithoutPassword } = validUser;
       setUser(userWithoutPassword);
