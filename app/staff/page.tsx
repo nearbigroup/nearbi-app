@@ -9,6 +9,7 @@ import { Search, Plus, Trash2, Edit2, Eye, EyeOff, Lock, X, AlertTriangle, Users
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import * as XLSX from 'xlsx';
 import { DEPARTMENTS } from '@/lib/data';
+import { calculateLateMinutes, calculateOTMinutes, calculateEarlyLeaveMinutes } from '@/lib/salary';
 
 
 interface Shift {
@@ -146,7 +147,17 @@ export default function StaffPage() {
   });
   const [originalShiftId, setOriginalShiftId] = useState('');
   const [originalPin, setOriginalPin] = useState('');
-  const [showShiftConfirm, setShowShiftConfirm] = useState(false);
+  const [shiftChangeDialog, setShiftChangeDialog] = useState<{
+    visible: boolean;
+    staffId: string;
+    newShift: any;
+    oldShiftId: string;
+  }>({
+    visible: false,
+    staffId: '',
+    newShift: null,
+    oldShiftId: ''
+  });
   const [editIsCustomShift, setEditIsCustomShift] = useState(false);
   const [editCustomShift, setEditCustomShift] = useState({
     label: '',
@@ -348,6 +359,133 @@ export default function StaffPage() {
     }
 
     return affectedCount;
+  };
+
+  const handleShiftChange = async (
+    staffId: string,
+    newShiftId: string,
+    oldShiftId: string
+  ) => {
+    // Save new shift first
+    await supabase
+      .from('staff')
+      .update({ shift_id: newShiftId })
+      .eq('id', staffId);
+
+    // Get new shift details
+    const { data: newShift } = await supabase
+      .from('shifts')
+      .select('*')
+      .eq('id', newShiftId)
+      .single();
+
+    // Show confirmation dialog
+    setShiftChangeDialog({
+      visible: true,
+      staffId,
+      newShift,
+      oldShiftId
+    });
+  };
+
+  const handleShiftChangeRecalculate = async (recalculate: boolean) => {
+    const { staffId, newShift, oldShiftId } = shiftChangeDialog;
+    setShiftChangeDialog(prev => ({ ...prev, visible: false }));
+
+    if (!recalculate) {
+      showToast('Shift updated. Old attendance kept ✓');
+      return;
+    }
+
+    try {
+      setFormLoading(true);
+      const today = new Date();
+      const year = today.getFullYear();
+      const month = today.getMonth() + 1;
+      const firstDay = `${year}-${String(month).padStart(2, '0')}-01`;
+      const lastDayNum = new Date(year, month, 0).getDate();
+      const lastDay = `${year}-${String(month).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
+
+      const { data: attRecords, error: fetchErr } = await supabase
+        .from('attendance')
+        .select('*')
+        .eq('staff_id', staffId)
+        .gte('date', firstDay)
+        .lte('date', lastDay)
+        .not('check_in_time', 'is', null);
+
+      if (fetchErr) throw fetchErr;
+
+      let updatedCount = 0;
+      let skippedConfirmed = 0;
+
+      for (const record of attRecords || []) {
+        // Skip if OT already approved
+        if (record.ot_approved) {
+          skippedConfirmed++;
+          continue;
+        }
+
+        const newLateMins = calculateLateMinutes(
+          record.check_in_time,
+          newShift.start_time
+        );
+        const newColorCode =
+          newLateMins === 0 ? 'green' :
+          newLateMins <= 15 ? 'yellow' :
+          newLateMins <= 30 ? 'orange' : 'red';
+        const newOTMins = record.check_out_time
+          ? calculateOTMinutes(
+              newShift.end_time,
+              record.check_out_time,
+              newShift.start_time
+            )
+          : 0;
+        const newEarlyLeaveMins = record.check_out_time
+          ? calculateEarlyLeaveMinutes(
+              newShift.end_time,
+              record.check_out_time,
+              newShift.start_time
+            )
+          : 0;
+
+        const { error: updateErr } = await supabase
+          .from('attendance')
+          .update({
+            minutes_late: newLateMins,
+            color_code: newColorCode,
+            status: newLateMins > 0 ? 'late' : 'present',
+            ot_minutes: newOTMins,
+            early_leave_minutes: newEarlyLeaveMins,
+            late_salary_deduction_minutes: newLateMins
+          })
+          .eq('id', record.id);
+
+        if (updateErr) throw updateErr;
+
+        updatedCount++;
+      }
+
+      // Create audit_log entry
+      await createAuditLog({
+        action: 'shift_changed_recalculated',
+        table_name: 'attendance',
+        record_id: staffId,
+        old_value: { shift_id: oldShiftId },
+        new_value: { shift_id: newShift.id },
+        performed_by: user?.email || 'admin',
+        performed_by_role: user?.role || 'admin',
+        reason: `Recalculated ${updatedCount} attendance records for shift change. ${skippedConfirmed} skipped.`
+      });
+
+      alert(`Recalculated ${updatedCount} attendance records.\n${skippedConfirmed} records skipped\n(OT already approved).`);
+      fetchStaff();
+    } catch (err: any) {
+      console.error(err);
+      alert(err.message || 'Failed to recalculate attendance');
+    } finally {
+      setFormLoading(false);
+    }
   };
 
   const handleOpenEditStaff = (s: StaffMember) => {
@@ -552,25 +690,8 @@ export default function StaffPage() {
         }
       }
 
-      if (recalculateFines) {
-        if (pay_type !== 'hourly' && shift_id) {
-          const count = await recalculateMonthFines(id, shift_id);
-          await createAuditLog({
-            action: 'recalculate_month_attendance',
-            table_name: 'attendance',
-            record_id: id,
-            new_value: { staff_id: id, new_shift_id: shift_id, affected_count: count },
-            performed_by: user?.email || 'admin',
-            performed_by_role: user?.role || 'admin',
-            reason: `Recalculated ${count} attendance records for shift change`
-          });
-          showToast('Fines recalculated ✓');
-        }
-      }
-
       showToast('Staff updated ✓');
       setEditStaffModalOpen(false);
-      setShowShiftConfirm(false);
       fetchStaff();
     } catch (err: any) {
       console.error(err);
@@ -585,10 +706,10 @@ export default function StaffPage() {
     const isShiftChanged = editStaffForm.shift_id !== originalShiftId;
     const isHourly = editStaffForm.pay_type === 'hourly';
 
+    await handleSaveEditStaff(false);
+
     if (isShiftChanged && !isHourly && editStaffForm.shift_id) {
-      setShowShiftConfirm(true);
-    } else {
-      await handleSaveEditStaff(false);
+      await handleShiftChange(editStaffForm.id, editStaffForm.shift_id, originalShiftId);
     }
   };
 
@@ -3215,36 +3336,46 @@ export default function StaffPage() {
       )}
 
       {/* Shift Change Recalculation Confirmation modal */}
-      {showShiftConfirm && (
+      {shiftChangeDialog.visible && (
         <div className="fixed inset-0 z-[12000] flex items-center justify-center p-4">
           <div
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-            onClick={() => setShowShiftConfirm(false)}
+            onClick={() => setShiftChangeDialog(prev => ({ ...prev, visible: false }))}
           />
-          <div className="bg-white rounded-[16px] shadow-2xl relative z-10 p-6 w-full max-w-xs text-center border border-[#E8E8E8] flex flex-col items-center">
+          <div className="bg-white rounded-[16px] shadow-2xl relative z-10 p-6 w-full max-w-sm text-center border border-[#E8E8E8] flex flex-col items-center">
             <AlertCircle size={36} strokeWidth={1.5} style={{ color: '#FBBF24' }} className="mb-3" />
-            <h3 className="text-base font-bold text-[#1A1A1A] mb-1">
-              Recalculate Attendance?
+            <h3 className="text-base font-bold text-[#1A1A1A] mb-2">
+              Recalculate entire month?
             </h3>
-            <p className="text-xs text-[#555555] leading-relaxed mb-6">
-              Shift changed to {shifts.find(s => s.id === editStaffForm.shift_id)?.label || 'new shift'}.
-              Would you like to recalculate all of this month's attendance, late minutes, OT, and early leaves under the new shift schedule?
-            </p>
+            <div className="text-xs text-[#555555] text-left leading-relaxed mb-6 space-y-3">
+              <p className="font-bold text-center">
+                Shift changed to {shiftChangeDialog.newShift?.label || 'new shift'}.
+              </p>
+              <p>
+                Do you want to recalculate this month's attendance using the new shift time?
+              </p>
+              <p>
+                <strong>YES</strong> — All days this month will use the new shift time for late/OT/early leave calculations.
+              </p>
+              <p>
+                <strong>NO</strong> — Only future check-ins use new shift. Past days keep their original calculations.
+              </p>
+            </div>
 
             <div className="flex gap-3 w-full">
               <button
                 type="button"
-                onClick={() => handleSaveEditStaff(false)}
+                onClick={() => handleShiftChangeRecalculate(false)}
                 className="flex-1 bg-[#F2F2F2] hover:bg-[#EBEBEB] text-[#555555] font-bold text-xs py-2.5 rounded-[10px] active:scale-95 cursor-pointer"
               >
-                Skip
+                No, keep old days
               </button>
               <button
                 type="button"
-                onClick={() => handleSaveEditStaff(true)}
+                onClick={() => handleShiftChangeRecalculate(true)}
                 className="flex-1 bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold text-xs py-2.5 rounded-[10px] active:scale-95 transition-all shadow cursor-pointer"
               >
-                Recalculate
+                Yes, recalculate
               </button>
             </div>
           </div>
