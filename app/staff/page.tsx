@@ -1279,7 +1279,8 @@ export default function StaffPage() {
 
   const fetchScores = async () => {
     try {
-      const currentMonth = new Date().toISOString().slice(0, 7);
+      const now = new Date();
+      const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
       const { data, error } = await supabase
         .from('performance_scores')
         .select('*')
@@ -1426,7 +1427,8 @@ export default function StaffPage() {
 
   const checkAndRunInitialCalculation = async () => {
     try {
-      const currentMonth = new Date().toISOString().slice(0, 7);
+      const now = new Date();
+      const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
       const { data } = await supabase
         .from('performance_scores')
         .select('id')

@@ -127,7 +127,7 @@ export default function SalaryPage() {
     async function fetchEarliest() {
       const d = new Date();
       const sixMonthsAgo = new Date(d.getFullYear(), d.getMonth() - 6, 1);
-      let minMonth = sixMonthsAgo.toISOString().slice(0, 7); // YYYY-MM
+      let minMonth = `${sixMonthsAgo.getFullYear()}-${String(sixMonthsAgo.getMonth() + 1).padStart(2, '0')}`; // YYYY-MM
 
       try {
         const { data: earliestAtt } = await supabase

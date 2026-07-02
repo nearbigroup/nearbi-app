@@ -39,7 +39,8 @@ export default function StaffHomePage() {
 
     const fetchData = async () => {
       try {
-        const currentMonth = new Date().toISOString().slice(0, 7); // e.g. "2026-06"
+        const now = new Date();
+        const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
         const year = parseInt(currentMonth.split('-')[0]);
         const monthNum = parseInt(currentMonth.split('-')[1]);
         const calendarDays = new Date(year, monthNum, 0).getDate();
@@ -207,7 +208,8 @@ export default function StaffHomePage() {
         }, { onConflict: 'announcement_id,staff_id' });
         
       // Re-fetch data to update UI
-      const currentMonth = new Date().toISOString().slice(0, 7); // e.g. "2026-06"
+      const now = new Date();
+      const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
       const year = parseInt(currentMonth.split('-')[0]);
       const monthNum = parseInt(currentMonth.split('-')[1]);
       const calendarDays = new Date(year, monthNum, 0).getDate();
