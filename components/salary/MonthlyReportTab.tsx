@@ -557,7 +557,7 @@ export default function MonthlyReportTab({
 
     for (let r = 0; r < dataRows.length; r++) {
       const rowData = dataRows[r];
-      const statusVal = rowData[21]; // STATUS is index 21
+      const statusVal = rowData[21]; // STATUS is col index 21 (0-based)
 
       let rowStyle: any = {
         fill: { fgColor: { rgb: r % 2 === 0 ? "FFFFFF" : "F8F8F8" } },
@@ -590,11 +590,11 @@ export default function MonthlyReportTab({
         const cellRef = XLSX.utils.encode_cell({ r, c });
         if (!ws[cellRef]) continue;
 
-        // Alignment: Names & Notes left-aligned, Status centered, Others right-aligned
+        // Alignment: Names, Branch, Dept & Note left-aligned, SL/Status centered, Numbers right-aligned
         const alignment = (c === 1 || c === 2 || c === 3 || c === 22)
           ? { horizontal: "left", vertical: "center" }
           : (c === 0 || c === 21)
-            ? { horizontal: "center", vertical: "center" }
+            ? { horizontal: "center", vertical: "center", wrapText: false }
             : { horizontal: "right", vertical: "center" };
 
         if (r === 0) {
@@ -615,12 +615,12 @@ export default function MonthlyReportTab({
             alignment
           };
 
-          // Custom formatting for STATUS column text color
+          // Custom formatting for STATUS column text color (col 21)
           if (c === 21) {
             let statusColor = "1A1A1A";
             if (statusVal === "Confirmed") statusColor = "10B981";
-            else if (statusVal === "Pending") statusColor = "F59E0B";
-            else if (statusVal === "Changed") statusColor = "EF4444";
+            else if (statusVal === "Pending") statusColor = "D97706";
+            else if (statusVal === "Changed") statusColor = "DC2626";
             cellStyle = {
               ...cellStyle,
               font: {
@@ -726,12 +726,12 @@ export default function MonthlyReportTab({
         const headers = [
           'SL.NO', 'NAME', 'BRANCH', 'DEPARTMENT',
           'DAYS PRESENT', 'WEEKLY OFF USED', 'BONUS DAYS EARNED',
-          'PAID DAYS (LIVE)', 'BASE SALARY', 'DAILY RATE', 'GROSS PAY',
+          'PAID DAYS', 'BASE SALARY', 'DAILY RATE', 'GROSS PAY',
           'OT APPROVED MINS', 'OT PAY (₹)',
           'EARLY-IN APPROVED MINS', 'EARLY-IN PAY (₹)',
           'LATE ARRIVAL DEDUCTION (₹)', 'EARLY LEAVE DEDUCTION (₹)',
-          'LATE FINES CONFIRMED (₹)', 'SPECIAL FINES (₹)',
-          'NET SALARY — LIVE (₹)', 'NET SALARY — CONFIRMED (₹)',
+          'LATE FINES (₹)', 'SPECIAL FINES (₹)',
+          'NET SALARY LIVE (₹)', 'NET SALARY CONFIRMED (₹)',
           'STATUS', 'NOTE'
         ];
         rowsAOA.push(headers);
@@ -901,8 +901,10 @@ export default function MonthlyReportTab({
           ]);
         });
 
-        const totalsRow = ['', 'TOTAL', '', '', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '', ''];
-        for (let ci = 4; ci <= 20; ci++) {
+        // Totals row: sum numeric cols 4–19 (DAYS PRESENT through NET SALARY LIVE)
+        // Col 20 = NET SALARY CONFIRMED (may be 'PENDING' string — skip), 21=STATUS, 22=NOTE
+        const totalsRow: any[] = ['', 'TOTAL', '', '', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '', '', ''];
+        for (let ci = 4; ci <= 19; ci++) {
           let sum = 0;
           let hasNumber = false;
           for (let ri = 1; ri < rowsAOA.length; ri++) {
@@ -1020,13 +1022,27 @@ export default function MonthlyReportTab({
 
         const confirmedNetSalary = conf ? Number(conf.net_salary) : 'PENDING';
 
+        // Calculate derived values needed for summary rows
+        const bonusDaysEarned = offDaysPerMonth === 4
+          ? Math.min(Math.floor(daysActuallyWorked / 6), 4)
+          : offDaysPerMonth === 2
+            ? Math.min(Math.floor(daysActuallyWorked / 12), 2)
+            : 0;
+        const lateSalDeductionTotal = staffAtt.reduce((sum: number, r: any) => sum + (r.late_salary_deduction_minutes || 0), 0);
+        const lateSalDeductionAmount = isHourly ? 0 : (() => {
+          const dailyRateInd = s.monthly_salary / daysInMonth;
+          const hourlyRateInd = dailyRateInd / (s.shift?.hours || 9);
+          return Math.round(lateSalDeductionTotal * hourlyRateInd / 60 * 100) / 100;
+        })();
+
         const staffDetailedHeaders = [
           "DATE", "DAY", "CHECK IN", "CHECK OUT", "ACTUAL HOURS", "STATUS", "DAY TYPE", "LATE MINUTES", "OT MINUTES", "LATE FINE"
         ];
         const staffDetailedRows: any[][] = [
           ["NAME:", s.name, "", "", "", "", "", "", "", ""],
-          ["CONFIRMED SALARY:", typeof confirmedNetSalary === 'number' ? Number(confirmedNetSalary) : confirmedNetSalary, "", "", "", "", "", "", "", ""],
-          ["LIVE SALARY:", Number(Math.round(liveNetSalary * 100) / 100), "", "", "", "", "", "", "", ""],
+          ["DEPARTMENT:", s.department || '', "", "", "", "", "", "", "", ""],
+          ["DAYS PRESENT:", Number(daysActuallyWorked), "", "", "WEEKLY OFF USED:", Number(weeklyOffsUsed), "", "BONUS DAYS:", Number(bonusDaysEarned), ""],
+          ["LIVE SALARY:", Number(Math.round(liveNetSalary * 100) / 100), "", "", "CONFIRMED SALARY:", typeof confirmedNetSalary === 'number' ? Number(confirmedNetSalary) : confirmedNetSalary, "", "LATE ARRIVAL DED.:", Number(lateSalDeductionAmount), ""],
           [], // empty spacer row
           staffDetailedHeaders
         ];
@@ -1126,7 +1142,8 @@ export default function MonthlyReportTab({
           const dayTypeVal = rowData[6];
 
           let cellStyle = r % 2 === 0 ? sDefaultStyleEven : sDefaultStyleOdd;
-          if (r >= 5) {
+          // Daily data starts at row 6 (after 4 summary rows + 1 spacer + 1 header row)
+          if (r >= 6) {
             if (dayTypeVal === 'weekly_off') {
               cellStyle = sWeeklyOffStyle;
             } else if (statusVal === 'absent') {
@@ -1138,23 +1155,27 @@ export default function MonthlyReportTab({
             const cellRef = XLSX.utils.encode_cell({ r, c });
             if (!wsStaff[cellRef]) continue;
 
-            if (r < 3) {
-              if (c === 0) {
+            if (r < 4) {
+              // Summary rows: label cells at even column positions, value cells at odd
+              if (c % 2 === 0 && rowData[c] && String(rowData[c]).endsWith(':')) {
                 wsStaff[cellRef].s = summaryLabelStyle;
-              } else if (c === 1) {
+              } else if (c % 2 === 1 || (c % 2 === 0 && !(String(rowData[c] || '').endsWith(':')))) {
                 wsStaff[cellRef].s = summaryValueStyle;
-                if (r > 0 && typeof rowData[c] === 'number') {
+                if (typeof rowData[c] === 'number') {
                   wsStaff[cellRef].t = 'n';
                   wsStaff[cellRef].z = '0.00';
                 }
               } else {
                 wsStaff[cellRef].s = { fill: { fgColor: { rgb: "FFFFFF" } } };
               }
-            } else if (r === 3) {
-              wsStaff[cellRef].s = { fill: { fgColor: { rgb: "FFFFFF" } } };
             } else if (r === 4) {
+              // Spacer row
+              wsStaff[cellRef].s = { fill: { fgColor: { rgb: "FFFFFF" } } };
+            } else if (r === 5) {
+              // Column headers row
               wsStaff[cellRef].s = sHeaderStyle;
             } else {
+              // Daily data rows
               wsStaff[cellRef].s = cellStyle;
               if (c === 4 || c === 7 || c === 8 || c === 9) {
                 const val = rowData[c];
