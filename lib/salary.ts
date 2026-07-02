@@ -268,6 +268,7 @@ export function calculateLateMinutes(
   shiftStart: string
 ): number {
   if (!checkIn || !shiftStart) return 0
+  if (checkIn === shiftStart) return 0
   const inMins = getMinutes(checkIn)
   const startMins = getMinutes(shiftStart)
   return Math.max(0, inMins - startMins)

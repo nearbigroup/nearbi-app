@@ -75,7 +75,11 @@ export default function BulkConfirmTab({
           early_in_approved,
           early_leave_minutes,
           day_type,
-          late_salary_deduction_minutes
+          late_salary_deduction_minutes,
+          override_shift_start,
+          override_shift_end,
+          override_reason,
+          override_approved_by
         `)
         .gte('date', startDate)
         .lte('date', endDate);

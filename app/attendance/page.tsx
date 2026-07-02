@@ -56,6 +56,10 @@ interface AttendanceRecord {
   photo_flagged_by?: string | null;
   auto_closed?: boolean;
   total_hours_logged?: number;
+  override_shift_start?: string | null;
+  override_shift_end?: string | null;
+  override_reason?: string | null;
+  override_approved_by?: string | null;
 }
 
 interface LateFine {
@@ -211,6 +215,10 @@ export default function AttendancePage() {
   const [editFineWaived, setEditFineWaived] = useState(false);
   const [otApproved, setOtApproved] = useState(false);
   const [isAddingRecord, setIsAddingRecord] = useState(false);
+  const [overrideShift, setOverrideShift] = useState(false);
+  const [overrideStart, setOverrideStart] = useState('');
+  const [overrideEnd, setOverrideEnd] = useState('');
+  const [overrideReason, setOverrideReason] = useState('');
 
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deleteRecord, setDeleteRecord] = useState<any>(null);
@@ -277,9 +285,10 @@ export default function AttendancePage() {
 
   const liveMinutesLate = useMemo(() => {
     if (editStatus !== 'late' || !editCheckInTime) return 0;
-    const shiftStart = detailRecord?.shift?.start_time || '09:00';
+    const shiftStart = overrideShift ? overrideStart : (detailRecord?.shift?.start_time || '09:00');
+    if (overrideShift && overrideStart === editCheckInTime) return 0;
     return calculateLateMinutes(editCheckInTime, shiftStart);
-  }, [editStatus, editCheckInTime, detailRecord]);
+  }, [editStatus, editCheckInTime, detailRecord, overrideShift, overrideStart]);
 
   const liveColorCode = useMemo(() => {
     if (editStatus === 'absent') return 'red';
@@ -297,17 +306,17 @@ export default function AttendancePage() {
 
   const liveOTMinutes = useMemo(() => {
     if (!editCheckOutTime) return 0;
-    const shiftStart = detailRecord?.shift?.start_time || '09:00';
-    const shiftEnd = detailRecord?.shift?.end_time || '18:00';
+    const shiftStart = overrideShift ? overrideStart : (detailRecord?.shift?.start_time || '09:00');
+    const shiftEnd = overrideShift ? overrideEnd : (detailRecord?.shift?.end_time || '18:00');
     return calculateOTMinutes(shiftEnd, editCheckOutTime, shiftStart);
-  }, [editCheckOutTime, detailRecord]);
+  }, [editCheckOutTime, detailRecord, overrideShift, overrideStart, overrideEnd]);
 
   const liveEarlyLeaveMinutes = useMemo(() => {
     if (!editCheckInTime || !editCheckOutTime) return 0;
-    const shiftStart = detailRecord?.shift?.start_time || '09:00';
-    const shiftEnd = detailRecord?.shift?.end_time || '18:00';
+    const shiftStart = overrideShift ? overrideStart : (detailRecord?.shift?.start_time || '09:00');
+    const shiftEnd = overrideShift ? overrideEnd : (detailRecord?.shift?.end_time || '18:00');
     return calculateEarlyLeaveMinutes(shiftEnd, editCheckOutTime, shiftStart);
-  }, [editCheckInTime, editCheckOutTime, detailRecord]);
+  }, [editCheckInTime, editCheckOutTime, detailRecord, overrideShift, overrideStart, overrideEnd]);
 
   useEffect(() => {
     if (editStatus !== 'late') {
@@ -401,6 +410,11 @@ export default function AttendancePage() {
       setEditFineWaived(item.fine?.waived || false);
       setOtApproved(item.record.ot_approved || false);
       setIsAddingRecord(false);
+      
+      setOverrideShift(!!(item.record.override_shift_start || item.record.override_shift_end));
+      setOverrideStart(item.record.override_shift_start || item.shift?.start_time || '09:00');
+      setOverrideEnd(item.record.override_shift_end || item.shift?.end_time || '18:00');
+      setOverrideReason(item.record.override_reason || '');
     } else {
       setEditCheckInTime('');
       setEditCheckOutTime('');
@@ -410,6 +424,11 @@ export default function AttendancePage() {
       setEditFineWaived(false);
       setOtApproved(false);
       setIsAddingRecord(false); // Default to false to show the day type selector first
+
+      setOverrideShift(false);
+      setOverrideStart(item.shift?.start_time || '09:00');
+      setOverrideEnd(item.shift?.end_time || '18:00');
+      setOverrideReason('');
     }
     setDetailModalOpen(true);
   };
@@ -890,7 +909,8 @@ export default function AttendancePage() {
       const color_code = isHourly ? 'green' : liveColorCode;
       const early_leave_minutes = isHourly ? 0 : liveEarlyLeaveMinutes;
 
-      const late_salary_deduction_minutes = isHourly || editStatus === 'absent' ? 0 : calculateLateMinutes(editCheckInTime, detailRecord?.shift?.start_time || '09:00');
+      const effectiveStart = overrideShift ? overrideStart : (detailRecord?.shift?.start_time || '09:00');
+      const late_salary_deduction_minutes = isHourly || editStatus === 'absent' ? 0 : (overrideShift && overrideStart === editCheckInTime ? 0 : calculateLateMinutes(editCheckInTime, effectiveStart));
 
       const attendanceData: any = {
         staff_id: staffId,
@@ -906,7 +926,11 @@ export default function AttendancePage() {
         ot_approved: isHourly ? false : otApproved,
         color_code,
         marked_by: 'manual_edit',
-        total_hours_logged: isHourly ? (editStatus === 'absent' ? 0 : actual_hours_worked) : 0
+        total_hours_logged: isHourly ? (editStatus === 'absent' ? 0 : actual_hours_worked) : 0,
+        override_shift_start: overrideShift ? overrideStart : null,
+        override_shift_end: overrideShift ? overrideEnd : null,
+        override_reason: overrideShift ? overrideReason : null,
+        override_approved_by: overrideShift ? (user?.email || 'admin') : null
       };
 
       const { error: attErr } = await supabase
@@ -3738,29 +3762,59 @@ export default function AttendancePage() {
 
                   {/* Read-Only or Form Fields */}
                   {!canEdit ? (
-                    <div className="space-y-3.5 bg-white border border-[#E8E8E8] rounded-[14px] p-4">
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <p className="text-[10px] text-[#999999] font-bold uppercase tracking-wider">Check-in Time</p>
-                          <p className="text-sm font-bold text-[#1A1A1A] mt-0.5">{editCheckInTime || '—'}</p>
+                    <>
+                      <div className="space-y-3.5 bg-white border border-[#E8E8E8] rounded-[14px] p-4">
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <p className="text-[10px] text-[#999999] font-bold uppercase tracking-wider">Check-in Time</p>
+                            <p className="text-sm font-bold text-[#1A1A1A] mt-0.5">{editCheckInTime || '—'}</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] text-[#999999] font-bold uppercase tracking-wider">Check-out Time</p>
+                            <p className="text-sm font-bold text-[#1A1A1A] mt-0.5">{editCheckOutTime || '—'}</p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-[10px] text-[#999999] font-bold uppercase tracking-wider">Check-out Time</p>
-                          <p className="text-sm font-bold text-[#1A1A1A] mt-0.5">{editCheckOutTime || '—'}</p>
+                        <hr className="border-[#E8E8E8]" />
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <p className="text-[10px] text-[#999999] font-bold uppercase tracking-wider">Status</p>
+                            <p className="text-sm font-bold text-[#1A1A1A] mt-0.5 capitalize">{editStatus}</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] text-[#999999] font-bold uppercase tracking-wider">Reason</p>
+                            <p className="text-sm font-bold text-[#1A1A1A] mt-0.5">{editReason || '—'}</p>
+                          </div>
                         </div>
                       </div>
-                      <hr className="border-[#E8E8E8]" />
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <p className="text-[10px] text-[#999999] font-bold uppercase tracking-wider">Status</p>
-                          <p className="text-sm font-bold text-[#1A1A1A] mt-0.5 capitalize">{editStatus}</p>
+                      {detailRecord.record?.override_shift_start && (
+                        <div className="bg-sky-50 border border-sky-100 rounded-[12px] p-3 text-xs flex flex-col gap-2 mt-3 text-sky-850">
+                          <div className="font-extrabold uppercase text-[9px] tracking-wider border-b border-sky-200/50 pb-1 flex items-center justify-between">
+                            <span>Shift Override Active</span>
+                            <span className="bg-sky-500 text-white rounded-full px-1.5 py-0.5 text-[8.5px] font-black uppercase">O</span>
+                          </div>
+                          <div className="flex justify-between font-bold">
+                            <span>Override Shift:</span>
+                            <span className="font-mono">{detailRecord.record.override_shift_start} – {detailRecord.record.override_shift_end}</span>
+                          </div>
+                          {detailRecord.record.override_reason && (
+                            <div className="flex justify-between">
+                              <span>Reason:</span>
+                              <span className="italic">"{detailRecord.record.override_reason}"</span>
+                            </div>
+                          )}
+                          {detailRecord.record.override_approved_by && (
+                            <div className="flex justify-between">
+                              <span>Approved By:</span>
+                              <span>{detailRecord.record.override_approved_by}</span>
+                            </div>
+                          )}
+                          <div className="flex justify-between border-t border-sky-200/50 pt-1 text-sky-700/80 text-[10px]">
+                            <span>Normal Shift:</span>
+                            <span className="font-mono">{detailRecord.shift?.start_time || '09:00'} – {detailRecord.shift?.end_time || '18:00'}</span>
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-[10px] text-[#999999] font-bold uppercase tracking-wider">Reason</p>
-                          <p className="text-sm font-bold text-[#1A1A1A] mt-0.5">{editReason || '—'}</p>
-                        </div>
-                      </div>
-                    </div>
+                      )}
+                    </>
                   ) : (
                     <div className="space-y-4">
                       {/* Check-In */}
@@ -3819,6 +3873,53 @@ export default function AttendancePage() {
                           onChange={(e) => setEditReason(e.target.value)}
                           className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
                         />
+                      </div>
+
+                      <div className="space-y-3 border-t border-[#E8E8E8] pt-3">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-bold text-[#1A1A1A]">Override shift for this day only</label>
+                          <input
+                            type="checkbox"
+                            checked={overrideShift}
+                            onChange={(e) => setOverrideShift(e.target.checked)}
+                            className="w-4 h-4 accent-[#1A1A1A] rounded bg-[#F8F8F8] border border-[#E8E8E8]"
+                          />
+                        </div>
+                        
+                        {overrideShift && (
+                          <div className="space-y-3 bg-[#F8F8F8] p-3 rounded-xl border border-[#E8E8E8]">
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="block text-[10px] font-bold text-[#555555] mb-1">Shift Start</label>
+                                <input
+                                  type="time"
+                                  value={overrideStart}
+                                  onChange={(e) => setOverrideStart(e.target.value)}
+                                  className="w-full bg-white border border-[#E8E8E8] rounded-lg p-2 text-xs text-[#1A1A1A] focus:outline-none focus:border-[#1A1A1A]"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[10px] font-bold text-[#555555] mb-1">Shift End</label>
+                                <input
+                                  type="time"
+                                  value={overrideEnd}
+                                  onChange={(e) => setOverrideEnd(e.target.value)}
+                                  className="w-full bg-white border border-[#E8E8E8] rounded-lg p-2 text-xs text-[#1A1A1A] focus:outline-none focus:border-[#1A1A1A]"
+                                />
+                              </div>
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold text-[#555555] mb-1">Reason</label>
+                              <input
+                                type="text"
+                                value={overrideReason}
+                                onChange={(e) => setOverrideReason(e.target.value)}
+                                placeholder="Reason for shift override"
+                                className="w-full bg-white border border-[#E8E8E8] rounded-lg p-2 text-xs text-[#1A1A1A] focus:outline-none focus:border-[#1A1A1A]"
+                              />
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}

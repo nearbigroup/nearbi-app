@@ -79,6 +79,10 @@ interface AttendanceRecord {
   photo_flagged?: boolean;
   photo_flag_reason?: string | null;
   photo_flagged_by?: string | null;
+  override_shift_start?: string | null;
+  override_shift_end?: string | null;
+  override_reason?: string | null;
+  override_approved_by?: string | null;
 }
 
 interface LateFine {
@@ -219,6 +223,10 @@ export default function StaffProfilePage() {
   const [editStatus, setEditStatus] = useState<'present' | 'late' | 'absent'>('present');
   const [editDayType, setEditDayType] = useState('present');
   const [isSavingAttendance, setIsSavingAttendance] = useState(false);
+  const [overrideShift, setOverrideShift] = useState(false);
+  const [overrideStart, setOverrideStart] = useState('');
+  const [overrideEnd, setOverrideEnd] = useState('');
+  const [overrideReason, setOverrideReason] = useState('');
 
   // Pending Actions states
   const [pendingOT, setPendingOT] = useState<AttendanceRecord[]>([]);
@@ -462,8 +470,14 @@ export default function StaffProfilePage() {
           finalStatus = 'absent';
           colorCode = 'red';
         } else {
-          const shiftStartStr = staff.shift?.start_time || '09:00';
-          minutesLate = calculateLateMinutes(finalCheckIn, shiftStartStr);
+          const effectiveStart = overrideShift ? overrideStart : (staff.shift?.start_time || '09:00');
+          const effectiveEnd = overrideShift ? overrideEnd : (staff.shift?.end_time || '18:00');
+
+          if (overrideShift && overrideStart === finalCheckIn) {
+            minutesLate = 0;
+          } else {
+            minutesLate = calculateLateMinutes(finalCheckIn, effectiveStart);
+          }
 
           if (minutesLate > 0) {
             finalStatus = 'late';
@@ -488,9 +502,8 @@ export default function StaffProfilePage() {
               shortAttendance = true;
             }
 
-            const shiftEndStr = staff.shift?.end_time || '18:00';
-            otMinutes = calculateOTMinutes(shiftEndStr, finalCheckOut, shiftStartStr);
-            earlyLeaveMinutes = calculateEarlyLeaveMinutes(shiftEndStr, finalCheckOut, shiftStartStr);
+            otMinutes = calculateOTMinutes(effectiveEnd, finalCheckOut, effectiveStart);
+            earlyLeaveMinutes = calculateEarlyLeaveMinutes(effectiveEnd, finalCheckOut, effectiveStart);
           }
         }
       }
@@ -515,13 +528,17 @@ export default function StaffProfilePage() {
           day_type: finalDayType,
           color_code: colorCode,
           minutes_late: minutesLate,
-          late_salary_deduction_minutes: finalCheckIn ? calculateLateMinutes(finalCheckIn, staff.shift?.start_time || '09:00') : 0,
+          late_salary_deduction_minutes: finalCheckIn ? (overrideShift && overrideStart === finalCheckIn ? 0 : calculateLateMinutes(finalCheckIn, overrideShift ? overrideStart : (staff.shift?.start_time || '09:00'))) : 0,
           ot_minutes: otMinutes,
           ot_approved: false,
           early_leave_minutes: earlyLeaveMinutes,
           actual_hours_worked: actualHours,
           short_attendance: shortAttendance,
-          marked_by: user?.name || user?.email || 'admin'
+          marked_by: user?.name || user?.email || 'admin',
+          override_shift_start: overrideShift ? overrideStart : null,
+          override_shift_end: overrideShift ? overrideEnd : null,
+          override_reason: overrideShift ? overrideReason : null,
+          override_approved_by: overrideShift ? (user?.email || 'admin') : null
         }, { onConflict: 'staff_id,date' })
         .select()
         .single();
@@ -620,6 +637,13 @@ export default function StaffProfilePage() {
     setEditCheckOut(r?.check_out_time || '');
     setEditStatus(r?.status || 'present');
     setEditDayType(r?.day_type || 'present');
+    
+    const hasOverride = !!(r?.override_shift_start || r?.override_shift_end);
+    setOverrideShift(hasOverride);
+    setOverrideStart(r?.override_shift_start || staff?.shift?.start_time || '09:00');
+    setOverrideEnd(r?.override_shift_end || staff?.shift?.end_time || '18:00');
+    setOverrideReason(r?.override_reason || '');
+    
     setIsEditingAttendance(true);
   };
 
@@ -1720,7 +1744,12 @@ export default function StaffProfilePage() {
                       disabled={isFuture}
                       className={cellClass}
                     >
-                      <div className="flex flex-col items-center justify-between py-1 h-full w-full">
+                      <div className="flex flex-col items-center justify-between py-1 h-full w-full relative">
+                        {record && (record.override_shift_start || record.override_shift_end) && (
+                          <span className="absolute top-0.5 right-0.5 bg-blue-500 text-white rounded-full w-2.5 h-2.5 flex items-center justify-center text-[7px] font-black leading-none" title="Shift Override Active">
+                            O
+                          </span>
+                        )}
                         <span>{day}</span>
                         {staff?.pay_type === 'hourly' ? (
                           record?.check_in_time ? (
@@ -2482,7 +2511,7 @@ export default function StaffProfilePage() {
                               </div>
                             </div>
 
-                            <div>
+                             <div>
                               <label className="block text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider mb-1">Status Override</label>
                               <select
                                 value={editStatus}
@@ -2493,6 +2522,53 @@ export default function StaffProfilePage() {
                                 <option value="late">Late</option>
                                 <option value="absent">Absent</option>
                               </select>
+                            </div>
+
+                            <div className="space-y-3 border-t border-[var(--border-strong)] pt-3">
+                              <div className="flex items-center justify-between">
+                                <label className="text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider">Override shift for this day only</label>
+                                <input
+                                  type="checkbox"
+                                  checked={overrideShift}
+                                  onChange={(e) => setOverrideShift(e.target.checked)}
+                                  className="w-4 h-4 accent-white rounded bg-[var(--bg-input)] border border-[var(--border)]"
+                                />
+                              </div>
+                              
+                              {overrideShift && (
+                                <div className="space-y-3 bg-[var(--bg-input)] p-3 rounded-xl border border-[var(--border-strong)]">
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <div>
+                                      <label className="block text-[9px] font-bold text-[var(--text-secondary)] mb-1">Shift Start</label>
+                                      <input
+                                        type="time"
+                                        value={overrideStart}
+                                        onChange={(e) => setOverrideStart(e.target.value)}
+                                        className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-lg p-2 text-xs text-white focus:outline-none"
+                                      />
+                                    </div>
+                                    <div>
+                                      <label className="block text-[9px] font-bold text-[var(--text-secondary)] mb-1">Shift End</label>
+                                      <input
+                                        type="time"
+                                        value={overrideEnd}
+                                        onChange={(e) => setOverrideEnd(e.target.value)}
+                                        className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-lg p-2 text-xs text-white focus:outline-none"
+                                      />
+                                    </div>
+                                  </div>
+                                  <div>
+                                    <label className="block text-[9px] font-bold text-[var(--text-secondary)] mb-1">Reason</label>
+                                    <input
+                                      type="text"
+                                      value={overrideReason}
+                                      onChange={(e) => setOverrideReason(e.target.value)}
+                                      placeholder="Reason for shift override"
+                                      className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-lg p-2 text-xs text-white focus:outline-none"
+                                    />
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           </>
                         )}
@@ -2660,6 +2736,35 @@ export default function StaffProfilePage() {
                           </>
                         )}
                       </div>
+
+                      {selectedDayDetail.record.override_shift_start && (
+                        <div className="bg-[rgba(59,130,246,0.08)] border border-[rgba(59,130,246,0.2)] rounded-xl p-3.5 space-y-2 text-xs font-semibold text-[var(--text-secondary)]">
+                          <div className="text-white font-extrabold uppercase text-[9px] tracking-wider border-b border-[var(--border-strong)] pb-1.5 mb-1.5 flex items-center justify-between">
+                            <span>Shift Override Active</span>
+                            <span className="bg-sky-500 text-white rounded-full px-1.5 py-0.5 text-[8px] font-black uppercase">O</span>
+                          </div>
+                          <div className="flex justify-between text-white font-bold">
+                            <span>Override Shift:</span>
+                            <span className="font-mono">{selectedDayDetail.record.override_shift_start} – {selectedDayDetail.record.override_shift_end}</span>
+                          </div>
+                          {selectedDayDetail.record.override_reason && (
+                            <div className="flex justify-between">
+                              <span>Reason:</span>
+                              <span className="italic">"{selectedDayDetail.record.override_reason}"</span>
+                            </div>
+                          )}
+                          {selectedDayDetail.record.override_approved_by && (
+                            <div className="flex justify-between">
+                              <span>Approved By:</span>
+                              <span>{selectedDayDetail.record.override_approved_by}</span>
+                            </div>
+                          )}
+                          <div className="flex justify-between border-t border-[var(--border-strong)] pt-2 mt-1 text-[var(--text-muted)] text-[10px]">
+                            <span>Normal Shift:</span>
+                            <span className="font-mono">{staff?.shift?.start_time || '09:00'} – {staff?.shift?.end_time || '18:00'}</span>
+                          </div>
+                        </div>
+                      )}
 
                       {/* Day Breaks */}
                       {selectedDayDetail.dayBreaks.length > 0 && (
