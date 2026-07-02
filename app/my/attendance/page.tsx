@@ -624,10 +624,30 @@ export default function StaffAttendancePage() {
                     </span>
                   </div>
                   {selectedDayDetail.record.status === 'late' && selectedDayDetail.record.minutes_late > 0 && (
-                    <div className="flex justify-between text-amber-700">
-                      <span>Late by:</span>
-                      <span className="font-mono font-black">{selectedDayDetail.record.minutes_late} mins</span>
-                    </div>
+                    <>
+                      <div className="flex justify-between text-amber-700">
+                        <span>Late by:</span>
+                        <span className="font-mono font-black">{selectedDayDetail.record.minutes_late} mins</span>
+                      </div>
+                      {staff?.pay_type !== 'hourly' && (
+                        <div className="flex justify-between text-red-700 font-bold">
+                          <span>Salary deduction (permanent):</span>
+                          <span className="font-mono text-right">
+                            -₹{(() => {
+                              const salary = staff?.monthly_salary || 0;
+                              const shiftHours = staff?.shift?.hours || 9;
+                              const recordDate = selectedDayDetail.dateStr;
+                              const [yr, mo] = recordDate.split('-').map(Number);
+                              const calendarDays = new Date(yr, mo, 0).getDate();
+                              const dailyRate = salary / calendarDays;
+                              const hourlyRate = dailyRate / shiftHours;
+                              const mins = selectedDayDetail.record.late_salary_deduction_minutes || selectedDayDetail.record.minutes_late || 0;
+                              return (Math.round((mins / 60) * hourlyRate * 100) / 100).toFixed(2);
+                            })()}
+                          </span>
+                        </div>
+                      )}
+                    </>
                   )}
                   {selectedDayDetail.record.early_leave_minutes > 0 && (
                     <div className="flex justify-between text-red-700 font-bold">

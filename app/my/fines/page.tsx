@@ -30,6 +30,7 @@ export default function StaffFinesPage() {
   const [loading, setLoading] = useState(true);
   const [fines, setFines] = useState<FineItem[]>([]);
   const [earlyLeaves, setEarlyLeaves] = useState<any[]>([]);
+  const [lateDeductions, setLateDeductions] = useState<any[]>([]);
 
   const fetchFinesData = async () => {
     if (!user || !user.staffId) return;
@@ -54,7 +55,7 @@ export default function StaffFinesPage() {
       // 3. Fetch Staff info for early leave calculation
       const { data: sData } = await supabase
         .from('staff')
-        .select('monthly_salary, shift:shifts(hours)')
+        .select('monthly_salary, pay_type, shift:shifts(hours)')
         .eq('id', user.staffId)
         .single();
       const monthlySalary = sData?.monthly_salary || 0;
@@ -74,8 +75,7 @@ export default function StaffFinesPage() {
         .select('*')
         .eq('staff_id', user.staffId)
         .gte('date', startDate)
-        .lte('date', endDate)
-        .gt('early_leave_minutes', 0);
+        .lte('date', endDate);
 
       const combined: FineItem[] = [];
 
@@ -129,17 +129,34 @@ export default function StaffFinesPage() {
       combined.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       setFines(combined);
 
-      const mappedEarlyLeaves = (attData || []).map((att: any) => {
-        const roundedAmt = calculateEarlyLeaveDeduction(att.early_leave_minutes, dailyRate, shiftHours);
-        return {
-          id: att.id,
-          date: att.date,
-          minutes: att.early_leave_minutes,
-          amount: roundedAmt
-        };
-      });
+      const mappedEarlyLeaves = (attData || [])
+        .filter((att: any) => (att.early_leave_minutes || 0) > 0)
+        .map((att: any) => {
+          const roundedAmt = calculateEarlyLeaveDeduction(att.early_leave_minutes, dailyRate, shiftHours);
+          return {
+            id: att.id,
+            date: att.date,
+            minutes: att.early_leave_minutes,
+            amount: roundedAmt
+          };
+        });
       mappedEarlyLeaves.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       setEarlyLeaves(mappedEarlyLeaves);
+
+      const isHourly = sData?.pay_type === 'hourly';
+      const mappedLateDeds = isHourly ? [] : (attData || [])
+        .filter((att: any) => (att.late_salary_deduction_minutes || 0) > 0)
+        .map((att: any) => {
+          const roundedAmt = Math.round(((att.late_salary_deduction_minutes || 0) / 60) * dailyRate / shiftHours * 100) / 100;
+          return {
+            id: att.id,
+            date: att.date,
+            minutes: att.late_salary_deduction_minutes,
+            amount: roundedAmt
+          };
+        });
+      mappedLateDeds.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      setLateDeductions(mappedLateDeds);
 
     } catch (e) {
       console.error('Error fetching fines data:', e);
@@ -204,6 +221,10 @@ export default function StaffFinesPage() {
   const earlyLeaveTotal = useMemo(() => {
     return earlyLeaves.reduce((sum, e) => sum + e.amount, 0);
   }, [earlyLeaves]);
+
+  const lateDeductionsTotal = useMemo(() => {
+    return lateDeductions.reduce((sum, e) => sum + e.amount, 0);
+  }, [lateDeductions]);
 
   // Grouped fines
   const lateFinesList = useMemo(() => fines.filter(f => f.type === 'late'), [fines]);
@@ -427,6 +448,46 @@ export default function StaffFinesPage() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+        </div>
+
+        {/* Late Arrival Deductions Section */}
+        <div>
+          <h3 className="text-xs font-black text-[#1A1A1A] uppercase tracking-wider border-b border-[var(--border)] pb-2 mb-3.5 flex items-center justify-between">
+            <span>Late Arrival Deductions</span>
+            <span className="text-[9px] font-bold text-gray-450 font-mono">Total: -₹{lateDeductionsTotal.toFixed(2)}</span>
+          </h3>
+
+          {lateDeductions.length === 0 ? (
+            <p className="text-[11px] text-[var(--text-muted)] italic py-3 text-center">No late arrival deductions logged.</p>
+          ) : (
+            <div className="space-y-3">
+              {lateDeductions.map(e => {
+                const dateObj = new Date(e.date);
+                const formattedDate = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                return (
+                  <div key={e.id} className="bg-[var(--bg-secondary)] border border-[var(--border)] rounded-xl p-3 flex flex-col space-y-2">
+                    <div className="flex justify-between items-center">
+                      <div className="flex items-center space-x-2">
+                        <span className="bg-red-500 text-white text-[9px] font-black px-1.5 py-0.5 rounded leading-none flex items-center gap-1">
+                          <Clock size={10} />
+                          <span>Late Arrival</span>
+                        </span>
+                        <span className="text-xs font-black text-[#1A1A1A] font-mono">
+                          {dateObj.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric', weekday: 'short' })}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex justify-between items-center text-xs font-bold bg-white border border-gray-150/40 rounded-lg p-2">
+                      <span className="text-[11px] text-gray-600">{formattedDate} — arrived {e.minutes} mins late (time deduction)</span>
+                      <span className="font-mono font-black text-red-750">
+                        -₹{e.amount.toFixed(2)} (permanent)
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
