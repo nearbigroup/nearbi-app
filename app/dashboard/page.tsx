@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { createNotification } from '@/lib/notifications';
 import { createAuditLog } from '@/lib/audit';
+import { autoCloseCheckouts } from '@/lib/salary';
 import Link from 'next/link';
 import {
   Clock,
@@ -97,6 +98,18 @@ export default function DashboardPage() {
 
   const fetchDashboardData = async () => {
     try {
+      // Auto-close checkouts for ops_manager
+      if (user?.role === 'ops_manager') {
+        try {
+          await autoCloseCheckouts(userBranch || 'daily');
+          if (!userBranch) {
+            await autoCloseCheckouts('hypermarket');
+          }
+        } catch (e) {
+          console.error('Auto-close checkouts error:', e);
+        }
+      }
+
       const todayStr = new Date().toISOString().split('T')[0];
 
       // 1. Fetch Staff
