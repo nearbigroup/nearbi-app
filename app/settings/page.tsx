@@ -515,7 +515,8 @@ export default function SettingsPage() {
       const year = parseInt(yearStr);
       const monthNum = parseInt(monthStr);
       const firstDay = `${cleanupMonth}-01`;
-      const lastDay = new Date(year, monthNum, 0).toISOString().split('T')[0];
+      const lastDayNum = new Date(year, monthNum, 0).getDate();
+      const lastDay = `${year}-${String(monthNum).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
 
       // Get staff for selected branch
       let staffQuery = supabase.from('staff').select('id');

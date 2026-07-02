@@ -60,7 +60,8 @@ export default function BulkConfirmTab({
       const year = parseInt(month.split('-')[0]);
       const monthNum = parseInt(month.split('-')[1]);
       const startDate = `${month}-01`;
-      const endDate = new Date(year, monthNum, 0).toISOString().split('T')[0];
+      const lastDayNum = new Date(year, monthNum, 0).getDate();
+      const endDate = `${year}-${String(monthNum).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
       const { data: attData, error: attError } = await supabase
         .from('attendance')
         .select(`

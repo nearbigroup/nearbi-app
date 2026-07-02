@@ -108,8 +108,11 @@ export default function ApprovalsPage() {
   const fetchApprovals = async () => {
     try {
       const now = new Date();
-      const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
-      const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+      const yr = now.getFullYear();
+      const mo = now.getMonth() + 1;
+      const firstDayOfMonth = `${yr}-${String(mo).padStart(2, '0')}-01`;
+      const lastDayNum = new Date(yr, mo, 0).getDate();
+      const lastDayOfMonth = `${yr}-${String(mo).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
 
       // Auto-sync OT adjustments
       const { data: attWithOT } = await supabase

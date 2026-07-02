@@ -146,7 +146,10 @@ export default function DashboardPage() {
       const now = new Date();
       const currentMonthStr = `${now.getFullYear()}-${(now.getMonth() + 1).toString().padStart(2, '0')}`;
       const startDate = `${currentMonthStr}-01`;
-      const endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+      const yr = now.getFullYear();
+      const mo = now.getMonth() + 1;
+      const lastDayNum = new Date(yr, mo, 0).getDate();
+      const endDate = `${yr}-${String(mo).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
 
       // A. Attendance issues this month
       let monthAttQuery = supabase

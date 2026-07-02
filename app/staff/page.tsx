@@ -162,7 +162,8 @@ export default function StaffPage() {
     const month = today.getMonth() + 1;
     const currentMonthStr = `${year}-${String(month).padStart(2, '0')}`;
     const firstDay = `${currentMonthStr}-01`;
-    const lastDay = new Date(year, month, 0).toISOString().split('T')[0];
+    const lastDayNum = new Date(year, month, 0).getDate();
+    const lastDay = `${year}-${String(month).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
 
     // Fetch new shift details
     const { data: newShift, error: shiftErr } = await supabase
@@ -1279,7 +1280,8 @@ export default function StaffPage() {
       const month = today.getMonth() + 1;
       const monthStr = `${year}-${String(month).padStart(2, '0')}`;
       const firstDay = `${monthStr}-01`;
-      const lastDay = new Date(year, month, 0).toISOString().split('T')[0];
+      const lastDayNum = new Date(year, month, 0).getDate();
+      const lastDay = `${year}-${String(month).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
 
       let successCount = 0;
       let errorCount = 0;

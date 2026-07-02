@@ -424,7 +424,8 @@ export default function StaffProfilePage() {
         const monthKey = dateStr.substring(0, 7);
         const firstDay = `${monthKey}-01`;
         const [yr, mo] = monthKey.split('-').map(Number);
-        const lastDay = new Date(yr, mo, 0).toISOString().split('T')[0];
+        const lastDayNum = new Date(yr, mo, 0).getDate();
+        const lastDay = `${yr}-${String(mo).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
 
         const { data: attRecords } = await supabase
           .from('attendance')

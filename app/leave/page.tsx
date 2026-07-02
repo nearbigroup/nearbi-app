@@ -152,7 +152,8 @@ export default function LeavePage() {
     const year = now.getFullYear();
     const month = now.getMonth() + 1;
     const firstDay = `${year}-${String(month).padStart(2, '0')}-01`;
-    const lastDay = new Date(year, month, 0).toISOString().split('T')[0];
+    const lastDayNum = new Date(year, month, 0).getDate();
+    const lastDay = `${year}-${String(month).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
 
     const { count: daysWorked } = await supabase
       .from('attendance')

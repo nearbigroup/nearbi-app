@@ -68,7 +68,8 @@ export default function MonthlyReportTab({
       const year = parseInt(yearStr);
       const monthNum = parseInt(monthStr);
       const firstDay = `${selectedMonth}-01`;
-      const lastDay = new Date(year, monthNum, 0).toISOString().split('T')[0];
+      const lastDayNum = new Date(year, monthNum, 0).getDate();
+      const lastDay = `${year}-${String(monthNum).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
 
       const { data: attData, error: attError } = await supabase
         .from('attendance')
@@ -652,7 +653,8 @@ export default function MonthlyReportTab({
       const daysInMonth = new Date(year, monthNum, 0).getDate();
       const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
       const firstDay = `${selectedMonth}-01`;
-      const lastDay = new Date(year, monthNum, 0).toISOString().split('T')[0];
+      const lastDayNum = new Date(year, monthNum, 0).getDate();
+      const lastDay = `${year}-${String(monthNum).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
 
       const format24h = (timeStr: string | null) => {
         if (!timeStr) return '';

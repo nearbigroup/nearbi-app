@@ -341,7 +341,8 @@ export default function SalaryPage() {
         const monthNum = parseInt(monthStr);
         
         const firstDay = `${selectedMonth}-01`;
-        const lastDay = new Date(year, monthNum, 0).toISOString().split('T')[0];
+        const lastDayNum = new Date(year, monthNum, 0).getDate();
+        const lastDay = `${year}-${String(monthNum).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
 
         // Fetch real attendance
         const { data: attRecords } = await supabase
