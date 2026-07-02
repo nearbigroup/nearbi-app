@@ -846,15 +846,15 @@ function SalaryCalculatorTab({
                       <span className="font-extrabold text-[var(--success)]">+<CountUp value={displayData.earlyInEarned || 0} prefix="₹" /></span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-white/50">Early leave:</span>
-                      <span className="font-extrabold text-[var(--danger)]">-<CountUp value={displayData.earlyLeaveDeduction} prefix="₹" /></span>
-                    </div>
-                    <div className="flex justify-between">
                       <span className="text-white/50">Late arrival deduction:</span>
                       <span className="font-extrabold text-[var(--danger)]">-<CountUp value={displayData.lateSalaryDeduction} prefix="₹" /></span>
                     </div>
+                    <div className="flex justify-between">
+                      <span className="text-white/50">Early leave:</span>
+                      <span className="font-extrabold text-[var(--danger)]">-<CountUp value={displayData.earlyLeaveDeduction} prefix="₹" /></span>
+                    </div>
                     <div className="flex justify-between border-b border-white/15 pb-2.5">
-                      <span className="text-white/50">Late fines:</span>
+                      <span className="text-white/50">Late & Special fines:</span>
                       <span className="font-extrabold text-[var(--danger)]">-<CountUp value={displayData.finesSoFar} prefix="₹" /></span>
                     </div>
 
@@ -1090,54 +1090,37 @@ function SalaryCalculatorTab({
                 </div>
               </div>
 
-              {/* EARNINGS */}
+              {/* SALARY BREAKDOWN */}
               <div>
-                <h4 className="text-[10px] font-bold text-[#1A1A1A] uppercase tracking-wider mb-2">Earnings</h4>
+                <h4 className="text-[10px] font-bold text-[#1A1A1A] uppercase tracking-wider mb-2">Salary Breakdown</h4>
                 <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-4 space-y-2 text-xs font-semibold text-[#555555]">
-                  <div className="flex justify-between">
-                    <span>Gross pay ({calcResult.paidDays} × {formatCurrency(calcResult.dailyRate)}):</span>
-                    <span className="text-[#1A1A1A] font-bold">{formatCurrency(calcResult.grossPay)}</span>
+                  <div className="flex justify-between text-[#1A1A1A] font-bold">
+                    <span>Gross pay ({calcResult.paidDays} days × {formatCurrency(calcResult.dailyRate)}):</span>
+                    <span>{formatCurrency(calcResult.grossPay)}</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span>OT pay ({(calcResult.approvedOTMinutes / 60).toFixed(1)}h approved):</span>
-                    <span className="text-[var(--success)] font-bold">+{formatCurrency(calcResult.otPay)}</span>
+                  <div className="flex justify-between text-[var(--success)] font-bold">
+                    <span>OT pay (approved):</span>
+                    <span>+{formatCurrency(calcResult.otPay)}</span>
                   </div>
-                  {calcResult.earlyInPay > 0 && (
-                    <div className="flex justify-between">
-                      <span>Early check-in pay:</span>
-                      <span className="text-[var(--success)] font-bold">+{formatCurrency(calcResult.earlyInPay)}</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* DEDUCTIONS */}
-              <div>
-                <h4 className="text-[10px] font-bold text-[#1A1A1A] uppercase tracking-wider mb-2">Deductions</h4>
-                <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-4 space-y-2 text-xs font-semibold text-[#555555]">
-                  <div className="flex justify-between">
-                    <span>Early leave:</span>
-                    <span className={`${calcResult.earlyLeaveDeduction > 0 ? 'text-[var(--danger)]' : ''} font-bold`}>
-                      -{formatCurrency(calcResult.earlyLeaveDeduction)}
-                    </span>
+                  <div className="flex justify-between text-[var(--success)] font-bold">
+                    <span>Early-in pay (approved):</span>
+                    <span>+{formatCurrency(calcResult.earlyInPay)}</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span>Late arrival deduction (permanent):</span>
-                    <span className={`${calcResult.lateSalaryDeduction > 0 ? 'text-[var(--danger)]' : ''} font-bold`}>
-                      -{formatCurrency(calcResult.lateSalaryDeduction)}
-                    </span>
+                  <div className="flex justify-between text-[var(--danger)] font-bold">
+                    <span>Late arrival deduction:</span>
+                    <span>-{formatCurrency(calcResult.lateSalaryDeduction)}</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span>Late fines confirmed:</span>
-                    <span className={`${calcResult.confirmedLateFines > 0 ? 'text-[var(--danger)]' : ''} font-bold`}>
-                      -{formatCurrency(calcResult.confirmedLateFines)}
-                    </span>
+                  <div className="flex justify-between text-[var(--danger)] font-bold">
+                    <span>Early leave deduction:</span>
+                    <span>-{formatCurrency(calcResult.earlyLeaveDeduction)}</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span>Special fines confirmed:</span>
-                    <span className={`${calcResult.confirmedSpecialFines > 0 ? 'text-[var(--danger)]' : ''} font-bold`}>
-                      -{formatCurrency(calcResult.confirmedSpecialFines)}
-                    </span>
+                  <div className="flex justify-between text-[var(--danger)] font-bold">
+                    <span>Late fines (confirmed):</span>
+                    <span>-{formatCurrency(calcResult.confirmedLateFines)}</span>
+                  </div>
+                  <div className="flex justify-between text-[var(--danger)] font-bold">
+                    <span>Special fines (confirmed):</span>
+                    <span>-{formatCurrency(calcResult.confirmedSpecialFines)}</span>
                   </div>
                 </div>
               </div>

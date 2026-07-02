@@ -103,15 +103,13 @@ export default function PayslipTab({ selectedMonth: propMonth }: { selectedMonth
         `*Total Hours Logged:* ${confirmation.total_hours_logged} hrs\n` +
         `*Standard Hours:* ${confirmation.standard_hours} hrs\n`;
     } else {
-      msg += `*Calendar Days:* ${calendarDays} days\n` +
-        `*Daily Rate:* ${formatCurrency(dailyRate)}/day\n` +
-        `*Paid Days:* ${confirmation.paid_days} / ${maxPaidDays} max\n\n` +
-        `*Base Salary:* ${formatCurrency(confirmation.base_salary)}\n` +
-        `*OT Pay:* +${formatCurrency(confirmation.ot_pay)}\n` +
-        `*Leave Deduction:* -${formatCurrency(confirmation.leave_deduction)}\n` +
-        (confirmation.early_leave_deduction ? `*Early Leave Deduction:* -${formatCurrency(confirmation.early_leave_deduction)}\n` : '') +
-        `*Late Fines:* -${formatCurrency(confirmation.confirmed_fines || 0)}\n` +
-        `*Special Fines:* -${formatCurrency(confirmation.confirmed_special_fines || 0)}\n`;
+      msg += `*Gross pay (${confirmation.paid_days} days × ${formatCurrency(dailyRate)}):* ${formatCurrency(confirmation.paid_days * dailyRate)}\n` +
+        `*OT pay (approved):* +${formatCurrency(confirmation.ot_pay)}\n` +
+        `*Early-in pay (approved):* +${formatCurrency(confirmation.early_in_pay || 0)}\n` +
+        `*Late arrival deduction:* -${formatCurrency(confirmation.late_salary_deduction || 0)}\n` +
+        `*Early leave deduction:* -${formatCurrency(confirmation.early_leave_deduction || 0)}\n` +
+        `*Late fines (confirmed):* -${formatCurrency(confirmation.confirmed_fines || 0)}\n` +
+        `*Special fines (confirmed):* -${formatCurrency(confirmation.confirmed_special_fines || 0)}\n`;
     }
     
     msg += `----------------------------------------\n` +
@@ -278,59 +276,33 @@ export default function PayslipTab({ selectedMonth: propMonth }: { selectedMonth
               </div>
             ) : (
               <div className="space-y-2 text-xs text-[#555555] print:text-gray-700 border-b border-dashed border-[#E8E8E8] print:border-gray-200 pb-4 mb-4">
-                <div className="flex justify-between items-center bg-[#F8F8F8] print:bg-gray-50 p-2 rounded-xl mb-1">
-                  <span className="font-bold text-[#1A1A1A] print:text-black">Base Salary:</span>
-                  <span className="font-bold text-[#1A1A1A] print:text-black">{formatCurrency(confirmation.base_salary)}</span>
-                </div>
                 <div className="flex justify-between px-1">
-                  <span>Calendar days in month:</span>
-                  <span className="text-[#1A1A1A] print:text-black font-bold">{calendarDays} days</span>
+                  <span>Gross pay ({confirmation.paid_days} days × {formatCurrency(dailyRate)}):</span>
+                  <span className="text-[#1A1A1A] print:text-black font-bold">{formatCurrency(confirmation.paid_days * dailyRate)}</span>
                 </div>
-                <div className="flex justify-between px-1">
-                  <span>Daily rate:</span>
-                  <span className="text-[#1A1A1A] print:text-black font-bold">{formatCurrency(dailyRate)}/day</span>
+                <div className="flex justify-between px-1 text-[var(--success)] print:text-green-700 font-bold">
+                  <span>OT pay (approved):</span>
+                  <span>+{formatCurrency(confirmation.ot_pay)}</span>
                 </div>
-                <div className="flex justify-between px-1">
-                  <span>Paid days:</span>
-                  <span className="text-[#1A1A1A] print:text-black font-bold">{confirmation.paid_days} / {maxPaidDays} max</span>
+                <div className="flex justify-between px-1 text-[var(--success)] print:text-green-700 font-bold">
+                  <span>Early-in pay (approved):</span>
+                  <span>+{formatCurrency(confirmation.early_in_pay || 0)}</span>
                 </div>
-
-                {/* Additions heading */}
-                <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] print:text-gray-400 mt-2.5 px-1 border-t border-[#E8E8E8] pt-2">
-                  Additions
+                <div className="flex justify-between px-1 text-[var(--danger)] print:text-red-700 font-bold">
+                  <span>Late arrival deduction:</span>
+                  <span>-{formatCurrency(confirmation.late_salary_deduction || 0)}</span>
                 </div>
-                <div className="flex justify-between px-1">
-                  <span>OT Earnings ({(confirmation.ot_minutes / 60).toFixed(1)}h):</span>
-                  <span className="text-[var(--success)] print:text-green-700 font-bold">+{formatCurrency(confirmation.ot_pay)}</span>
+                <div className="flex justify-between px-1 text-[var(--danger)] print:text-red-700 font-bold">
+                  <span>Early leave deduction:</span>
+                  <span>-{formatCurrency(confirmation.early_leave_deduction || 0)}</span>
                 </div>
-                {(confirmation.early_in_pay || 0) > 0 && (
-                  <div className="flex justify-between px-1">
-                    <span>Early Check-in Pay:</span>
-                    <span className="text-[var(--success)] print:text-green-700 font-bold">+{formatCurrency(confirmation.early_in_pay)}</span>
-                  </div>
-                )}
-
-                {/* Deductions heading */}
-                <div className="text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] print:text-gray-400 mt-2.5 px-1 border-t border-[#E8E8E8] pt-2">
-                  Deductions
+                <div className="flex justify-between px-1 text-[var(--danger)] print:text-red-700 font-bold">
+                  <span>Late fines (confirmed):</span>
+                  <span>-{formatCurrency(confirmation.confirmed_fines || 0)}</span>
                 </div>
-                <div className="flex justify-between px-1">
-                  <span>Missing Days ({calendarDays - confirmation.paid_days > 0 ? calendarDays - confirmation.paid_days : 0}d):</span>
-                  <span className="text-[var(--danger)] print:text-red-700 font-bold">-{formatCurrency(confirmation.leave_deduction)}</span>
-                </div>
-                {(confirmation.early_leave_deduction || 0) > 0 && (
-                  <div className="flex justify-between px-1">
-                    <span>Early Leave:</span>
-                    <span className="text-[var(--danger)] print:text-red-700 font-bold">-{formatCurrency(confirmation.early_leave_deduction)}</span>
-                  </div>
-                )}
-                <div className="flex justify-between px-1">
-                  <span>Late Fines:</span>
-                  <span className="text-[var(--danger)] print:text-red-700 font-bold">-{formatCurrency(confirmation.confirmed_fines || 0)}</span>
-                </div>
-                <div className="flex justify-between px-1">
-                  <span>Special Fines:</span>
-                  <span className="text-[var(--danger)] print:text-red-700 font-bold">-{formatCurrency(confirmation.confirmed_special_fines || 0)}</span>
+                <div className="flex justify-between px-1 text-[var(--danger)] print:text-red-700 font-bold">
+                  <span>Special fines (confirmed):</span>
+                  <span>-{formatCurrency(confirmation.confirmed_special_fines || 0)}</span>
                 </div>
               </div>
             )}

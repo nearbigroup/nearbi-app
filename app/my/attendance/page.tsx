@@ -232,7 +232,7 @@ export default function StaffAttendancePage() {
   // Weekly off balance calculations
   const weeklyOffStats = useMemo(() => {
     if (!staff) return { earnedQuota: 0, weeklyOffsUsed: 0, weeklyOffsRemaining: 0 };
-    const daysActuallyWorked = attendance.filter(a => a.check_in_time !== null && a.day_type !== 'weekly_off' && a.day_type !== 'holiday').length;
+    const daysActuallyWorked = attendance.filter(a => a.check_in_time !== null && a.check_in_time !== undefined && a.check_in_time !== '').length;
     const offDaysPerMonth = staff.off_days_per_month ?? 4;
     
     const earnedQuota = offDaysPerMonth === 0 ? 0 : Math.min(Math.floor(daysActuallyWorked / 6), offDaysPerMonth);

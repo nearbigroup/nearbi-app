@@ -150,11 +150,11 @@ export default function MonthlyReportTab({
 
       const staffAtt = attendanceRecords.filter((r) => r.staff_id === s.id);
       
-      // Real days worked (present/late, not weekly off or holiday)
+      // Real days worked (any day with check-in time)
       const daysActuallyWorked = staffAtt.filter(
         (r) => r.check_in_time !== null &&
-        r.day_type !== 'weekly_off' &&
-        r.day_type !== 'holiday'
+        r.check_in_time !== undefined &&
+        r.check_in_time !== ''
       ).length;
 
       // Count genuine absent days and approved leave days
