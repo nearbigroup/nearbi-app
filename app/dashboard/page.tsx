@@ -5,7 +5,7 @@ import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { createNotification } from '@/lib/notifications';
 import { createAuditLog } from '@/lib/audit';
-import { autoCloseCheckouts } from '@/lib/salary';
+import { calculateMinutesWorked } from '@/lib/salary';
 import Link from 'next/link';
 import {
   Clock,
@@ -32,6 +32,130 @@ const getMinutes = (timeStr: string) => {
   if (!timeStr) return 0;
   const [h, m] = timeStr.split(':').map(Number);
   return h * 60 + m;
+};
+
+const autoCloseCheckouts = async (effectiveBranch: string | null) => {
+  if (!effectiveBranch) return;
+  const today = new Date();
+  const todayStr = today.toISOString().split('T')[0];
+  const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+  const yesterdayStr = yesterday.toISOString().split('T')[0];
+  const nowH = today.getHours();
+  const nowM = today.getMinutes();
+  const nowMins = nowH * 60 + nowM;
+
+  const { data: openCheckIns } = await supabase
+    .from('attendance')
+    .select(`
+      id, check_in_time, staff_id, date,
+      staff!inner(
+        id, name, branch_id, pay_type, monthly_salary,
+        shifts(start_time, end_time, hours)
+      )
+    `)
+    .in('date', [yesterdayStr, todayStr])
+    .not('check_in_time', 'is', null)
+    .is('check_out_time', null)
+    .eq('staff.branch_id', effectiveBranch);
+
+  for (const record of openCheckIns || []) {
+    const staffObj: any = Array.isArray(record.staff) ? record.staff[0] : record.staff;
+    if (!staffObj) continue;
+
+    const isHourly = staffObj.pay_type === 'hourly';
+
+    if (isHourly) {
+      const recordDate = record.date;
+      const [yr, mo, dy] = recordDate.split('-').map(Number);
+      const [inH, inM] = record.check_in_time.split(':').map(Number);
+      const checkInDateObj = new Date(yr, mo - 1, dy, inH, inM, 0);
+      const hoursSinceCheckIn = (today.getTime() - checkInDateObj.getTime()) / (1000 * 60 * 60);
+
+      if (hoursSinceCheckIn > 14) {
+        const { data: existingNotif } = await supabase
+          .from('notifications')
+          .select('id')
+          .eq('staff_id', record.staff_id)
+          .eq('type', 'absent_alert')
+          .eq('title', 'Hourly Checkout Missing')
+          .like('message', `%${recordDate}%`)
+          .maybeSingle();
+
+        if (!existingNotif) {
+          await supabase
+            .from('notifications')
+            .insert({
+              type: 'absent_alert',
+              title: 'Hourly Checkout Missing',
+              message: `${staffObj.name} (Hourly) checked in on ${recordDate} at ${record.check_in_time} but has no checkout. Please review.`,
+              branch_id: effectiveBranch,
+              staff_id: record.staff_id,
+              target_role: 'staff_executive',
+              is_read: false
+            });
+        }
+      }
+      continue;
+    }
+
+    const shift = Array.isArray(staffObj.shifts)
+      ? staffObj.shifts[0]
+      : (staffObj.shifts || staffObj.shift || {});
+    if (!shift) continue;
+
+    const shiftEnd = shift.end_time || '18:00';
+    const shiftStart = shift.start_time || '09:00';
+    const shiftEndMins = getMinutes(shiftEnd);
+    const shiftStartMins = getMinutes(shiftStart);
+
+    let adjustedEnd = shiftEndMins;
+    if (shiftEndMins < shiftStartMins) {
+      adjustedEnd = shiftEndMins + 1440;
+    }
+
+    let adjustedNow = nowMins;
+    if (record.date === yesterdayStr) {
+      adjustedNow = nowMins + 1440;
+    }
+
+    if (adjustedNow > adjustedEnd + 60) {
+      const hoursWorked = calculateMinutesWorked(record.check_in_time, shiftEnd) / 60;
+
+      await supabase
+        .from('attendance')
+        .update({
+          check_out_time: shiftEnd,
+          actual_hours_worked: Math.round(hoursWorked * 100) / 100,
+          ot_minutes: 0,
+          early_leave_minutes: 0,
+          auto_closed: true
+        })
+        .eq('id', record.id);
+
+      const { data: existingNotif } = await supabase
+        .from('notifications')
+        .select('id')
+        .eq('staff_id', record.staff_id)
+        .eq('type', 'absent_alert')
+        .eq('title', 'Checkout Auto-Completed')
+        .like('message', `%${record.date}%`)
+        .maybeSingle();
+
+      if (!existingNotif) {
+        await supabase
+          .from('notifications')
+          .insert({
+            type: 'absent_alert',
+            title: 'Checkout Auto-Completed',
+            message: `${staffObj.name} forgot to check out on ${record.date}. Auto-closed at ${shiftEnd}. Please review if actual checkout was different.`,
+            branch_id: effectiveBranch,
+            staff_id: record.staff_id,
+            target_role: 'staff_executive',
+            is_read: false
+          });
+      }
+    }
+  }
 };
 
 interface StaffMember {
