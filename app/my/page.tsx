@@ -84,47 +84,47 @@ export default function StaffHomePage() {
 
         const approvedLeaveDates = new Set(leavesData?.map(l => l.date) || []);
 
-        const daysPresent = attData?.filter(a => a.check_in_time && a.status !== 'absent').length || 0;
+        const daysWorked = attData?.filter(
+          r => r.check_in_time !== null &&
+               r.check_in_time !== undefined &&
+               r.check_in_time !== ''
+        ).length || 0;
+        const daysPresent = daysWorked;
         const daysLate = attData?.filter(a => a.status === 'late').length || 0;
         const todayStr = new Date().toISOString().split('T')[0];
-        const daysAbsent = attData?.filter(a => {
-          if (a.status !== 'absent') return false;
-          if (a.day_type === 'weekly_off' || a.day_type === 'holiday') return false;
-          if (approvedLeaveDates.has(a.date)) return false;
-          if (a.date === todayStr && sData.shift?.start_time) {
-            const now = new Date();
-            const nowMins = now.getHours() * 60 + now.getMinutes();
-            const [sh, sm] = sData.shift.start_time.split(':').map(Number);
-            const shiftStartMins = sh * 60 + sm;
-            if (nowMins < shiftStartMins + 30) {
-              return false;
-            }
-          }
-          return true;
-        }).length || 0;
+
+        const trueAbsentDays = attData?.filter(
+          r => r.date <= todayStr &&
+          !r.check_in_time &&
+          r.day_type !== 'weekly_off' &&
+          r.day_type !== 'leave' &&
+          r.day_type !== 'holiday'
+        ).length || 0;
+
         const earlyExitsCount = attData?.filter(a => (a.early_leave_minutes || 0) > 0).length || 0;
 
         const offDaysCount = sData.off_days_per_month || 4;
 
         const monthStart = new Date(year, monthNum - 1, 1);
-        const joinDate = sData.join_date ? new Date(sData.join_date) : monthStart;
+        const joinDate = new Date(sData.join_date);
         const effectiveStart = joinDate > monthStart ? joinDate : monthStart;
-        const todayObj = new Date();
-        const effectiveStartZero = new Date(effectiveStart.getFullYear(), effectiveStart.getMonth(), effectiveStart.getDate());
-        const todayZero = new Date(todayObj.getFullYear(), todayObj.getMonth(), todayObj.getDate());
-        
-        const daysAvailable = Math.max(1, Math.floor(
-          (todayZero.getTime() - effectiveStartZero.getTime()) / (1000 * 60 * 60 * 24)
-        ) + 1);
+        const today = new Date();
+
+        const daysAvailable = Math.max(1,
+          Math.floor(
+            (today.getTime() - effectiveStart.getTime())
+            / (1000 * 60 * 60 * 24)
+          ) + 1
+        );
 
         const attendancePercentage = Math.min(100,
-          Math.round((daysPresent / daysAvailable) * 100)
+          Math.round((daysWorked / daysAvailable) * 100)
         );
 
         setStats({
           present: daysPresent,
           late: daysLate,
-          absent: daysAbsent,
+          absent: trueAbsentDays,
           weeklyOffs: offDaysCount,
           lateCount: daysLate,
           earlyExits: earlyExitsCount,

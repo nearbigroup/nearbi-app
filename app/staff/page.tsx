@@ -1461,13 +1461,19 @@ export default function StaffPage() {
           const monthStart = new Date(year, month - 1, 1);
           const joinDate = s.join_date ? new Date(s.join_date) : monthStart;
           const effectiveStart = joinDate > monthStart ? joinDate : monthStart;
-          const todayZero = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-          const effectiveStartZero = new Date(effectiveStart.getFullYear(), effectiveStart.getMonth(), effectiveStart.getDate());
-          const daysAvailable = Math.max(1, Math.floor(
-            (todayZero.getTime() - effectiveStartZero.getTime()) / (1000 * 60 * 60 * 24)
-          ) + 1);
+
+          const daysAvailable = Math.max(1,
+            Math.floor(
+              (today.getTime() - effectiveStart.getTime())
+              / (1000 * 60 * 60 * 24)
+            ) + 1
+          );
           
-          const daysWorked = attRecords?.filter(r => r.check_in_time).length || 0;
+          const daysWorked = attRecords?.filter(
+            r => r.check_in_time !== null &&
+                 r.check_in_time !== undefined &&
+                 r.check_in_time !== ''
+          ).length || 0;
 
           // Attendance score (40 pts)
           const attScore = Math.round((daysWorked / daysAvailable) * 40);

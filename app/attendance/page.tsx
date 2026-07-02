@@ -2284,14 +2284,17 @@ export default function AttendancePage() {
       }
     }
 
-    // No record: check if Pending or Absent
+    // No record: check if Pending/Shift not started or Absent
     const now = new Date();
+    const todayStr = now.toISOString().split('T')[0];
     const currentMins = now.getHours() * 60 + now.getMinutes();
     let isPending = false;
-    if (item.shift?.start_time) {
+    let shiftTimeStr = '';
+    if (selectedDate >= todayStr && item.shift?.start_time) {
       const [sh, sm] = item.shift.start_time.split(':').map(Number);
       const shiftMins = sh * 60 + sm;
-      if (currentMins < shiftMins) {
+      shiftTimeStr = formatTime12hr(item.shift.start_time);
+      if (currentMins < shiftMins + 30 || selectedDate > todayStr) {
         isPending = true;
       }
     }
@@ -2303,7 +2306,7 @@ export default function AttendancePage() {
         avatarClass: 'bg-[#E8E8E8] text-[#999999]',
         nameClass: 'text-[#999999]',
         statusClass: 'text-[#999999]',
-        statusContent: 'Pending'
+        statusContent: shiftTimeStr ? `Shift starts at ${shiftTimeStr}` : 'Pending'
       };
     }
 
