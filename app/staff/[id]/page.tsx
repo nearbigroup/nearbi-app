@@ -29,7 +29,7 @@ import {
 } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import { formatTime12hr } from '@/lib/utils';
-import { calculateEarlyLeaveDeduction, calculateActualHours, calculateOTMinutes, calculateEarlyLeaveMinutes, calculateLateMinutes, calculateMinutesWorked } from '@/lib/salary';
+import { calculateEarlyLeaveDeduction, calculateLateSalaryDeduction, calculateActualHours, calculateOTMinutes, calculateEarlyLeaveMinutes, calculateLateMinutes, calculateMinutesWorked, calculateHourlySalary } from '@/lib/salary';
 import { createAuditLog } from '@/lib/audit';
 
 interface StaffMember {
@@ -42,6 +42,8 @@ interface StaffMember {
   monthly_salary: number;
   join_date: string;
   active: boolean;
+  pay_type?: string;
+  standard_hours?: number;
   shift?: {
     id: string;
     label: string;
@@ -63,12 +65,15 @@ interface AttendanceRecord {
   ot_approved: boolean;
   early_in_minutes: number;
   early_in_approved: boolean;
+  total_hours_logged?: number;
   early_leave_minutes?: number;
   actual_hours_worked: number;
   check_in_photo: string | null;
   check_out_photo: string | null;
   marked_by: string;
   day_type?: string;
+  late_salary_deduction_minutes?: number;
+  auto_closed?: boolean;
 }
 
 interface LateFine {
@@ -137,6 +142,11 @@ interface SalaryConfirmation {
   ot_pay: number;
   confirmed_fines: number;
   confirmed_special_fines: number;
+  late_salary_deduction: number;
+  is_hourly?: boolean;
+  total_hours_logged?: number;
+  standard_hours?: number;
+  hourly_rate?: number;
 }
 
 type TabName = 'attendance' | 'fines' | 'leaves' | 'salary' | 'breaks' | 'notes';
@@ -489,6 +499,7 @@ export default function StaffProfilePage() {
           day_type: finalDayType,
           color_code: colorCode,
           minutes_late: minutesLate,
+          late_salary_deduction_minutes: finalCheckIn ? calculateLateMinutes(finalCheckIn, staff.shift?.start_time || '09:00') : 0,
           ot_minutes: otMinutes,
           ot_approved: false,
           early_leave_minutes: earlyLeaveMinutes,
@@ -1177,7 +1188,7 @@ export default function StaffProfilePage() {
   // Weekly off balance calculations
   const weeklyOffStats = useMemo(() => {
     if (!staff) return { earnedQuota: 0, weeklyOffsUsed: 0, weeklyOffsRemaining: 0 };
-    const daysActuallyWorked = attendance.filter(a => a.check_in_time !== null && a.day_type !== 'weekly_off' && a.day_type !== 'holiday').length;
+    const daysActuallyWorked = attendance.filter(a => a.check_in_time !== null && a.check_in_time !== undefined && a.check_in_time !== '').length;
     const offDaysPerMonth = staff.off_days_per_month ?? 4;
     
     const earnedQuota = offDaysPerMonth === 0 ? 0 : Math.min(Math.floor(daysActuallyWorked / 6), offDaysPerMonth);
@@ -1512,7 +1523,7 @@ export default function StaffProfilePage() {
         <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-3 flex justify-between items-center text-xs font-bold text-[var(--text-secondary)]">
           <span className="uppercase text-[9px] tracking-wider text-[var(--text-muted)]">Weekly Off Balance</span>
           <span className="text-[#1A1A1A] font-extrabold font-mono">
-            {weeklyOffStats.earnedQuota} Earned | {weeklyOffStats.weeklyOffsUsed} Used | {weeklyOffStats.weeklyOffsRemaining} Remaining
+            {staff?.pay_type === 'hourly' ? 'N/A — Hourly' : `${weeklyOffStats.earnedQuota} Earned | ${weeklyOffStats.weeklyOffsUsed} Used | ${weeklyOffStats.weeklyOffsRemaining} Remaining`}
           </span>
         </div>
 
@@ -1523,17 +1534,25 @@ export default function StaffProfilePage() {
               <div>
                 <span className="text-[9px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Performance Score</span>
                 <div className="flex items-baseline space-x-1.5 mt-0.5">
-                  <span className="text-lg font-black text-white font-mono leading-none">{perfScore?.total_score ?? '—'}</span>
-                  <span className="text-[10px] text-[var(--text-secondary)] font-bold">/ 100</span>
+                  <span className="text-lg font-black text-white font-mono leading-none">
+                    {staff?.pay_type === 'hourly' ? 'N/A' : (perfScore?.total_score ?? '—')}
+                  </span>
+                  {staff?.pay_type !== 'hourly' && <span className="text-[10px] text-[var(--text-secondary)] font-bold">/ 100</span>}
                 </div>
               </div>
-              {perfScore && (
+              {staff?.pay_type === 'hourly' ? (
+                <span className="text-[10px] font-extrabold px-2 py-0.5 rounded uppercase tracking-wide text-blue-400 bg-blue-500/10">
+                  Hourly Staff
+                </span>
+              ) : perfScore ? (
                 <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded uppercase tracking-wide ${getPerfGrade(perfScore.total_score).color} ${getPerfGrade(perfScore.total_score).bg}`}>
                   {getPerfGrade(perfScore.total_score).label}
                 </span>
-              )}
+              ) : null}
             </div>
-            {perfScore ? (
+            {staff?.pay_type === 'hourly' ? (
+              <p className="text-[9px] text-[var(--text-muted)] italic mt-2.5">N/A — Hourly</p>
+            ) : perfScore ? (
               <div className="w-full bg-black/35 h-1.5 rounded-full overflow-hidden mt-2.5 border border-white/5">
                 <div 
                   className={`h-full rounded-full transition-all duration-500 ${getPerfGrade(perfScore.total_score).bar}`}
@@ -1610,6 +1629,14 @@ export default function StaffProfilePage() {
 
                   if (isFuture) {
                     cellClass += "bg-transparent border-[var(--border)] text-[var(--text-muted)] opacity-35 cursor-not-allowed";
+                  } else if (staff?.pay_type === 'hourly') {
+                    if (record && record.check_in_time) {
+                      cellClass += "bg-[rgba(96,165,250,0.12)] border-[rgba(96,165,250,0.25)] text-[#3B82F6] hover:bg-[rgba(96,165,250,0.2)]";
+                      dotColor = "bg-[#3B82F6]";
+                    } else {
+                      cellClass += "bg-[rgba(107,114,128,0.06)] border-[rgba(107,114,128,0.12)] text-[var(--text-muted)] hover:bg-[rgba(107,114,128,0.12)]";
+                      dotColor = "bg-[#6B7280]";
+                    }
                   } else if (record) {
                     if (record.day_type === 'weekly_off') {
                       cellClass += "bg-[rgba(96,165,250,0.12)] border-[rgba(96,165,250,0.25)] text-[#60A5FA] hover:bg-[rgba(96,165,250,0.2)]";
@@ -1679,7 +1706,17 @@ export default function StaffProfilePage() {
                     >
                       <div className="flex flex-col items-center justify-between py-1 h-full w-full">
                         <span>{day}</span>
-                        {dotColor && <span className={`w-1 h-1 rounded-full ${dotColor}`} />}
+                        {staff?.pay_type === 'hourly' ? (
+                          record?.check_in_time ? (
+                            <span className="text-[7.5px] font-black leading-none font-mono">
+                              {Number(record.total_hours_logged || 0).toFixed(1)}h
+                            </span>
+                          ) : (
+                            <span className="text-[7.5px] text-[var(--text-muted)] font-mono leading-none">0h</span>
+                          )
+                        ) : (
+                          dotColor && <span className={`w-1 h-1 rounded-full ${dotColor}`} />
+                        )}
                       </div>
                     </button>
                   );
@@ -1688,28 +1725,41 @@ export default function StaffProfilePage() {
             </div>
 
             {/* Calendar legend */}
-            <div className="flex flex-wrap gap-3 items-center justify-center text-[10px] font-bold text-[var(--text-secondary)]">
-              <div className="flex items-center space-x-1">
-                <span className="w-2.5 h-2.5 rounded bg-[#4ADE80]/15 border border-[#4ADE80]/30 inline-block" />
-                <span>Present</span>
+            {staff?.pay_type === 'hourly' ? (
+              <div className="flex flex-wrap gap-3 items-center justify-center text-[10px] font-bold text-[var(--text-secondary)]">
+                <div className="flex items-center space-x-1">
+                  <span className="w-2.5 h-2.5 rounded bg-[#3B82F6]/15 border border-[#3B82F6]/30 inline-block" />
+                  <span>Hours Logged</span>
+                </div>
+                <div className="flex items-center space-x-1">
+                  <span className="w-2.5 h-2.5 rounded bg-[#6B7280]/15 border border-[#6B7280]/30 inline-block" />
+                  <span>No Work Logged</span>
+                </div>
               </div>
-              <div className="flex items-center space-x-1">
-                <span className="w-2.5 h-2.5 rounded bg-[#FBBF24]/15 border border-[#FBBF24]/30 inline-block" />
-                <span>Late</span>
+            ) : (
+              <div className="flex flex-wrap gap-3 items-center justify-center text-[10px] font-bold text-[var(--text-secondary)]">
+                <div className="flex items-center space-x-1">
+                  <span className="w-2.5 h-2.5 rounded bg-[#4ADE80]/15 border border-[#4ADE80]/30 inline-block" />
+                  <span>Present</span>
+                </div>
+                <div className="flex items-center space-x-1">
+                  <span className="w-2.5 h-2.5 rounded bg-[#FBBF24]/15 border border-[#FBBF24]/30 inline-block" />
+                  <span>Late</span>
+                </div>
+                <div className="flex items-center space-x-1">
+                  <span className="w-2.5 h-2.5 rounded bg-[#F87171]/15 border border-[#F87171]/30 inline-block" />
+                  <span>Absent</span>
+                </div>
+                <div className="flex items-center space-x-1">
+                  <span className="w-2.5 h-2.5 rounded border border-dashed border-[var(--border-strong)] inline-block" />
+                  <span>OFF Day</span>
+                </div>
+                <div className="flex items-center space-x-1">
+                  <span className="w-2.5 h-2.5 rounded bg-[#60A5FA]/15 border border-[#60A5FA]/30 inline-block" />
+                  <span>Approved Leave</span>
+                </div>
               </div>
-              <div className="flex items-center space-x-1">
-                <span className="w-2.5 h-2.5 rounded bg-[#F87171]/15 border border-[#F87171]/30 inline-block" />
-                <span>Absent</span>
-              </div>
-              <div className="flex items-center space-x-1">
-                <span className="w-2.5 h-2.5 rounded border border-dashed border-[var(--border-strong)] inline-block" />
-                <span>OFF Day</span>
-              </div>
-              <div className="flex items-center space-x-1">
-                <span className="w-2.5 h-2.5 rounded bg-[#60A5FA]/15 border border-[#60A5FA]/30 inline-block" />
-                <span>Approved Leave</span>
-              </div>
-            </div>
+            )}
           </div>
         )}
 
@@ -1932,71 +1982,131 @@ export default function StaffProfilePage() {
                     <p className="text-xs text-[var(--text-muted)] italic p-3 bg-[var(--bg-surface)] rounded-xl border border-[var(--border)] text-center">No confirmed salary records found in database.</p>
                     
                     {/* Mock breakdown showing dynamic estimate */}
-                    <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[18px] p-4 space-y-3.5">
-                      <div className="flex justify-between items-center border-b border-[var(--border-strong)] pb-2.5">
-                        <div>
-                          <span className="text-[8px] text-[var(--text-muted)] font-bold uppercase tracking-wider">Estimated Month Breakdown</span>
-                          <h4 className="text-sm font-extrabold text-white">{new Date(selectedMonth + '-02').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</h4>
+                    {staff.pay_type === 'hourly' ? (
+                      <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[18px] p-4 space-y-3.5">
+                        <div className="flex justify-between items-center border-b border-[var(--border-strong)] pb-2.5">
+                          <div>
+                            <span className="text-[8px] text-[var(--text-muted)] font-bold uppercase tracking-wider">Estimated Month Breakdown (Hourly)</span>
+                            <h4 className="text-sm font-extrabold text-white">{new Date(selectedMonth + '-02').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</h4>
+                          </div>
+                          <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-[var(--bg-elevated)] border border-[var(--border-strong)] text-[var(--text-secondary)]">UNCONFIRMED</span>
                         </div>
-                        <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-[var(--bg-elevated)] border border-[var(--border-strong)] text-[var(--text-secondary)]">UNCONFIRMED</span>
-                      </div>
-                      
-                      <div className="space-y-2 text-xs font-semibold text-[var(--text-secondary)]">
-                        <div className="flex justify-between">
-                          <span>Base Salary:</span>
-                          <span className="text-white font-mono">₹{Number(staff.monthly_salary).toLocaleString('en-IN')}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>OT Payout (Estimated):</span>
-                          <span className="text-[#4ADE80] font-mono">+₹{Math.round(monthStats.otHours * (staff.monthly_salary / 240) * 1.5).toLocaleString('en-IN')}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>Late Fines Confirmed:</span>
-                          <span className="text-[#F87171] font-mono">-₹{lateFines.filter(f => f.confirmed).reduce((sum, f) => sum + (f.waived ? 0 : (Number(f.fine_amount) - Number(f.waived_amount || 0))), 0).toLocaleString('en-IN')}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>Special Fines Confirmed:</span>
-                          <span className="text-[#F87171] font-mono">-₹{specialFines.filter(f => f.confirmed).reduce((sum, f) => sum + (f.waived ? 0 : (Number(f.amount) - Number(f.waived_amount || 0))), 0).toLocaleString('en-IN')}</span>
-                        </div>
-                        {(() => {
-                          const [yearStr, monthStr] = selectedMonth.split('-');
-                          const daysInMonth = new Date(Number(yearStr), Number(monthStr), 0).getDate();
-                          const dailyRate = Number(staff.monthly_salary) / daysInMonth;
-                          const totalEarlyMins = attendance.reduce((sum, a) => sum + (a.early_leave_minutes || 0), 0);
-                          const earlyLeaveDeduction = calculateEarlyLeaveDeduction(totalEarlyMins, dailyRate, staff.shift?.hours || 9);
-                          if (earlyLeaveDeduction <= 0) return null;
-                          return (
-                            <div className="flex justify-between text-[#F87171]">
-                              <span>Early Leave Deductions:</span>
-                              <span className="font-mono">-₹{earlyLeaveDeduction.toLocaleString('en-IN')}</span>
-                            </div>
-                          );
-                        })()}
-                        <div className="flex justify-between border-t border-[var(--border-strong)] pt-2.5 font-bold text-white">
-                          <span>Estimated Net Payout:</span>
-                          <span className="text-white font-mono text-sm font-black">
-                            ₹{(() => {
-                              const [yearStr, monthStr] = selectedMonth.split('-');
-                              const daysInMonth = new Date(Number(yearStr), Number(monthStr), 0).getDate();
-                              const dailyRate = Number(staff.monthly_salary) / daysInMonth;
-                              const totalEarlyMins = attendance.reduce((sum, a) => sum + (a.early_leave_minutes || 0), 0);
-                              const earlyLeaveDeduction = calculateEarlyLeaveDeduction(totalEarlyMins, dailyRate, staff.shift?.hours || 9);
-                              
-                              const lateFinesTotal = lateFines.filter(f => f.confirmed).reduce((sum, f) => sum + (f.waived ? 0 : (Number(f.fine_amount) - Number(f.waived_amount || 0))), 0);
-                              const specialFinesTotal = specialFines.filter(f => f.confirmed).reduce((sum, f) => sum + (f.waived ? 0 : (Number(f.amount) - Number(f.waived_amount || 0))), 0);
-                              
-                              return Math.max(0, 
-                                Number(staff.monthly_salary) + 
-                                Math.round(monthStats.otHours * (staff.monthly_salary / 240) * 1.5) - 
-                                earlyLeaveDeduction -
-                                lateFinesTotal -
-                                specialFinesTotal
-                              );
-                            })().toLocaleString('en-IN')}
-                          </span>
+                        
+                        <div className="space-y-2 text-xs font-semibold text-[var(--text-secondary)]">
+                          {(() => {
+                            const totalHours = attendance.reduce((sum, r) => sum + Number(r.total_hours_logged || 0), 0);
+                            const result = calculateHourlySalary(
+                              staff.monthly_salary,
+                              staff.standard_hours || 234,
+                              totalHours
+                            );
+                            return (
+                              <>
+                                <div className="flex justify-between">
+                                  <span>Total hours logged:</span>
+                                  <span className="text-white font-mono">{result.totalHours.toFixed(2)} hrs</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span>Hourly rate:</span>
+                                  <span className="text-white font-mono">₹{result.hourlyRate.toFixed(2)} / hr</span>
+                                </div>
+                                <div className="flex justify-between border-t border-[var(--border-strong)] pt-2.5 font-bold text-white">
+                                  <span>Estimated Net Payout:</span>
+                                  <span className="text-white font-mono text-sm font-black">
+                                    ₹{result.netSalary.toLocaleString('en-IN')}
+                                  </span>
+                                </div>
+                              </>
+                            );
+                          })()}
                         </div>
                       </div>
-                    </div>
+                    ) : (
+                      <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[18px] p-4 space-y-3.5">
+                        <div className="flex justify-between items-center border-b border-[var(--border-strong)] pb-2.5">
+                          <div>
+                            <span className="text-[8px] text-[var(--text-muted)] font-bold uppercase tracking-wider">Estimated Month Breakdown</span>
+                            <h4 className="text-sm font-extrabold text-white">{new Date(selectedMonth + '-02').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</h4>
+                          </div>
+                          <span className="text-[9px] font-black uppercase px-2 py-0.5 rounded bg-[var(--bg-elevated)] border border-[var(--border-strong)] text-[var(--text-secondary)]">UNCONFIRMED</span>
+                        </div>
+                        
+                        <div className="space-y-2 text-xs font-semibold text-[var(--text-secondary)]">
+                          <div className="flex justify-between">
+                            <span>Base Salary:</span>
+                            <span className="text-white font-mono">₹{Number(staff.monthly_salary).toLocaleString('en-IN')}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>OT Payout (Estimated):</span>
+                            <span className="text-[#4ADE80] font-mono">+₹{Math.round(monthStats.otHours * (staff.monthly_salary / 240) * 1.5).toLocaleString('en-IN')}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Late Fines Confirmed:</span>
+                            <span className="text-[#F87171] font-mono">-₹{lateFines.filter(f => f.confirmed).reduce((sum, f) => sum + (f.waived ? 0 : (Number(f.fine_amount) - Number(f.waived_amount || 0))), 0).toLocaleString('en-IN')}</span>
+                          </div>
+                          {(() => {
+                            const totalLateMins = attendance.reduce((sum, a) => sum + (a.late_salary_deduction_minutes || 0), 0);
+                            const [yearStr, monthStr] = selectedMonth.split('-');
+                            const daysInMonth = new Date(Number(yearStr), Number(monthStr), 0).getDate();
+                            const dailyRate = Number(staff.monthly_salary) / daysInMonth;
+                            const hourlyRate = dailyRate / (staff.shift?.hours || 9);
+                            const lateDedu = calculateLateSalaryDeduction(totalLateMins, hourlyRate);
+                            if (lateDedu <= 0) return null;
+                            return (
+                              <div className="flex justify-between text-[#F87171]">
+                                <span>Late Arrival Deductions (permanent):</span>
+                                <span className="font-mono">-₹{lateDedu.toLocaleString('en-IN')}</span>
+                              </div>
+                            );
+                          })()}
+                          <div className="flex justify-between">
+                            <span>Special Fines Confirmed:</span>
+                            <span className="text-[#F87171] font-mono">-₹{specialFines.filter(f => f.confirmed).reduce((sum, f) => sum + (f.waived ? 0 : (Number(f.amount) - Number(f.waived_amount || 0))), 0).toLocaleString('en-IN')}</span>
+                          </div>
+                          {(() => {
+                            const [yearStr, monthStr] = selectedMonth.split('-');
+                            const daysInMonth = new Date(Number(yearStr), Number(monthStr), 0).getDate();
+                            const dailyRate = Number(staff.monthly_salary) / daysInMonth;
+                            const totalEarlyMins = attendance.reduce((sum, a) => sum + (a.early_leave_minutes || 0), 0);
+                            const earlyLeaveDeduction = calculateEarlyLeaveDeduction(totalEarlyMins, dailyRate, staff.shift?.hours || 9);
+                            if (earlyLeaveDeduction <= 0) return null;
+                            return (
+                              <div className="flex justify-between text-[#F87171]">
+                                <span>Early Leave Deductions:</span>
+                                <span className="font-mono">-₹{earlyLeaveDeduction.toLocaleString('en-IN')}</span>
+                              </div>
+                            );
+                          })()}
+                          <div className="flex justify-between border-t border-[var(--border-strong)] pt-2.5 font-bold text-white">
+                            <span>Estimated Net Payout:</span>
+                            <span className="text-white font-mono text-sm font-black">
+                              ₹{(() => {
+                                const [yearStr, monthStr] = selectedMonth.split('-');
+                                const daysInMonth = new Date(Number(yearStr), Number(monthStr), 0).getDate();
+                                const dailyRate = Number(staff.monthly_salary) / daysInMonth;
+                                const totalEarlyMins = attendance.reduce((sum, a) => sum + (a.early_leave_minutes || 0), 0);
+                                const earlyLeaveDeduction = calculateEarlyLeaveDeduction(totalEarlyMins, dailyRate, staff.shift?.hours || 9);
+                                
+                                const totalLateMins = attendance.reduce((sum, a) => sum + (a.late_salary_deduction_minutes || 0), 0);
+                                const lateDeduction = calculateLateSalaryDeduction(totalLateMins, dailyRate / (staff.shift?.hours || 9));
+
+                                const lateFinesTotal = lateFines.filter(f => f.confirmed).reduce((sum, f) => sum + (f.waived ? 0 : (Number(f.fine_amount) - Number(f.waived_amount || 0))), 0);
+                                const specialFinesTotal = specialFines.filter(f => f.confirmed).reduce((sum, f) => sum + (f.waived ? 0 : (Number(f.amount) - Number(f.waived_amount || 0))), 0);
+                                
+                                return Math.max(0, 
+                                  Number(staff.monthly_salary) + 
+                                  Math.round(monthStats.otHours * (staff.monthly_salary / 240) * 1.5) - 
+                                  earlyLeaveDeduction -
+                                  lateDeduction -
+                                  lateFinesTotal -
+                                  specialFinesTotal
+                                );
+                              })().toLocaleString('en-IN')}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   salaryConfirmations.map(sc => (
@@ -2007,32 +2117,59 @@ export default function StaffProfilePage() {
                         </h4>
                         <span className="text-[10px] font-black text-[#4ADE80] font-mono uppercase bg-[#4ADE80]/10 border border-[#4ADE80]/20 px-2 py-0.5 rounded">CONFIRMED</span>
                       </div>
-                      <div className="space-y-2 text-xs font-semibold text-[var(--text-secondary)]">
-                        <div className="flex justify-between">
-                          <span>Base Salary:</span>
-                          <span className="text-white font-mono">₹{Number(sc.base_salary).toLocaleString('en-IN')}</span>
+                      {sc.is_hourly || staff.pay_type === 'hourly' ? (
+                        <div className="space-y-2 text-xs font-semibold text-[var(--text-secondary)]">
+                          <div className="flex justify-between">
+                            <span>Base Salary (monthly):</span>
+                            <span className="text-white font-mono">₹{Number(sc.base_salary).toLocaleString('en-IN')}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Standard hours:</span>
+                            <span className="text-white font-mono">{sc.standard_hours ?? 234} hrs</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Total hours logged:</span>
+                            <span className="text-white font-mono">{(sc.total_hours_logged ?? 0).toFixed(2)} hrs</span>
+                          </div>
+                          <div className="flex justify-between border-t border-[var(--border-strong)] pt-2.5 font-bold text-white">
+                            <span>Net Paid Out:</span>
+                            <span className="text-white font-mono text-sm font-black">₹{Number(sc.net_salary).toLocaleString('en-IN')}</span>
+                          </div>
                         </div>
-                        <div className="flex justify-between">
-                          <span>OT Paid:</span>
-                          <span className="text-[#4ADE80] font-mono">+₹{Number(sc.ot_pay).toLocaleString('en-IN')}</span>
+                      ) : (
+                        <div className="space-y-2 text-xs font-semibold text-[var(--text-secondary)]">
+                          <div className="flex justify-between">
+                            <span>Base Salary:</span>
+                            <span className="text-white font-mono">₹{Number(sc.base_salary).toLocaleString('en-IN')}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>OT Paid:</span>
+                            <span className="text-[#4ADE80] font-mono">+₹{Number(sc.ot_pay).toLocaleString('en-IN')}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Late Fines Deducted:</span>
+                            <span className="text-[#F87171] font-mono">-₹{Number(sc.confirmed_fines).toLocaleString('en-IN')}</span>
+                          </div>
+                          {sc.late_salary_deduction > 0 && (
+                            <div className="flex justify-between">
+                              <span>Late Arrival Deductions:</span>
+                              <span className="text-[#F87171] font-mono">-₹{Number(sc.late_salary_deduction).toLocaleString('en-IN')}</span>
+                            </div>
+                          )}
+                          <div className="flex justify-between">
+                            <span>Special Fines Deducted:</span>
+                            <span className="text-[#F87171] font-mono">-₹{Number(sc.confirmed_special_fines).toLocaleString('en-IN')}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Leave Deductions:</span>
+                            <span className="text-[#F87171] font-mono">-₹{Number(sc.leave_deduction).toLocaleString('en-IN')}</span>
+                          </div>
+                          <div className="flex justify-between border-t border-[var(--border-strong)] pt-2.5 font-bold text-white">
+                            <span>Net Paid Out:</span>
+                            <span className="text-white font-mono text-sm font-black">₹{Number(sc.net_salary).toLocaleString('en-IN')}</span>
+                          </div>
                         </div>
-                        <div className="flex justify-between">
-                          <span>Late Fines Deducted:</span>
-                          <span className="text-[#F87171] font-mono">-₹{Number(sc.confirmed_fines).toLocaleString('en-IN')}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>Special Fines Deducted:</span>
-                          <span className="text-[#F87171] font-mono">-₹{Number(sc.confirmed_special_fines).toLocaleString('en-IN')}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>Leave Deductions:</span>
-                          <span className="text-[#F87171] font-mono">-₹{Number(sc.leave_deduction).toLocaleString('en-IN')}</span>
-                        </div>
-                        <div className="flex justify-between border-t border-[var(--border-strong)] pt-2.5 font-bold text-white">
-                          <span>Net Paid Out:</span>
-                          <span className="text-white font-mono text-sm font-black">₹{Number(sc.net_salary).toLocaleString('en-IN')}</span>
-                        </div>
-                      </div>
+                      )}
                     </div>
                   ))
                 )}
@@ -2424,37 +2561,48 @@ export default function StaffProfilePage() {
                           <span>Day Type:</span>
                           <span className="text-white capitalize">{selectedDayDetail.record.day_type || 'present'}</span>
                         </div>
-                        <div className="flex justify-between">
-                          <span>Late Minutes:</span>
-                          <span className="text-white font-mono">{selectedDayDetail.record.minutes_late} mins</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>Actual Hours Worked:</span>
-                          <span className="text-white font-mono">{selectedDayDetail.record.actual_hours_worked} hours</span>
-                        </div>
-                        <div className="flex justify-between border-t border-[var(--border-strong)] pt-2 mt-1">
-                          <span>OT Minutes:</span>
-                          <span className="text-white font-mono">{selectedDayDetail.record.ot_minutes} mins ({selectedDayDetail.record.ot_approved ? 'Approved' : 'Pending'})</span>
-                        </div>
-                        {(selectedDayDetail.record.early_leave_minutes ?? 0) > 0 && (
+                        {staff?.pay_type === 'hourly' ? (
+                          <div className="flex justify-between border-t border-[var(--border-strong)] pt-2 mt-1">
+                            <span>Hours Logged Today:</span>
+                            <span className="text-[#60A5FA] font-mono font-bold">
+                              {Number(selectedDayDetail.record.total_hours_logged || 0).toFixed(2)} hours
+                            </span>
+                          </div>
+                        ) : (
                           <>
-                            <div className="flex justify-between border-t border-[var(--border-strong)] pt-2 mt-1 text-[#F87171]">
-                              <span>Early Leave Duration:</span>
-                              <span className="font-mono">{selectedDayDetail.record.early_leave_minutes} mins</span>
+                            <div className="flex justify-between">
+                              <span>Late Minutes:</span>
+                              <span className="text-white font-mono">{selectedDayDetail.record.minutes_late} mins</span>
                             </div>
-                            <div className="flex justify-between text-[#F87171]">
-                              <span>Early Leave Deduction:</span>
-                              <span className="font-mono">
-                                -₹{(() => {
-                                  const salary = staff?.monthly_salary || 0;
-                                  const shiftHours = staff?.shift?.hours || 9;
-                                  const [yr, mo] = selectedDayDetail.dateStr.split('-').map(Number);
-                                  const calendarDays = new Date(yr, mo, 0).getDate();
-                                  const dailyRate = salary / calendarDays;
-                                  return calculateEarlyLeaveDeduction(selectedDayDetail.record.early_leave_minutes ?? 0, dailyRate, shiftHours);
-                                })()}
-                              </span>
+                            <div className="flex justify-between">
+                              <span>Actual Hours Worked:</span>
+                              <span className="text-white font-mono">{selectedDayDetail.record.actual_hours_worked} hours</span>
                             </div>
+                            <div className="flex justify-between border-t border-[var(--border-strong)] pt-2 mt-1">
+                              <span>OT Minutes:</span>
+                              <span className="text-white font-mono">{selectedDayDetail.record.ot_minutes} mins ({selectedDayDetail.record.ot_approved ? 'Approved' : 'Pending'})</span>
+                            </div>
+                            {(selectedDayDetail.record.early_leave_minutes ?? 0) > 0 && (
+                              <>
+                                <div className="flex justify-between border-t border-[var(--border-strong)] pt-2 mt-1 text-[#F87171]">
+                                  <span>Early Leave Duration:</span>
+                                  <span className="font-mono">{selectedDayDetail.record.early_leave_minutes} mins</span>
+                                </div>
+                                <div className="flex justify-between text-[#F87171]">
+                                  <span>Early Leave Deduction:</span>
+                                  <span className="font-mono">
+                                    -₹{(() => {
+                                      const salary = staff?.monthly_salary || 0;
+                                      const shiftHours = staff?.shift?.hours || 9;
+                                      const [yr, mo] = selectedDayDetail.dateStr.split('-').map(Number);
+                                      const calendarDays = new Date(yr, mo, 0).getDate();
+                                      const dailyRate = salary / calendarDays;
+                                      return calculateEarlyLeaveDeduction(selectedDayDetail.record.early_leave_minutes ?? 0, dailyRate, shiftHours);
+                                    })()}
+                                  </span>
+                                </div>
+                              </>
+                            )}
                           </>
                         )}
                       </div>

@@ -9,7 +9,7 @@ import { Clock, RefreshCw, CircleCheck, CircleX, AlertTriangle, X, AlertCircle, 
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import * as XLSX from 'xlsx';
 import { DEPARTMENTS } from '@/lib/data';
-import { calculateOTMinutes, calculateActualHours, calculateEarlyLeaveDeduction, calculateEarlyLeaveMinutes, calculateLateMinutes } from '@/lib/salary';
+import { calculateOTMinutes, calculateActualHours, calculateEarlyLeaveDeduction, calculateEarlyLeaveMinutes, calculateLateMinutes, autoCloseCheckouts } from '@/lib/salary';
 import { formatTime12hr } from '@/lib/utils';
 
 
@@ -30,6 +30,8 @@ interface StaffMember {
     end_time: string;
   };
   off_days_per_month?: number;
+  pay_type?: string;
+  standard_hours?: number;
 }
 
 interface AttendanceRecord {
@@ -52,6 +54,8 @@ interface AttendanceRecord {
   photo_flagged?: boolean;
   photo_flag_reason?: string | null;
   photo_flagged_by?: string | null;
+  auto_closed?: boolean;
+  total_hours_logged?: number;
 }
 
 interface LateFine {
@@ -181,6 +185,15 @@ export default function AttendancePage() {
       document.body.style.backgroundColor = '';
     };
   }, [viewMode]);
+
+  useEffect(() => {
+    if (userBranch) {
+      autoCloseCheckouts(userBranch);
+    } else {
+      autoCloseCheckouts('daily');
+      autoCloseCheckouts('hypermarket');
+    }
+  }, [userBranch]);
 
   // Edit & Detail Attendance States
   const [detailModalOpen, setDetailModalOpen] = useState(false);
@@ -869,13 +882,14 @@ export default function AttendancePage() {
         }
       }
 
-      const minutes_late = liveMinutesLate;
+      const isHourly = detailRecord?.pay_type === 'hourly';
+      const minutes_late = isHourly ? 0 : liveMinutesLate;
       const actual_hours_worked = liveHoursWorked;
-      const ot_minutes = liveOTMinutes;
-      const color_code = liveColorCode;
-      const early_leave_minutes = liveEarlyLeaveMinutes;
+      const ot_minutes = isHourly ? 0 : liveOTMinutes;
+      const color_code = isHourly ? 'green' : liveColorCode;
+      const early_leave_minutes = isHourly ? 0 : liveEarlyLeaveMinutes;
 
-      const late_salary_deduction_minutes = editStatus === 'absent' ? 0 : calculateLateMinutes(editCheckInTime, detailRecord?.shift?.start_time || '09:00');
+      const late_salary_deduction_minutes = isHourly || editStatus === 'absent' ? 0 : calculateLateMinutes(editCheckInTime, detailRecord?.shift?.start_time || '09:00');
 
       const attendanceData: any = {
         staff_id: staffId,
@@ -888,9 +902,10 @@ export default function AttendancePage() {
         actual_hours_worked,
         ot_minutes,
         early_leave_minutes: editStatus === 'absent' ? 0 : early_leave_minutes,
-        ot_approved: otApproved,
+        ot_approved: isHourly ? false : otApproved,
         color_code,
-        marked_by: 'manual_edit'
+        marked_by: 'manual_edit',
+        total_hours_logged: isHourly ? (editStatus === 'absent' ? 0 : actual_hours_worked) : 0
       };
 
       const { error: attErr } = await supabase
@@ -899,7 +914,7 @@ export default function AttendancePage() {
 
       if (attErr) throw attErr;
 
-      if (editStatus === 'late' && editFineAmount > 0) {
+      if (!isHourly && editStatus === 'late' && editFineAmount > 0) {
         const [year, monthStr] = date.split('-');
         const monthKey = `${year}-${monthStr}`;
 
@@ -928,7 +943,7 @@ export default function AttendancePage() {
           .eq('date', date);
       }
 
-      if (ot_minutes > 0) {
+      if (!isHourly && ot_minutes > 0) {
         const { data: existingAdj } = await supabase
           .from('attendance_adjustments')
           .select('id')
@@ -1364,7 +1379,7 @@ export default function AttendancePage() {
 
         const { data: staffList, error: staffErr } = await supabase
           .from('staff')
-          .select('id, name, pin, branch_id, shift_id, shift:shifts(start_time, end_time, hours)')
+          .select('id, name, pin, branch_id, shift_id, pay_type, standard_hours, shift:shifts(start_time, end_time, hours)')
           .in('pin', allPins);
 
         if (staffErr) throw staffErr;
@@ -1443,6 +1458,7 @@ export default function AttendancePage() {
             outTime,
             shift: staff?.shift || null,
             branchId: staff?.branch_id || '',
+            pay_type: staff?.pay_type || 'fixed_shift',
             status: errors.length > 0 ? 'error' : (hasOverlap ? 'overwrite' : 'ready'),
             errors,
             overwrite: hasOverlap
@@ -1542,11 +1558,13 @@ export default function AttendancePage() {
         const shiftStart = row.shift.start_time || '09:00';
         const shiftEnd = row.shift.end_time || '18:00';
 
-        let minutesLate = calculateLateMinutes(row.inTime, shiftStart);
-        let status: 'present' | 'late' = minutesLate > 0 ? 'late' : 'present';
+        const isHourly = row.pay_type === 'hourly';
+
+        let minutesLate = isHourly ? 0 : calculateLateMinutes(row.inTime, shiftStart);
+        let status: 'present' | 'late' = (!isHourly && minutesLate > 0) ? 'late' : 'present';
         let colorCode: 'green' | 'yellow' | 'orange' | 'red' = 'green';
 
-        if (status === 'late') {
+        if (!isHourly && status === 'late') {
           if (minutesLate <= 15) {
             colorCode = 'yellow';
           } else if (minutesLate <= 30) {
@@ -1561,16 +1579,16 @@ export default function AttendancePage() {
         let earlyLeaveMinutes = 0;
 
         if (row.outTime) {
-          otMinutes = calculateOTFromImport(row.outTime, shiftEnd, shiftStart);
+          otMinutes = isHourly ? 0 : calculateOTFromImport(row.outTime, shiftEnd, shiftStart);
           actualHoursWorked = calculateActualHours(row.inTime, row.outTime);
-          earlyLeaveMinutes = calculateEarlyLeaveMinutes(shiftEnd, row.outTime, shiftStart);
+          earlyLeaveMinutes = isHourly ? 0 : calculateEarlyLeaveMinutes(shiftEnd, row.outTime, shiftStart);
         }
 
         // FIX 4: Build the record object dynamically.
         // If schema cache errors occur, go to
         // Supabase Dashboard → Settings → API
         // and click "Reload schema cache"
-        const lateSalaryDeductionMins = calculateLateMinutes(row.inTime, shiftStart);
+        const lateSalaryDeductionMins = isHourly ? 0 : calculateLateMinutes(row.inTime, shiftStart);
 
         const record: any = {
           staff_id: row.staffId,
@@ -1582,7 +1600,8 @@ export default function AttendancePage() {
           late_salary_deduction_minutes: lateSalaryDeductionMins,
           color_code: colorCode,
           marked_by: 'import',
-          early_leave_minutes: earlyLeaveMinutes
+          early_leave_minutes: earlyLeaveMinutes,
+          total_hours_logged: isHourly ? (actualHoursWorked || 0) : 0
         };
 
         if (actualHoursWorked && actualHoursWorked > 0) record.actual_hours_worked = actualHoursWorked;
@@ -1627,7 +1646,7 @@ export default function AttendancePage() {
         if (row.outTime) checkOuts++;
 
         let fineAmount = 0;
-        if (status === 'late' && !exemptStaffIds.has(row.staffId)) {
+        if (!isHourly && status === 'late' && !exemptStaffIds.has(row.staffId)) {
           if (colorCode === 'yellow') {
             const currentYellows = yellowCountsMap.get(row.staffId) || 0;
             yellowCountsMap.set(row.staffId, currentYellows + 1);
@@ -1654,7 +1673,7 @@ export default function AttendancePage() {
           }, { onConflict: 'staff_id,date' });
           if (fineErr) throw fineErr;
           finesLogged++;
-        } else {
+        } else if (!isHourly) {
           // Delete any existing unconfirmed fine for this date
           await supabase
             .from('late_fines')
@@ -1664,7 +1683,7 @@ export default function AttendancePage() {
             .eq('confirmed', false);
         }
 
-        if (otMinutes > 0) {
+        if (!isHourly && otMinutes > 0) {
           const { data: existingAdj } = await supabase
             .from('attendance_adjustments')
             .select('id')
@@ -2347,7 +2366,17 @@ export default function AttendancePage() {
     }).filter(Boolean);
   }, [combinedData, filteredData, branchFilter, userBranch]);
 
-  const getStatusBadge = (record: AttendanceRecord | null) => {
+  const getStatusBadge = (record: AttendanceRecord | null, payType?: string) => {
+    if (payType === 'hourly') {
+      const hours = record?.total_hours_logged ? Number(record.total_hours_logged) : 0;
+      return (
+        <span className="bg-blue-50 text-blue-600 border border-blue-200 text-[10px] font-bold px-2.5 py-1.5 rounded-[20px] uppercase tracking-wider flex items-center space-x-1.5">
+          <Clock size={14} strokeWidth={2} style={{ color: 'currentColor' }} />
+          <span>{hours.toFixed(2)} hrs logged</span>
+        </span>
+      );
+    }
+
     if (record) {
       if (record.day_type === 'weekly_off') {
         return (
@@ -2399,7 +2428,11 @@ export default function AttendancePage() {
     );
   };
 
-  const getDotColor = (record: AttendanceRecord | null) => {
+  const getDotColor = (record: AttendanceRecord | null, payType?: string) => {
+    if (payType === 'hourly') {
+      if (!record || !record.check_in_time) return 'bg-[#6B7280]';
+      return 'bg-[#3B82F6]'; // Neutral blue color
+    }
     if (!record) return 'bg-[#6B7280]';
     if (record.day_type === 'weekly_off') return 'bg-[#60A5FA]';
     if (record.day_type === 'holiday') return 'bg-[#A78BFA]';
@@ -2816,7 +2849,7 @@ export default function AttendancePage() {
                 className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex items-start space-x-3.5 relative shadow-sm cursor-pointer hover:border-[#D0D0D0] transition-all"
               >
                 {/* Left Dot Indicator */}
-                <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 mt-2 ${getDotColor(item.record)}`} />
+                <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 mt-2 ${getDotColor(item.record, item.pay_type)}`} />
 
                 {/* Avatar */}
                 <div
@@ -2837,7 +2870,7 @@ export default function AttendancePage() {
                         {item.name}
                       </h3>
                       <p className="text-[11px] text-[var(--text-muted)] font-semibold mt-0.5 leading-none">
-                        {item.department} • {item.shift?.label || 'No Shift'}
+                        {item.department} • {item.pay_type === 'hourly' ? 'Hourly' : (item.shift?.label || 'No Shift')}
                       </p>
                       <div className="flex flex-wrap gap-1 mt-1">
                         {!userBranch && (
@@ -2896,7 +2929,7 @@ export default function AttendancePage() {
                         </div>
                       )}
                       <div>
-                        {getStatusBadge(item.record)}
+                        {getStatusBadge(item.record, item.pay_type)}
                       </div>
                     </div>
                   </div>
@@ -3023,6 +3056,15 @@ export default function AttendancePage() {
                               )}
                             </div>
                           )}
+                        </div>
+                      )}
+
+                      {item.record && item.record.auto_closed && (
+                        <div 
+                          className="bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-bold px-2.5 py-1 rounded-[20px] cursor-help"
+                          title="Checkout was automatically set to shift end time. Edit if needed."
+                        >
+                          Auto-closed
                         </div>
                       )}
 

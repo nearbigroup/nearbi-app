@@ -85,27 +85,40 @@ export default function StaffHomePage() {
 
         const daysPresent = attData?.filter(a => a.check_in_time && a.status !== 'absent').length || 0;
         const daysLate = attData?.filter(a => a.status === 'late').length || 0;
-        const daysAbsent = attData?.filter(a => 
-          a.status === 'absent' && 
-          a.day_type !== 'weekly_off' && 
-          a.day_type !== 'holiday' && 
-          !approvedLeaveDates.has(a.date)
-        ).length || 0;
+        const todayStr = new Date().toISOString().split('T')[0];
+        const daysAbsent = attData?.filter(a => {
+          if (a.status !== 'absent') return false;
+          if (a.day_type === 'weekly_off' || a.day_type === 'holiday') return false;
+          if (approvedLeaveDates.has(a.date)) return false;
+          if (a.date === todayStr && sData.shift?.start_time) {
+            const now = new Date();
+            const nowMins = now.getHours() * 60 + now.getMinutes();
+            const [sh, sm] = sData.shift.start_time.split(':').map(Number);
+            const shiftStartMins = sh * 60 + sm;
+            if (nowMins < shiftStartMins + 30) {
+              return false;
+            }
+          }
+          return true;
+        }).length || 0;
         const earlyExitsCount = attData?.filter(a => (a.early_leave_minutes || 0) > 0).length || 0;
 
         const offDaysCount = sData.off_days_per_month || 4;
 
-        // Unfair Attendance Score Relative Join Date fix (Fix 7)
-        const joinDate = sData.join_date ? new Date(sData.join_date) : new Date(year, monthNum - 1, 1);
         const monthStart = new Date(year, monthNum - 1, 1);
-        const startCalcDate = joinDate > monthStart ? joinDate : monthStart;
-        const daysSinceStart = calendarDays - startCalcDate.getDate() + 1;
-        const proratedOffDays = Math.round((offDaysCount * daysSinceStart) / calendarDays);
-        const requiredWorkingDays = Math.max(0, daysSinceStart - proratedOffDays);
+        const joinDate = sData.join_date ? new Date(sData.join_date) : monthStart;
+        const effectiveStart = joinDate > monthStart ? joinDate : monthStart;
+        const todayObj = new Date();
+        const effectiveStartZero = new Date(effectiveStart.getFullYear(), effectiveStart.getMonth(), effectiveStart.getDate());
+        const todayZero = new Date(todayObj.getFullYear(), todayObj.getMonth(), todayObj.getDate());
+        
+        const daysAvailable = Math.max(1, Math.floor(
+          (todayZero.getTime() - effectiveStartZero.getTime()) / (1000 * 60 * 60 * 24)
+        ) + 1);
 
-        const attendancePercentage = requiredWorkingDays > 0 
-          ? Math.min(100, Math.round((daysPresent / requiredWorkingDays) * 100)) 
-          : 100;
+        const attendancePercentage = Math.min(100,
+          Math.round((daysPresent / daysAvailable) * 100)
+        );
 
         setStats({
           present: daysPresent,
@@ -114,7 +127,7 @@ export default function StaffHomePage() {
           weeklyOffs: offDaysCount,
           lateCount: daysLate,
           earlyExits: earlyExitsCount,
-          requiredDays: requiredWorkingDays,
+          requiredDays: daysAvailable,
           percentage: attendancePercentage
         });
 

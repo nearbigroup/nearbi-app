@@ -19,6 +19,17 @@ export function calculateEarlyLeaveDeduction(
   return Math.round(deduction * 100) / 100;
 }
 
+export function calculateLateSalaryDeduction(
+  totalLateDeductionMinutes: number,
+  hourlyRate: number
+): number {
+  if (!totalLateDeductionMinutes ||
+      totalLateDeductionMinutes <= 0) return 0;
+  const deduction =
+    (totalLateDeductionMinutes / 60) * hourlyRate;
+  return Math.round(deduction * 100) / 100;
+}
+
 export function calculateBonusDays(
   daysWorked: number,
   offDaysPerMonth: 0 | 2 | 4
@@ -55,6 +66,9 @@ export function calculateHourlySalary(
   totalHours: number;
   netSalary: number;
 } {
+  if (!standardHours || standardHours <= 0) {
+    return { hourlyRate: 0, totalHours: 0, netSalary: 0 };
+  }
   const hourlyRate = monthlySalary / standardHours;
   const netSalary = totalHoursWorked * hourlyRate;
   return {
@@ -139,7 +153,7 @@ export function calculateSalary(
   );
 
   // Late salary deduction (permanent)
-  const lateSalaryDeduction = (late_salary_deduction_minutes / 60) * hourlyRate;
+  const lateSalaryDeduction = calculateLateSalaryDeduction(late_salary_deduction_minutes, hourlyRate);
 
   // Leave deduction (always salary deducted)
   const leaveDeduction = missingDays * dailyRate;
@@ -176,9 +190,12 @@ export function calculateSalary(
   };
 }
 
-function getMinutes(time: string): number {
+export function getMinutes(time: string): number {
   if (!time) return 0
-  const [h, m] = time.split(':').map(Number)
+  const parts = time.split(':')
+  if (parts.length < 2) return 0
+  const h = parseInt(parts[0]) || 0
+  const m = parseInt(parts[1]) || 0
   return (h * 60) + m
 }
 
@@ -190,6 +207,7 @@ export function calculateMinutesWorked(
   const inMins = getMinutes(checkIn)
   const outMins = getMinutes(checkOut)
   if (outMins <= inMins) {
+    // checkout is next day
     return (outMins + 1440) - inMins
   }
   return outMins - inMins
@@ -286,5 +304,74 @@ export async function calculateActualHoursWithBreaks(
   const netMins = rawMins - totalBreakMins;
   return Math.max(0, Math.round((netMins / 60) * 100) / 100);
 }
+
+export async function autoCloseCheckouts(effectiveBranch: string | null) {
+  if (!effectiveBranch) return;
+  const now = new Date();
+  const todayStr = now.toISOString().split('T')[0];
+  const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const yesterdayStr = yesterday.toISOString().split('T')[0];
+
+  // Find staff with check-in but no checkout for yesterday and today
+  const { data: openCheckIns } = await supabase
+    .from('attendance')
+    .select('*, staff!inner(*, shifts(*))')
+    .in('date', [yesterdayStr, todayStr])
+    .not('check_in_time', 'is', null)
+    .is('check_out_time', null)
+    .eq('staff.branch_id', effectiveBranch);
+
+  for (const record of openCheckIns || []) {
+    const shift = Array.isArray(record.staff?.shifts)
+      ? record.staff.shifts[0]
+      : (record.staff?.shifts || record.staff?.shift || {});
+    const shiftEnd = shift?.end_time || '18:00';
+    const shiftStart = shift?.start_time || '09:00';
+
+    // Parse shift end time
+    const [startY, startM, startD] = record.date.split('-').map(Number);
+    const [startH, startMin] = shiftStart.split(':').map(Number);
+    const [endH, endMin] = shiftEnd.split(':').map(Number);
+
+    const shiftStartDateObj = new Date(startY, startM - 1, startD, startH, startMin, 0);
+    const shiftEndDateObj = new Date(startY, startM - 1, startD, endH, endMin, 0);
+    if (shiftEndDateObj.getTime() < shiftStartDateObj.getTime()) {
+      shiftEndDateObj.setDate(shiftEndDateObj.getDate() + 1);
+    }
+
+    const cutoffTime = shiftEndDateObj.getTime() + 60 * 60 * 1000;
+
+    if (now.getTime() > cutoffTime) {
+      // Set checkout to shift end time
+      const hoursWorked = calculateMinutesWorked(record.check_in_time, shiftEnd) / 60;
+
+      await supabase
+        .from('attendance')
+        .update({
+          check_out_time: shiftEnd,
+          actual_hours_worked: Math.round(hoursWorked * 100) / 100,
+          ot_minutes: 0,
+          early_leave_minutes: 0,
+          auto_closed: true
+        })
+        .eq('id', record.id);
+
+      // Notify HR
+      await supabase
+        .from('notifications')
+        .insert({
+          type: 'absent_alert',
+          title: 'Checkout Auto-Completed',
+          message: `${record.staff.name} forgot to check out. Auto-closed at shift end (${shiftEnd}). Please review if actual checkout was different.`,
+          branch_id: effectiveBranch,
+          staff_id: record.staff_id,
+          target_role: 'staff_executive',
+          is_read: false
+        });
+    }
+  }
+}
+
+
 
 

@@ -1308,14 +1308,19 @@ export default function StaffPage() {
             .eq('month', monthStr);
 
           // Calculate scores
-          const calendarDays = new Date(year, month, 0).getDate();
-          const requiredDays = calendarDays - (s.off_days_per_month || 0);
+          const monthStart = new Date(year, month - 1, 1);
+          const joinDate = s.join_date ? new Date(s.join_date) : monthStart;
+          const effectiveStart = joinDate > monthStart ? joinDate : monthStart;
+          const todayZero = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+          const effectiveStartZero = new Date(effectiveStart.getFullYear(), effectiveStart.getMonth(), effectiveStart.getDate());
+          const daysAvailable = Math.max(1, Math.floor(
+            (todayZero.getTime() - effectiveStartZero.getTime()) / (1000 * 60 * 60 * 24)
+          ) + 1);
+          
           const daysWorked = attRecords?.filter(r => r.check_in_time).length || 0;
 
           // Attendance score (40 pts)
-          const attScore = requiredDays > 0
-            ? Math.round((daysWorked / requiredDays) * 40)
-            : 40;
+          const attScore = Math.round((daysWorked / daysAvailable) * 40);
           const attendanceScore = Math.min(40, Math.max(0, attScore));
 
           // Punctuality score (30 pts)
@@ -2607,9 +2612,9 @@ export default function StaffPage() {
                 </div>
 
                 {formData.pay_type === 'hourly' ? (
-                  <div>
+                  <div className="space-y-1.5">
                     <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
-                      Standard Hours
+                      Standard monthly hours
                     </label>
                     <input
                       type="number"
@@ -2619,6 +2624,12 @@ export default function StaffPage() {
                       className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
                       required
                     />
+                    <div className="flex justify-between items-center text-[11px] font-semibold text-[var(--text-muted)] px-1">
+                      <span>e.g. 234 = 26 days × 9 hrs</span>
+                      <span>
+                        Hourly rate: ₹{((Number(formData.monthly_salary) || 0) / (Number(formData.standard_hours) || 234)).toFixed(2)} / hr
+                      </span>
+                    </div>
                   </div>
                 ) : (
                   <>
@@ -2981,9 +2992,9 @@ export default function StaffPage() {
                 </div>
 
                 {editStaffForm.pay_type === 'hourly' ? (
-                  <div>
+                  <div className="space-y-1.5">
                     <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
-                      Standard Hours
+                      Standard monthly hours
                     </label>
                     <input
                       type="number"
@@ -2993,6 +3004,12 @@ export default function StaffPage() {
                       className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-sm focus:outline-none focus:border-[#1A1A1A] text-[#1A1A1A]"
                       required
                     />
+                    <div className="flex justify-between items-center text-[11px] font-semibold text-[var(--text-muted)] px-1">
+                      <span>e.g. 234 = 26 days × 9 hrs</span>
+                      <span>
+                        Hourly rate: ₹{((Number(editStaffForm.monthly_salary) || 0) / (Number(editStaffForm.standard_hours) || 234)).toFixed(2)} / hr
+                      </span>
+                    </div>
                   </div>
                 ) : (
                   <>

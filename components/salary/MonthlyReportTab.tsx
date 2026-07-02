@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { Staff, SalaryConfirmation, SalaryPayment } from './types';
 import { formatCurrency, getPastMonths, formatMonthDisplay } from './utils';
 import { Download } from 'lucide-react';
-import { calculateSalary } from '@/lib/salary';
+import { calculateSalary, calculateLateSalaryDeduction } from '@/lib/salary';
 import XLSX from 'xlsx-js-style';
 
 export default function MonthlyReportTab({
@@ -17,6 +17,7 @@ export default function MonthlyReportTab({
 }) {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
+  const [exporting, setExporting] = useState(false);
   
   const months = getPastMonths(6);
   const [selectedMonthState, setSelectedMonthState] = useState(propMonth || months[0]);
@@ -496,6 +497,7 @@ export default function MonthlyReportTab({
   const createStyledSummarySheet = (dataRows: any[][]) => {
     const ws = XLSX.utils.aoa_to_sheet(dataRows);
 
+    // Auto-fit widths
     const colWidths = dataRows[0].map((_, colIndex) => {
       let maxLen = 10;
       dataRows.forEach(row => {
@@ -509,68 +511,90 @@ export default function MonthlyReportTab({
     });
     ws['!cols'] = colWidths;
 
-    // Set row heights: header (28px), data (20px), totals (24px)
+    // Heights: header (30px), data (22px), totals (24px)
     ws['!rows'] = dataRows.map((_, r) => {
-      if (r === 0) return { hpt: 28 };
+      if (r === 0) return { hpt: 30 };
       if (r === dataRows.length - 1) return { hpt: 24 };
-      return { hpt: 20 };
+      return { hpt: 22 };
     });
+
+    // Freeze top row
+    ws['!views'] = [
+      {
+        pane: {
+          state: 'frozen',
+          xSplit: 0,
+          ySplit: 1,
+          topLeftCell: 'A2',
+          activePane: 'bottomLeft'
+        }
+      }
+    ];
 
     const headerStyle = {
       fill: { fgColor: { rgb: "1E2028" } },
       font: { bold: true, color: { rgb: "FFFFFF" }, sz: 10 },
       alignment: { horizontal: "center", vertical: "center", wrapText: true },
       border: {
-        top: { style: "thin", color: { rgb: "CCCCCC" } },
-        bottom: { style: "thin", color: { rgb: "CCCCCC" } },
-        left: { style: "thin", color: { rgb: "CCCCCC" } },
-        right: { style: "thin", color: { rgb: "CCCCCC" } }
-      }
-    };
-    
-    const dataStyleEven = {
-      fill: { fgColor: { rgb: "FFFFFF" } },
-      font: { sz: 9 },
-      border: {
-        top: { style: "thin", color: { rgb: "EAEAEA" } },
-        bottom: { style: "thin", color: { rgb: "EAEAEA" } },
-        left: { style: "thin", color: { rgb: "EAEAEA" } },
-        right: { style: "thin", color: { rgb: "EAEAEA" } }
-      }
-    };
-
-    const dataStyleOdd = {
-      fill: { fgColor: { rgb: "F9F9F9" } },
-      font: { sz: 9 },
-      border: {
-        top: { style: "thin", color: { rgb: "EAEAEA" } },
-        bottom: { style: "thin", color: { rgb: "EAEAEA" } },
-        left: { style: "thin", color: { rgb: "EAEAEA" } },
-        right: { style: "thin", color: { rgb: "EAEAEA" } }
+        top: { style: "thin", color: { rgb: "333333" } },
+        bottom: { style: "thin", color: { rgb: "333333" } },
+        left: { style: "thin", color: { rgb: "333333" } },
+        right: { style: "thin", color: { rgb: "333333" } }
       }
     };
 
     const totalsStyle = {
-      fill: { fgColor: { rgb: "E8E8E8" } },
-      font: { bold: true, sz: 10 },
+      fill: { fgColor: { rgb: "1E2028" } },
+      font: { bold: true, color: { rgb: "FFFFFF" }, sz: 10 },
       border: {
         top: { style: "medium", color: { rgb: "1E2028" } },
         bottom: { style: "double", color: { rgb: "1E2028" } },
-        left: { style: "thin", color: { rgb: "CCCCCC" } },
-        right: { style: "thin", color: { rgb: "CCCCCC" } }
+        left: { style: "thin", color: { rgb: "333333" } },
+        right: { style: "thin", color: { rgb: "333333" } }
       }
     };
 
     for (let r = 0; r < dataRows.length; r++) {
+      const rowData = dataRows[r];
+      const statusVal = rowData[21]; // STATUS is index 21
+
+      let rowStyle: any = {
+        fill: { fgColor: { rgb: r % 2 === 0 ? "FFFFFF" : "F8F8F8" } },
+        font: { sz: 9 },
+        border: {
+          top: { style: "thin", color: { rgb: "EAEAEA" } },
+          bottom: { style: "thin", color: { rgb: "EAEAEA" } },
+          left: { style: "thin", color: { rgb: "EAEAEA" } },
+          right: { style: "thin", color: { rgb: "EAEAEA" } }
+        }
+      };
+
+      if (r > 0 && r < dataRows.length - 1) {
+        if (statusVal === 'Pending') {
+          rowStyle = {
+            fill: { fgColor: { rgb: "FFFBEB" } },
+            font: { sz: 9 },
+            border: rowStyle.border
+          };
+        } else if (statusVal === 'Changed') {
+          rowStyle = {
+            fill: { fgColor: { rgb: "FFF5F5" } },
+            font: { sz: 9 },
+            border: rowStyle.border
+          };
+        }
+      }
+
       for (let c = 0; c < dataRows[r].length; c++) {
         const cellRef = XLSX.utils.encode_cell({ r, c });
         if (!ws[cellRef]) continue;
 
-        // SL.NO (0), Name (1), Branch (2), Department (3), Pay Type (4) are text columns -> left align
-        // All others are numeric -> right align
-        const alignment = (c <= 4)
+        // Alignment: Names & Notes left-aligned, Status centered, Others right-aligned
+        const alignment = (c === 1 || c === 2 || c === 3 || c === 22)
           ? { horizontal: "left", vertical: "center" }
-          : { horizontal: "right", vertical: "center" };
+          : (c === 0 || c === 21)
+            ? { horizontal: "center", vertical: "center" }
+            : { horizontal: "right", vertical: "center" };
 
         if (r === 0) {
           ws[cellRef].s = headerStyle;
@@ -579,12 +603,39 @@ export default function MonthlyReportTab({
             ...totalsStyle,
             alignment
           };
+          const val = dataRows[r][c];
+          if (typeof val === 'number') {
+            ws[cellRef].t = 'n';
+            ws[cellRef].z = '0.00';
+          }
         } else {
-          const rowStyle = r % 2 === 0 ? dataStyleEven : dataStyleOdd;
-          ws[cellRef].s = {
+          let cellStyle = {
             ...rowStyle,
             alignment
           };
+
+          // Custom formatting for STATUS column text color
+          if (c === 21) {
+            let statusColor = "1A1A1A";
+            if (statusVal === "Confirmed") statusColor = "10B981";
+            else if (statusVal === "Pending") statusColor = "F59E0B";
+            else if (statusVal === "Changed") statusColor = "EF4444";
+            cellStyle = {
+              ...cellStyle,
+              font: {
+                ...cellStyle.font,
+                bold: true,
+                color: { rgb: statusColor }
+              }
+            };
+          }
+
+          ws[cellRef].s = cellStyle;
+          const val = dataRows[r][c];
+          if (typeof val === 'number') {
+            ws[cellRef].t = 'n';
+            ws[cellRef].z = '0.00';
+          }
         }
       }
     }
@@ -592,63 +643,303 @@ export default function MonthlyReportTab({
     return ws;
   };
 
-  const getSummaryRowsForStaffList = (list: Staff[]) => {
-    const [yearStr, monthStr] = selectedMonth.split('-');
-    const year = parseInt(yearStr);
-    const monthNum = parseInt(monthStr);
-    const daysInMonth = new Date(year, monthNum, 0).getDate();
+  const handleMonthlySummaryExport = async () => {
+    try {
+      setExporting(true);
+      const [yearStr, monthStr] = selectedMonth.split('-');
+      const year = parseInt(yearStr);
+      const monthNum = parseInt(monthStr);
+      const daysInMonth = new Date(year, monthNum, 0).getDate();
+      const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const firstDay = `${selectedMonth}-01`;
+      const lastDay = new Date(year, monthNum, 0).toISOString().split('T')[0];
 
-    const rowsAOA: any[][] = [];
-    const headers = [
-      'SL.NO', 'NAME', 'BRANCH', 'DEPARTMENT', 'PAY TYPE', 'STANDARD HOURS',
-      'TOTAL HOURS LOGGED', 'HOURLY RATE', 'MONTHLY SALARY',
-      'CALENDAR DAYS', 'REQUIRED DAYS', 'DAYS WORKED', 'EXTRA DAYS',
-      'MISSING DAYS', 'PAID DAYS', 'DAILY RATE', 'GROSS PAY',
-      'OT MINUTES', 'OT PAY', 'EARLY IN PAY', 'EARLY LEAVE DEDUCTION',
-      'LATE FINES', 'SPECIAL FINES', 'NET SALARY'
-    ];
-    rowsAOA.push(headers);
+      const format24h = (timeStr: string | null) => {
+        if (!timeStr) return '';
+        const parts = timeStr.split(':');
+        if (parts.length >= 2) {
+          return `${parts[0].padStart(2, '0')}:${parts[1].padStart(2, '0')}`;
+        }
+        return timeStr;
+      };
 
-    let slNo = 0;
-    list.forEach((s) => {
-      slNo++;
-      const staffAtt = attendanceRecords.filter((r) => r.staff_id === s.id);
-      const staffLeaves = leaveRequests.filter((l: any) => l.staff_id === s.id && l.status === 'approved');
+      // 1. Fetch fresh active staff list
+      const { data: freshStaff, error: staffErr } = await supabase
+        .from('staff')
+        .select('*, branch:branches(name), shift:shifts(*)')
+        .order('name');
+      if (staffErr) throw staffErr;
 
-      const conf = confirmations.find(c => c.staff_id === s.id);
+      // 2. Fetch fresh salary confirmations
+      const { data: freshConfs, error: confErr } = await supabase
+        .from('salary_confirmations')
+        .select('*')
+        .eq('month', selectedMonth);
+      if (confErr) throw confErr;
 
-      let daysActuallyWorked = 0;
-      let approvedOTMinutes = 0;
-      let approvedEarlyInMinutes = 0;
-      let earlyLeaveMinutes = 0;
-      let totalLateFinesAmt = 0;
-      let totalSpecialFinesAmt = 0;
-      let missingDays = 0;
-      let calendarDays = daysInMonth;
-      let requiredWorkingDays = 0;
-      let extraDaysWorked = 0;
-      let paidDays = 0;
-      let dailyRate = 0;
-      let grossPay = 0;
-      let otPay = 0;
-      let earlyInPay = 0;
-      let earlyLeaveDeduction = 0;
-      let netSalary = 0;
-      
-      const isHourly = s.pay_type === 'hourly';
-      const standardHours = conf?.standard_hours ?? s.standard_hours ?? 234;
-      const hourlyRate = conf?.hourly_rate ?? (s.monthly_salary / standardHours);
-      
-      // Sum total hours logged for the month
-      const totalHoursLogged = conf?.total_hours_logged ?? staffAtt.reduce((sum, r) => sum + Number(r.total_hours_logged || 0), 0);
-      const baseSalary = conf?.base_salary ?? s.monthly_salary;
+      // 3. Fetch fresh attendance
+      const { data: freshAtt, error: attErr } = await supabase
+        .from('attendance')
+        .select('*')
+        .gte('date', firstDay)
+        .lte('date', lastDay);
+      if (attErr) throw attErr;
 
-      if (isHourly) {
-        netSalary = conf?.net_salary ?? Math.round(totalHoursLogged * hourlyRate);
-        grossPay = netSalary;
-      } else {
-        daysActuallyWorked = staffAtt.filter(
-          (r) => r.check_in_time !== null && r.day_type !== 'weekly_off' && r.day_type !== 'holiday'
+      // 4. Fetch fresh late fines
+      const { data: freshLateFines, error: lfErr } = await supabase
+        .from('late_fines')
+        .select('*')
+        .eq('month', selectedMonth);
+      if (lfErr) throw lfErr;
+
+      // 5. Fetch fresh special fines
+      const { data: freshSpecialFines, error: sfErr } = await supabase
+        .from('special_fines')
+        .select('*')
+        .eq('month', selectedMonth);
+      if (sfErr) throw sfErr;
+
+      // 6. Fetch fresh leave requests
+      const { data: freshLeaves, error: leaveErr } = await supabase
+        .from('leave_requests')
+        .select('*')
+        .eq('status', 'approved')
+        .gte('date', firstDay)
+        .lte('date', lastDay);
+      if (leaveErr) throw leaveErr;
+
+      // 7. Fetch fresh adjustments
+      const { data: freshAdjs, error: adjErr } = await supabase
+        .from('attendance_adjustments')
+        .select('*')
+        .eq('status', 'approved')
+        .gte('date', firstDay)
+        .lte('date', lastDay);
+      if (adjErr) throw adjErr;
+
+      const activeStaff = (freshStaff || []).filter((s: any) => s.active).sort((a: any, b: any) => a.name.localeCompare(b.name));
+
+      const getSummaryRows = (list: any[]) => {
+        const rowsAOA: any[][] = [];
+        const headers = [
+          'SL.NO', 'NAME', 'BRANCH', 'DEPARTMENT',
+          'DAYS PRESENT', 'WEEKLY OFF USED', 'BONUS DAYS EARNED',
+          'PAID DAYS (LIVE)', 'BASE SALARY', 'DAILY RATE', 'GROSS PAY',
+          'OT APPROVED MINS', 'OT PAY (₹)',
+          'EARLY-IN APPROVED MINS', 'EARLY-IN PAY (₹)',
+          'LATE ARRIVAL DEDUCTION (₹)', 'EARLY LEAVE DEDUCTION (₹)',
+          'LATE FINES CONFIRMED (₹)', 'SPECIAL FINES (₹)',
+          'NET SALARY — LIVE (₹)', 'NET SALARY — CONFIRMED (₹)',
+          'STATUS', 'NOTE'
+        ];
+        rowsAOA.push(headers);
+
+        let slNo = 0;
+        list.forEach((s) => {
+          slNo++;
+          const staffAtt = (freshAtt || []).filter((r: any) => r.staff_id === s.id);
+          const staffLeaves = (freshLeaves || []).filter((l: any) => l.staff_id === s.id);
+          const conf = (freshConfs || []).find((c: any) => c.staff_id === s.id);
+
+          const isHourly = s.pay_type === 'hourly';
+          const shiftHours = s.shift?.hours || 9;
+
+          // Days present: check_in_time is not null/empty
+          const daysActuallyWorked = staffAtt.filter(
+            (r: any) => r.check_in_time !== null && r.check_in_time !== undefined && r.check_in_time !== ''
+          ).length;
+
+          // Count genuine absent days and approved leave days
+          let genuineAbsentDays = 0;
+          for (let d = 1; d <= daysInMonth; d++) {
+            const dateStr = `${selectedMonth}-${String(d).padStart(2, '0')}`;
+            const att = staffAtt.find((r: any) => r.date === dateStr);
+            const hasLeave = staffLeaves.some((l: any) => l.date === dateStr);
+
+            if (att) {
+              if (att.status === 'absent' && att.day_type !== 'weekly_off' && att.day_type !== 'holiday' && !hasLeave) {
+                genuineAbsentDays++;
+              }
+            } else {
+              if (!hasLeave) {
+                genuineAbsentDays++;
+              }
+            }
+          }
+
+          const offDaysPerMonth = s.off_days_per_month as 0 | 2 | 4;
+          let earnedQuota = 0;
+          if (offDaysPerMonth === 4) {
+            earnedQuota = Math.min(Math.floor(daysActuallyWorked / 6), 4);
+          } else if (offDaysPerMonth === 2) {
+            earnedQuota = Math.min(Math.floor(daysActuallyWorked / 12), 2);
+          }
+
+          const weeklyOffDates = new Set([
+            ...staffAtt.filter((r: any) => r.day_type === 'weekly_off').map((r: any) => r.date),
+            ...staffLeaves.filter((l: any) => l.is_weekly_off === true).map((l: any) => l.date)
+          ]);
+          const weeklyOffsTaken = weeklyOffDates.size;
+          const weeklyOffsUsed = Math.min(weeklyOffsTaken, earnedQuota);
+
+          const absences = daysInMonth - daysActuallyWorked;
+          const manualExtraLeaves = conf?.extra_leave_days || 0;
+          const deductedDays = Math.max(0, absences - weeklyOffsUsed) + manualExtraLeaves;
+          const missingDays = deductedDays;
+
+          const approvedOTMinutes = staffAtt
+            .filter((r: any) => r.ot_approved === true)
+            .reduce((sum: number, r: any) => sum + (r.ot_minutes || 0), 0) || 0;
+
+          const approvedEarlyInMinutes = staffAtt
+            .filter((r: any) => r.early_in_approved === true)
+            .reduce((sum: number, r: any) => sum + (r.early_in_minutes || 0), 0) || 0;
+
+          const earlyLeaveMinutes = staffAtt.reduce(
+            (sum: number, r: any) => sum + (r.early_leave_minutes || 0), 0
+          ) || 0;
+
+          const staffLateFines = (freshLateFines || []).filter(
+            (lf: any) => lf.staff_id === s.id && lf.confirmed
+          );
+          const totalLateFinesAmt = staffLateFines.reduce((sum: number, lf: any) => {
+            const amt = Number(lf.fine_amount);
+            const waivedAmt = Number(lf.waived_amount || 0);
+            return sum + (lf.waived ? 0 : Math.max(0, amt - waivedAmt));
+          }, 0);
+
+          const staffSpecialFinesArr = (freshSpecialFines || []).filter(
+            (sf: any) => sf.staff_id === s.id && sf.confirmed
+          );
+          const totalSpecialFinesAmt = staffSpecialFinesArr.reduce((sum: number, sf: any) => {
+            const amt = Number(sf.edited_amount ?? sf.amount);
+            const waivedAmt = Number(sf.waived_amount || 0);
+            return sum + (sf.waived ? 0 : Math.max(0, amt - waivedAmt));
+          }, 0);
+
+          const dailyRate = s.monthly_salary / daysInMonth;
+          const hourlyRate = dailyRate / shiftHours;
+
+          let liveNetSalary = 0;
+          let grossPay = 0;
+          let otPay = 0;
+          let earlyInPay = 0;
+          let earlyLeaveDeduction = 0;
+          let lateSalaryDeduction = 0;
+          let paidDays = 0;
+
+          if (isHourly) {
+            const standardHours = conf?.standard_hours ?? s.standard_hours ?? 234;
+            const hrRate = conf?.hourly_rate ?? (s.monthly_salary / standardHours);
+            const totalHoursLogged = conf?.total_hours_logged ?? staffAtt.reduce((sum, r) => sum + Number(r.total_hours_logged || 0), 0);
+            liveNetSalary = Math.round(totalHoursLogged * hrRate);
+            grossPay = liveNetSalary;
+          } else {
+            const breakdown = calculateSalary(
+              { monthlySalary: s.monthly_salary, offDaysPerMonth, shiftHours, year, month: monthNum },
+              {
+                daysActuallyWorked,
+                confirmedLateFines: totalLateFinesAmt,
+                confirmedSpecialFines: totalSpecialFinesAmt,
+                approvedOTMinutes,
+                approvedEarlyInMinutes,
+                earlyLeaveMinutes,
+                missingDays,
+                late_salary_deduction_minutes: staffAtt.reduce((sum, r) => sum + (r.late_salary_deduction_minutes || 0), 0),
+                leaves_taken: staffLeaves.filter(l => !l.is_weekly_off).length,
+              }
+            );
+            paidDays = breakdown.paidDays;
+            grossPay = breakdown.grossPay;
+            otPay = breakdown.otPay;
+            earlyInPay = breakdown.earlyInPay;
+            earlyLeaveDeduction = breakdown.earlyLeaveDeduction;
+            lateSalaryDeduction = breakdown.lateSalaryDeduction;
+            liveNetSalary = Math.max(0, breakdown.netSalary);
+          }
+
+          const confirmedNetSalary = conf ? Number(conf.net_salary) : 'PENDING';
+          
+          let status = 'Pending';
+          let note = '';
+          if (conf) {
+            const diff = Math.abs(Math.round(liveNetSalary) - Math.round(Number(conf.net_salary)));
+            if (diff > 1) {
+              status = 'Changed';
+              note = 'Data changed after confirmation';
+            } else {
+              status = 'Confirmed';
+            }
+          }
+
+          rowsAOA.push([
+            slNo,
+            s.name,
+            s.branch?.name || s.branch_id || '',
+            s.department || '',
+            Number(daysActuallyWorked),
+            Number(weeklyOffsUsed),
+            Number(Math.floor(daysActuallyWorked / 6)), // bonus days earned
+            Number(paidDays),
+            Number(s.monthly_salary),
+            Number(Math.round(dailyRate * 100) / 100),
+            Number(Math.round(grossPay * 100) / 100),
+            Number(approvedOTMinutes),
+            Number(Math.round(otPay * 100) / 100),
+            Number(approvedEarlyInMinutes),
+            Number(Math.round(earlyInPay * 100) / 100),
+            Number(Math.round(lateSalaryDeduction * 100) / 100),
+            Number(Math.round(earlyLeaveDeduction * 100) / 100),
+            Number(Math.round(totalLateFinesAmt * 100) / 100),
+            Number(Math.round(totalSpecialFinesAmt * 100) / 100),
+            Number(Math.round(liveNetSalary * 100) / 100),
+            confirmedNetSalary,
+            status,
+            note
+          ]);
+        });
+
+        const totalsRow = ['', 'TOTAL', '', '', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '', ''];
+        for (let ci = 4; ci <= 20; ci++) {
+          let sum = 0;
+          let hasNumber = false;
+          for (let ri = 1; ri < rowsAOA.length; ri++) {
+            const val = rowsAOA[ri][ci];
+            if (typeof val === 'number') {
+              sum += val;
+              hasNumber = true;
+            }
+          }
+          if (hasNumber) {
+            totalsRow[ci] = Math.round(sum * 100) / 100;
+          } else {
+            totalsRow[ci] = '';
+          }
+        }
+        rowsAOA.push(totalsRow);
+
+        return rowsAOA;
+      };
+
+      const summaryRows = getSummaryRows(activeStaff);
+      const wsAll = createStyledSummarySheet(summaryRows);
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, wsAll, 'Summary');
+
+      let indSlNo = 0;
+      activeStaff.forEach((s: any) => {
+        indSlNo++;
+        const staffAtt = (freshAtt || []).filter((r: any) => r.staff_id === s.id);
+        const staffLeaves = (freshLeaves || []).filter((l: any) => l.staff_id === s.id);
+        const conf = (freshConfs || []).find((c: any) => c.staff_id === s.id);
+
+        const isHourly = s.pay_type === 'hourly';
+        const shiftHours = s.shift?.hours || 9;
+
+        // Days present: check_in_time is not null/empty
+        const daysActuallyWorked = staffAtt.filter(
+          (r: any) => r.check_in_time !== null && r.check_in_time !== undefined && r.check_in_time !== ''
         ).length;
 
         const offDaysPerMonth = s.off_days_per_month as 0 | 2 | 4;
@@ -660,8 +951,8 @@ export default function MonthlyReportTab({
         }
 
         const weeklyOffDates = new Set([
-          ...staffAtt.filter(r => r.day_type === 'weekly_off').map(r => r.date),
-          ...staffLeaves.filter(l => l.is_weekly_off === true).map(l => l.date)
+          ...staffAtt.filter((r: any) => r.day_type === 'weekly_off').map((r: any) => r.date),
+          ...staffLeaves.filter((l: any) => l.is_weekly_off === true).map((l: any) => l.date)
         ]);
         const weeklyOffsTaken = weeklyOffDates.size;
         const weeklyOffsUsed = Math.min(weeklyOffsTaken, earnedQuota);
@@ -669,263 +960,222 @@ export default function MonthlyReportTab({
         const absences = daysInMonth - daysActuallyWorked;
         const manualExtraLeaves = conf?.extra_leave_days || 0;
         const deductedDays = Math.max(0, absences - weeklyOffsUsed) + manualExtraLeaves;
-        missingDays = deductedDays;
+        const missingDays = deductedDays;
 
-        approvedOTMinutes = staffAtt
+        const approvedOTMinutes = staffAtt
           .filter((r: any) => r.ot_approved === true)
           .reduce((sum: number, r: any) => sum + (r.ot_minutes || 0), 0) || 0;
 
-        approvedEarlyInMinutes = staffAtt
+        const approvedEarlyInMinutes = staffAtt
           .filter((r: any) => r.early_in_approved === true)
           .reduce((sum: number, r: any) => sum + (r.early_in_minutes || 0), 0) || 0;
 
-        earlyLeaveMinutes = staffAtt.reduce(
+        const earlyLeaveMinutes = staffAtt.reduce(
           (sum: number, r: any) => sum + (r.early_leave_minutes || 0), 0
         ) || 0;
 
-        const staffLateFines = lateFines.filter(
+        const staffLateFines = (freshLateFines || []).filter(
           (lf: any) => lf.staff_id === s.id && lf.confirmed
         );
-        totalLateFinesAmt = staffLateFines.reduce((sum: number, lf: any) => {
+        const totalLateFinesAmt = staffLateFines.reduce((sum: number, lf: any) => {
           const amt = Number(lf.fine_amount);
           const waivedAmt = Number(lf.waived_amount || 0);
           return sum + (lf.waived ? 0 : Math.max(0, amt - waivedAmt));
         }, 0);
 
-        const staffSpecialFinesArr = specialFines.filter(
+        const staffSpecialFinesArr = (freshSpecialFines || []).filter(
           (sf: any) => sf.staff_id === s.id && sf.confirmed
         );
-        totalSpecialFinesAmt = staffSpecialFinesArr.reduce((sum: number, sf: any) => {
+        const totalSpecialFinesAmt = staffSpecialFinesArr.reduce((sum: number, sf: any) => {
           const amt = Number(sf.edited_amount ?? sf.amount);
           const waivedAmt = Number(sf.waived_amount || 0);
           return sum + (sf.waived ? 0 : Math.max(0, amt - waivedAmt));
         }, 0);
 
-        const shiftHours = s.shift?.hours || 9;
-
-        const breakdown = calculateSalary(
-          { monthlySalary: baseSalary, offDaysPerMonth, shiftHours, year, month: monthNum },
-          {
-            daysActuallyWorked,
-            confirmedLateFines: totalLateFinesAmt,
-            confirmedSpecialFines: totalSpecialFinesAmt,
-            approvedOTMinutes,
-            approvedEarlyInMinutes,
-            earlyLeaveMinutes,
-            missingDays,
-            late_salary_deduction_minutes: staffAtt.reduce((sum, r) => sum + (r.late_salary_deduction_minutes || 0), 0),
-            leaves_taken: staffLeaves.filter(l => !l.is_weekly_off).length,
-          }
-        );
-        
-        calendarDays = breakdown.calendarDays;
-        requiredWorkingDays = breakdown.requiredWorkingDays;
-        extraDaysWorked = breakdown.extraDaysWorked;
-        missingDays = breakdown.missingDays;
-        paidDays = breakdown.paidDays;
-        dailyRate = breakdown.dailyRate;
-        grossPay = breakdown.grossPay;
-        otPay = breakdown.otPay;
-        earlyInPay = breakdown.earlyInPay;
-        earlyLeaveDeduction = breakdown.earlyLeaveDeduction;
-        netSalary = Math.max(0, breakdown.netSalary);
-      }
-
-      rowsAOA.push([
-        slNo,
-        s.name,
-        s.branch?.name || s.branch_id || '',
-        s.department || '',
-        isHourly ? 'Hourly' : 'Fixed Shift',
-        isHourly ? Number(standardHours) : 234,
-        isHourly ? Number(totalHoursLogged) : 0,
-        Number(Math.round(hourlyRate * 100) / 100),
-        Number(baseSalary),
-        isHourly ? 0 : Number(calendarDays),
-        isHourly ? 0 : Number(requiredWorkingDays),
-        isHourly ? 0 : Number(daysActuallyWorked),
-        isHourly ? 0 : Number(extraDaysWorked),
-        isHourly ? 0 : Number(missingDays),
-        isHourly ? 0 : Number(paidDays),
-        isHourly ? 0 : Number(dailyRate),
-        Number(grossPay),
-        isHourly ? 0 : Number(approvedOTMinutes),
-        Number(otPay),
-        Number(earlyInPay),
-        Number(earlyLeaveDeduction),
-        Number(totalLateFinesAmt),
-        Number(totalSpecialFinesAmt),
-        Number(netSalary)
-      ]);
-    });
-
-    const totalsRow = ['', 'TOTAL', '', '', '', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-    for (let ci = 5; ci < headers.length; ci++) {
-      let sum = 0;
-      for (let ri = 1; ri < rowsAOA.length; ri++) {
-        sum += Number(rowsAOA[ri][ci]) || 0;
-      }
-      totalsRow[ci] = Math.round(sum * 100) / 100;
-    }
-    rowsAOA.push(totalsRow);
-
-    return rowsAOA;
-  };
-
-  const handleMonthlySummaryExport = () => {
-    const [yearStr, monthStr] = selectedMonth.split('-');
-    const year = parseInt(yearStr);
-    const monthNum = parseInt(monthStr);
-    const daysInMonth = new Date(year, monthNum, 0).getDate();
-    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-    const format24h = (timeStr: string | null) => {
-      if (!timeStr) return '';
-      const parts = timeStr.split(':');
-      if (parts.length >= 2) {
-        return `${parts[0].padStart(2, '0')}:${parts[1].padStart(2, '0')}`;
-      }
-      return timeStr;
-    };
-
-    const activeStaff = staffList.filter(s => s.active).sort((a, b) => a.name.localeCompare(b.name));
-    const dailyStaff = activeStaff.filter(s => s.branch_id === 'daily');
-    const hyperStaff = activeStaff.filter(s => s.branch_id === 'hypermarket');
-
-    const allSummaryRows = getSummaryRowsForStaffList(activeStaff);
-    const dailySummaryRows = getSummaryRowsForStaffList(dailyStaff);
-    const hyperSummaryRows = getSummaryRowsForStaffList(hyperStaff);
-
-    const wsAll = createStyledSummarySheet(allSummaryRows);
-    const wsDaily = createStyledSummarySheet(dailySummaryRows);
-    const wsHyper = createStyledSummarySheet(hyperSummaryRows);
-
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, wsAll, 'All Summary');
-    XLSX.utils.book_append_sheet(wb, wsDaily, 'Nearbi Daily');
-    XLSX.utils.book_append_sheet(wb, wsHyper, 'Nearbi Hypermarket');
-
-    let slNo = 0;
-    activeStaff.forEach((s) => {
-      slNo++;
-      const staffAtt = attendanceRecords.filter((r) => r.staff_id === s.id);
-      const staffLeaves = leaveRequests.filter((l: any) => l.staff_id === s.id && l.status === 'approved');
-
-      const staffDetailedHeaders = [
-        "DATE", "DAY", "CHECK IN", "CHECK OUT", "ACTUAL HOURS", "STATUS", "DAY TYPE", "LATE MINUTES", "OT MINUTES", "LATE FINE"
-      ];
-      const staffDetailedRows: any[][] = [staffDetailedHeaders];
-
-      for (let d = 1; d <= daysInMonth; d++) {
-        const dateStr = `${selectedMonth}-${String(d).padStart(2, '0')}`;
-        const att = staffAtt.find((r: any) => r.date === dateStr);
-        const hasLeave = staffLeaves.find((l: any) => l.date === dateStr);
-
-        const dateObj = new Date(dateStr + 'T00:00:00');
-        const dayName = dayNames[dateObj.getDay()];
-
-        const isHourly = s.pay_type === 'hourly';
-        let checkIn = '';
-        let checkOut = '';
-        let actualHours = 0;
-        let status = 'absent';
-        let lateMins = 0;
-        let otMins = 0;
-        let dayType = isHourly ? 'hourly' : 'present';
-
-        if (att) {
-          checkIn = format24h(att.check_in_time);
-          checkOut = format24h(att.check_out_time);
-          if (isHourly && att.total_hours_logged) {
-            actualHours = Math.round(Number(att.total_hours_logged) * 100) / 100;
-          } else if (att.actual_hours_worked) {
-            actualHours = Math.round(Number(att.actual_hours_worked) * 100) / 100;
-          }
-          status = att.status || '';
-          lateMins = isHourly ? 0 : (att.minutes_late || 0);
-          otMins = isHourly ? 0 : (att.ot_minutes || 0);
-          dayType = isHourly ? 'hourly' : (att.day_type || 'present');
-        } else if (hasLeave && !isHourly) {
-          dayType = hasLeave.is_weekly_off ? 'weekly_off' : 'leave';
-        } else if (isHourly) {
-          status = 'N/A';
-          dayType = 'hourly';
+        let liveNetSalary = 0;
+        if (isHourly) {
+          const standardHours = conf?.standard_hours ?? s.standard_hours ?? 234;
+          const hrRate = conf?.hourly_rate ?? (s.monthly_salary / standardHours);
+          const totalHoursLogged = conf?.total_hours_logged ?? staffAtt.reduce((sum, r) => sum + Number(r.total_hours_logged || 0), 0);
+          liveNetSalary = Math.round(totalHoursLogged * hrRate);
+        } else {
+          const breakdown = calculateSalary(
+            { monthlySalary: s.monthly_salary, offDaysPerMonth, shiftHours, year, month: monthNum },
+            {
+              daysActuallyWorked,
+              confirmedLateFines: totalLateFinesAmt,
+              confirmedSpecialFines: totalSpecialFinesAmt,
+              approvedOTMinutes,
+              approvedEarlyInMinutes,
+              earlyLeaveMinutes,
+              missingDays,
+              late_salary_deduction_minutes: staffAtt.reduce((sum, r) => sum + (r.late_salary_deduction_minutes || 0), 0),
+              leaves_taken: staffLeaves.filter(l => !l.is_weekly_off).length,
+            }
+          );
+          liveNetSalary = Math.max(0, breakdown.netSalary);
         }
 
-        const lf = isHourly ? null : lateFines.find((f: any) => f.staff_id === s.id && f.date === dateStr);
-        const lateFineAmt = lf ? Number(lf.fine_amount) : 0;
+        const confirmedNetSalary = conf ? Number(conf.net_salary) : 'PENDING';
 
-        staffDetailedRows.push([
-          dateStr,
-          dayName,
-          checkIn,
-          checkOut,
-          actualHours,
-          status,
-          dayType,
-          lateMins,
-          otMins,
-          lateFineAmt
-        ]);
-      }
+        const staffDetailedHeaders = [
+          "DATE", "DAY", "CHECK IN", "CHECK OUT", "ACTUAL HOURS", "STATUS", "DAY TYPE", "LATE MINUTES", "OT MINUTES", "LATE FINE"
+        ];
+        const staffDetailedRows: any[][] = [
+          ["NAME:", s.name, "", "", "", "", "", "", "", ""],
+          ["CONFIRMED SALARY:", typeof confirmedNetSalary === 'number' ? Number(confirmedNetSalary) : confirmedNetSalary, "", "", "", "", "", "", "", ""],
+          ["LIVE SALARY:", Number(Math.round(liveNetSalary * 100) / 100), "", "", "", "", "", "", "", ""],
+          [], // empty spacer row
+          staffDetailedHeaders
+        ];
 
-      const wsStaff = XLSX.utils.aoa_to_sheet(staffDetailedRows);
+        for (let d = 1; d <= daysInMonth; d++) {
+          const dateStr = `${selectedMonth}-${String(d).padStart(2, '0')}`;
+          const att = staffAtt.find((r: any) => r.date === dateStr);
+          const hasLeave = staffLeaves.find((l: any) => l.date === dateStr);
 
-      const sColWidths = staffDetailedHeaders.map((_, colIndex) => {
-        let maxLen = 8;
-        staffDetailedRows.forEach(row => {
-          const val = row[colIndex];
-          if (val !== null && val !== undefined) {
-            const len = String(val).length;
-            if (len > maxLen) maxLen = len;
+          const dateObj = new Date(dateStr + 'T00:00:00');
+          const dayName = dayNames[dateObj.getDay()];
+
+          let checkIn = '';
+          let checkOut = '';
+          let actualHours = 0;
+          let status = 'absent';
+          let lateMins = 0;
+          let otMins = 0;
+          let dayType = isHourly ? 'hourly' : 'present';
+
+          if (att) {
+            checkIn = format24h(att.check_in_time);
+            checkOut = format24h(att.check_out_time);
+            if (isHourly && att.total_hours_logged) {
+              actualHours = Math.round(Number(att.total_hours_logged) * 100) / 100;
+            } else if (att.actual_hours_worked) {
+              actualHours = Math.round(Number(att.actual_hours_worked) * 100) / 100;
+            }
+            status = att.status || '';
+            lateMins = isHourly ? 0 : (att.minutes_late || 0);
+            otMins = isHourly ? 0 : (att.ot_minutes || 0);
+            dayType = isHourly ? 'hourly' : (att.day_type || 'present');
+          } else if (hasLeave && !isHourly) {
+            dayType = hasLeave.is_weekly_off ? 'weekly_off' : 'leave';
+          } else if (isHourly) {
+            status = 'N/A';
+            dayType = 'hourly';
           }
+
+          const lf = isHourly ? null : (freshLateFines || []).find((f: any) => f.staff_id === s.id && f.date === dateStr);
+          const lateFineAmt = lf ? Number(lf.fine_amount) : 0;
+
+          staffDetailedRows.push([
+            dateStr,
+            dayName,
+            checkIn,
+            checkOut,
+            actualHours,
+            status,
+            dayType,
+            lateMins,
+            otMins,
+            lateFineAmt
+          ]);
+        }
+
+        const wsStaff = XLSX.utils.aoa_to_sheet(staffDetailedRows);
+
+        const sColWidths = staffDetailedHeaders.map((_, colIndex) => {
+          let maxLen = 8;
+          staffDetailedRows.forEach(row => {
+            const val = row[colIndex];
+            if (val !== null && val !== undefined) {
+              const len = String(val).length;
+              if (len > maxLen) maxLen = len;
+            }
+          });
+          return { wch: maxLen + 2 };
         });
-        return { wch: maxLen + 2 };
+        wsStaff['!cols'] = sColWidths;
+
+        const sHeaderStyle = {
+          fill: { fgColor: { rgb: "1A1A1A" } },
+          font: { bold: true, color: { rgb: "FFFFFF" }, sz: 10 },
+          alignment: { horizontal: "center", vertical: "center" }
+        };
+
+        const sDefaultStyleEven = { fill: { fgColor: { rgb: "FFFFFF" } }, font: { sz: 9 } };
+        const sDefaultStyleOdd = { fill: { fgColor: { rgb: "F9F9F9" } }, font: { sz: 9 } };
+        const sWeeklyOffStyle = { fill: { fgColor: { rgb: "E8F0FE" } }, font: { sz: 9 } };
+        const sAbsentStyle = { fill: { fgColor: { rgb: "FCE8E6" } }, font: { sz: 9 } };
+
+        const summaryLabelStyle = {
+          font: { bold: true, sz: 10, color: { rgb: "1A1A1A" } },
+          fill: { fgColor: { rgb: "F2F2F2" } },
+          alignment: { horizontal: "left", vertical: "center" }
+        };
+        const summaryValueStyle = {
+          font: { bold: true, sz: 10, color: { rgb: "1A1A1A" } },
+          fill: { fgColor: { rgb: "FFFFFF" } },
+          alignment: { horizontal: "left", vertical: "center" }
+        };
+
+        for (let r = 0; r < staffDetailedRows.length; r++) {
+          const rowData = staffDetailedRows[r];
+          const statusVal = rowData[5];
+          const dayTypeVal = rowData[6];
+
+          let cellStyle = r % 2 === 0 ? sDefaultStyleEven : sDefaultStyleOdd;
+          if (r >= 5) {
+            if (dayTypeVal === 'weekly_off') {
+              cellStyle = sWeeklyOffStyle;
+            } else if (statusVal === 'absent') {
+              cellStyle = sAbsentStyle;
+            }
+          }
+
+          for (let c = 0; c < staffDetailedHeaders.length; c++) {
+            const cellRef = XLSX.utils.encode_cell({ r, c });
+            if (!wsStaff[cellRef]) continue;
+
+            if (r < 3) {
+              if (c === 0) {
+                wsStaff[cellRef].s = summaryLabelStyle;
+              } else if (c === 1) {
+                wsStaff[cellRef].s = summaryValueStyle;
+                if (r > 0 && typeof rowData[c] === 'number') {
+                  wsStaff[cellRef].t = 'n';
+                  wsStaff[cellRef].z = '0.00';
+                }
+              } else {
+                wsStaff[cellRef].s = { fill: { fgColor: { rgb: "FFFFFF" } } };
+              }
+            } else if (r === 3) {
+              wsStaff[cellRef].s = { fill: { fgColor: { rgb: "FFFFFF" } } };
+            } else if (r === 4) {
+              wsStaff[cellRef].s = sHeaderStyle;
+            } else {
+              wsStaff[cellRef].s = cellStyle;
+              if (c === 4 || c === 7 || c === 8 || c === 9) {
+                const val = rowData[c];
+                if (typeof val === 'number') {
+                  wsStaff[cellRef].t = 'n';
+                  wsStaff[cellRef].z = '0.00';
+                }
+              }
+            }
+          }
+        }
+
+        const sheetName = `${s.name.substring(0, 25)} (${indSlNo})`;
+        XLSX.utils.book_append_sheet(wb, wsStaff, sheetName);
       });
-      wsStaff['!cols'] = sColWidths;
 
-      const sHeaderStyle = {
-        fill: { fgColor: { rgb: "1A1A1A" } },
-        font: { bold: true, color: { rgb: "FFFFFF" }, sz: 10 },
-        alignment: { horizontal: "center", vertical: "center" }
-      };
-
-      const sDefaultStyleEven = { fill: { fgColor: { rgb: "FFFFFF" } }, font: { sz: 9 } };
-      const sDefaultStyleOdd = { fill: { fgColor: { rgb: "F9F9F9" } }, font: { sz: 9 } };
-      const sWeeklyOffStyle = { fill: { fgColor: { rgb: "E8F0FE" } }, font: { sz: 9 } };
-      const sAbsentStyle = { fill: { fgColor: { rgb: "FCE8E6" } }, font: { sz: 9 } };
-
-      for (let r = 0; r < staffDetailedRows.length; r++) {
-        const rowData = staffDetailedRows[r];
-        const statusVal = rowData[5];
-        const dayTypeVal = rowData[6];
-
-        let cellStyle = r % 2 === 0 ? sDefaultStyleEven : sDefaultStyleOdd;
-        if (r > 0) {
-          if (dayTypeVal === 'weekly_off') {
-            cellStyle = sWeeklyOffStyle;
-          } else if (statusVal === 'absent') {
-            cellStyle = sAbsentStyle;
-          }
-        }
-
-        for (let c = 0; c < staffDetailedHeaders.length; c++) {
-          const cellRef = XLSX.utils.encode_cell({ r, c });
-          if (!wsStaff[cellRef]) continue;
-
-          if (r === 0) {
-            wsStaff[cellRef].s = sHeaderStyle;
-          } else {
-            wsStaff[cellRef].s = cellStyle;
-          }
-        }
-      }
-
-      const sheetName = `${s.name.substring(0, 25)} (${slNo})`;
-      XLSX.utils.book_append_sheet(wb, wsStaff, sheetName);
-    });
-
-    XLSX.writeFile(wb, `Nearbi_Monthly_Summary_${monthStr}_${yearStr}.xlsx`);
+      XLSX.writeFile(wb, `Nearbi_Salary_${monthStr}_${yearStr}.xlsx`);
+    } catch (err) {
+      console.error('Error generating report:', err);
+      alert('Error generating report, please try again.');
+    } finally {
+      setExporting(false);
+    }
   };
 
   if (loading) {
@@ -939,6 +1189,15 @@ export default function MonthlyReportTab({
 
   return (
     <div className="space-y-5 select-none pb-6">
+      {exporting && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="bg-white border border-[#E8E8E8] rounded-2xl p-6 shadow-xl flex flex-col items-center space-y-4 max-w-xs text-center">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            <p className="text-xs font-bold text-[#1A1A1A]">Generating report...</p>
+            <p className="text-[10px] text-gray-500 font-semibold">Querying fresh database records and compiling salary calculations...</p>
+          </div>
+        </div>
+      )}
       {/* Selection row (Hidden on print) */}
       <div className="print:hidden space-y-4">
         {!propMonth && (

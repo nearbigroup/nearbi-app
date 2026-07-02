@@ -6,6 +6,13 @@ import { supabase } from '@/lib/supabase';
 import { createAuditLog } from '@/lib/audit';
 import { Check, X, RefreshCw, CheckSquare } from 'lucide-react';
 import { formatTime12hr } from '@/lib/utils';
+import { autoCloseCheckouts } from '@/lib/salary';
+
+const getMinutes = (timeStr: string) => {
+  if (!timeStr || timeStr === 'None') return 0;
+  const [h, m] = timeStr.split(':').map(Number);
+  return h * 60 + m;
+};
 
 const isCheckoutValidForOT = (checkoutTime: string | null | undefined, shiftEndTime: string | null | undefined) => {
   if (!checkoutTime || !shiftEndTime) return false;
@@ -80,6 +87,8 @@ export default function ApprovalsPage() {
   const [fines, setFines] = useState<LateFine[]>([]);
   const [attendanceMap, setAttendanceMap] = useState<Record<string, AttendanceRecord>>({});
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null);
+  const [bulkConfirm, setBulkConfirm] = useState<{ message: string; onConfirm: () => void } | null>(null);
 
   useEffect(() => {
     setSelectedIds([]);
@@ -113,6 +122,7 @@ export default function ApprovalsPage() {
 
       for (const att of attWithOT || []) {
         if (!att.staff) continue;
+        if (att.staff.pay_type === 'hourly') continue;
         if (userBranch && att.staff.branch_id !== userBranch) continue;
 
         const { data: existing } = await supabase
@@ -148,8 +158,8 @@ export default function ApprovalsPage() {
 
       const { data: adjData, error: adjErr } = await adjQuery;
       if (adjErr) throw adjErr;
-      // Filter out orphan records where staff object is null
-      const validAdjustments = (adjData || []).filter((a) => a.staff !== null);
+      // Filter out orphan records where staff object is null and hourly staff
+      const validAdjustments = (adjData || []).filter((a) => a.staff !== null && a.staff.pay_type !== 'hourly');
       setAdjustments(validAdjustments as unknown as Adjustment[]);
 
       // 2. Fetch pending fines (waived=false and confirmed=false)
@@ -165,8 +175,8 @@ export default function ApprovalsPage() {
 
       const { data: fineData, error: fineErr } = await fineQuery;
       if (fineErr) throw fineErr;
-      // Filter out orphan records where staff object is null
-      const validFines = (fineData || []).filter((f) => f.staff !== null);
+      // Filter out orphan records where staff object is null and hourly staff
+      const validFines = (fineData || []).filter((f) => f.staff !== null && f.staff.pay_type !== 'hourly');
       setFines(validFines as unknown as LateFine[]);
 
       // 3. Fetch corresponding attendance records for adjustments to show details
@@ -213,6 +223,12 @@ export default function ApprovalsPage() {
 
   useEffect(() => {
     setLoading(true);
+    if (userBranch) {
+      autoCloseCheckouts(userBranch);
+    } else {
+      autoCloseCheckouts('daily');
+      autoCloseCheckouts('hypermarket');
+    }
     fetchApprovals();
 
     // Subscribe to updates
@@ -384,7 +400,8 @@ export default function ApprovalsPage() {
 
   const handleBulkAdjustmentAction = async (action: 'approved' | 'rejected') => {
     const selectedAdjustments = adjustments.filter(a => selectedIds.includes(a.id));
-    if (selectedAdjustments.length === 0) return;
+    const selectedCount = selectedAdjustments.length;
+    if (selectedCount === 0) return;
 
     if (action === 'approved' && activeTab === 'ot') {
       const invalid = selectedAdjustments.some(adj => {
@@ -397,13 +414,15 @@ export default function ApprovalsPage() {
       }
     }
 
-    if (!confirm(`Are you sure you want to ${action} ${selectedAdjustments.length} selected claims?`)) {
-      return;
-    }
+    const actionName = activeTab === 'ot'
+      ? (action === 'approved' ? 'bulk_ot_approved' : 'bulk_ot_rejected')
+      : (action === 'approved' ? 'bulk_early_in_approved' : 'bulk_early_in_rejected');
+
+    setBulkProgress({ current: 0, total: selectedCount });
 
     try {
-      setLoading(true);
       const approverName = user?.email || 'HR';
+      let currentCount = 0;
 
       for (const adj of selectedAdjustments) {
         await supabase
@@ -435,50 +454,54 @@ export default function ApprovalsPage() {
         } catch (e) {
           console.error(e);
         }
+
+        currentCount++;
+        setBulkProgress({ current: currentCount, total: selectedCount });
       }
 
       await createAuditLog({
-        action: action === 'approved' ? 'bulk_approve_adjustments' : 'bulk_reject_adjustments',
+        action: actionName,
         table_name: 'attendance_adjustments',
         record_id: selectedIds.join(','),
-        new_value: { status: action, count: selectedAdjustments.length },
+        new_value: { affected_count: selectedCount },
         performed_by: user?.email || 'admin',
         performed_by_role: user?.role || 'admin',
-        reason: `Bulk ${action} ${selectedAdjustments.length} claims`
+        reason: `Bulk ${action} ${selectedCount} claims`
       });
 
-      showToast(`Successfully bulk ${action} ${selectedAdjustments.length} claims!`);
+      showToast(`${selectedCount} items ${action === 'approved' ? 'approved' : 'rejected'} ✓`);
       setSelectedIds([]);
       fetchApprovals();
     } catch (err) {
       console.error(err);
       showToast("Failed to process bulk action.");
     } finally {
-      setLoading(false);
+      setBulkProgress(null);
     }
   };
 
   const handleBulkFineAction = async (action: 'waived' | 'confirmed') => {
     const selectedFines = fines.filter(f => selectedIds.includes(f.id));
-    if (selectedFines.length === 0) return;
+    const selectedCount = selectedFines.length;
+    if (selectedCount === 0) return;
 
     let waiverReason = '';
     if (action === 'waived') {
-      const reason = window.prompt(`Please enter a reason to waive these ${selectedFines.length} selected late fines:`);
+      const reason = window.prompt(`Please enter a reason to waive these ${selectedCount} selected late fines:`);
       if (!reason || !reason.trim()) {
         alert("A reason is required to waive late fines.");
         return;
       }
       waiverReason = reason.trim();
-    } else {
-      if (!confirm(`Are you sure you want to confirm all ${selectedFines.length} selected late fines?`)) {
-        return;
-      }
     }
 
+    const actionName = action === 'confirmed' ? 'bulk_fine_confirmed' : 'bulk_fine_waived';
+
+    setBulkProgress({ current: 0, total: selectedCount });
+
     try {
-      setLoading(true);
       const updateField = action === 'waived' ? { waived: true } : { confirmed: true };
+      let currentCount = 0;
 
       for (const fine of selectedFines) {
         await supabase
@@ -497,27 +520,50 @@ export default function ApprovalsPage() {
         } catch (e) {
           console.error(e);
         }
+
+        currentCount++;
+        setBulkProgress({ current: currentCount, total: selectedCount });
       }
 
       await createAuditLog({
-        action: action === 'waived' ? 'bulk_waive_fines' : 'bulk_confirm_fines',
+        action: actionName,
         table_name: 'late_fines',
         record_id: selectedIds.join(','),
-        new_value: updateField,
+        new_value: { affected_count: selectedCount },
         performed_by: user?.email || 'admin',
         performed_by_role: user?.role || 'admin',
         reason: action === 'waived' ? waiverReason : 'Bulk confirmed late fines'
       });
 
-      showToast(`Successfully bulk ${action} ${selectedFines.length} late fines!`);
+      showToast(`${selectedCount} items ${action === 'confirmed' ? 'confirmed' : 'waived'} ✓`);
       setSelectedIds([]);
       fetchApprovals();
     } catch (err) {
       console.error(err);
       showToast("Failed to bulk update late fines.");
     } finally {
-      setLoading(false);
+      setBulkProgress(null);
     }
+  };
+
+  const handleBulkAdjustmentActionWithConfirm = (action: 'approved' | 'rejected') => {
+    const selectedCount = adjustments.filter(a => selectedIds.includes(a.id)).length;
+    if (selectedCount === 0) return;
+
+    setBulkConfirm({
+      message: `${action === 'approved' ? 'Approve' : 'Reject'} ${selectedCount} selected items?`,
+      onConfirm: () => handleBulkAdjustmentAction(action)
+    });
+  };
+
+  const handleBulkFineActionWithConfirm = (action: 'waived' | 'confirmed') => {
+    const selectedCount = fines.filter(f => selectedIds.includes(f.id)).length;
+    if (selectedCount === 0) return;
+
+    setBulkConfirm({
+      message: `${action === 'confirmed' ? 'Confirm' : 'Waive'} ${selectedCount} selected items?`,
+      onConfirm: () => handleBulkFineAction(action)
+    });
   };
 
   // Late fines actions handlers
@@ -686,42 +732,7 @@ export default function ApprovalsPage() {
                   Select All ({selectedIds.length}/{activeTab === 'ot' ? otPending.length : activeTab === 'early_in' ? earlyPending.length : fines.length})
                 </span>
               </label>
-              
-              {selectedIds.length > 0 && (
-                <div className="flex gap-2">
-                  {activeTab === 'fines' ? (
-                    <>
-                      <button
-                        onClick={() => handleBulkFineAction('waived')}
-                        className="bg-white border border-[#E8E8E8] hover:bg-[#FDECEA] hover:text-[#C0392B] hover:border-[#C0392B]/20 text-[#555555] font-extrabold text-[10px] px-3 py-1.5 rounded-[8px] active:scale-95 transition-all shadow-sm cursor-pointer"
-                      >
-                        Waive Selected
-                      </button>
-                      <button
-                        onClick={() => handleBulkFineAction('confirmed')}
-                        className="bg-[#1A1A1A] text-white hover:bg-[#333333] font-extrabold text-[10px] px-3 py-1.5 rounded-[8px] active:scale-95 transition-all shadow-sm cursor-pointer"
-                      >
-                        Confirm Selected
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        onClick={() => handleBulkAdjustmentAction('rejected')}
-                        className="bg-white border border-[#E8E8E8] hover:bg-[#FDECEA] hover:text-[#C0392B] hover:border-[#C0392B]/20 text-[#555555] font-extrabold text-[10px] px-3 py-1.5 rounded-[8px] active:scale-95 transition-all shadow-sm cursor-pointer"
-                      >
-                        Reject Selected
-                      </button>
-                      <button
-                        onClick={() => handleBulkAdjustmentAction('approved')}
-                        className="bg-[#1A1A1A] text-white hover:bg-[#333333] font-extrabold text-[10px] px-3 py-1.5 rounded-[8px] active:scale-95 transition-all shadow-sm cursor-pointer"
-                      >
-                        Approve Selected
-                      </button>
-                    </>
-                  )}
-                </div>
-              )}
+
             </div>
           )}
 
@@ -847,17 +858,15 @@ export default function ApprovalsPage() {
             ) : (
               earlyPending.map((adj) => {
                 const att = attendanceMap[`${adj.staff_id}_${adj.date}`];
-                const shiftStart = adj.staff?.shift?.start_time || 'None';
-                const actualIn = att ? att.check_in_time || 'None' : 'None';
-
-                let earlyInMinsLive = adj.minutes;
-                if (shiftStart !== 'None' && actualIn !== 'None') {
-                  const [sh, sm] = shiftStart.split(':').map(Number);
-                  const [ch, cm] = actualIn.split(':').map(Number);
-                  const shiftStartMins = sh * 60 + sm;
-                  const checkInMins = ch * 60 + cm;
-                  earlyInMinsLive = Math.max(0, shiftStartMins - checkInMins);
-                }
+                const shiftStartMins = getMinutes(
+                  adj.staff?.shift?.start_time || '09:00'
+                );
+                const actualInMins = getMinutes(
+                  att?.check_in_time || '09:00'
+                );
+                const earlyInMinsLive = Math.max(
+                  0, shiftStartMins - actualInMins
+                );
 
                 return (
                   <div key={adj.id} className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col shadow-sm">
@@ -884,11 +893,11 @@ export default function ApprovalsPage() {
                     <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-2.5 mb-4 text-xs font-semibold text-[#555555] grid grid-cols-3 gap-2 text-center">
                       <div>
                         <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Shift Start</div>
-                        <div className="text-[#1A1A1A] font-bold mt-0.5">{formatTime12hr(shiftStart) || 'None'}</div>
+                        <div className="text-[#1A1A1A] font-bold mt-0.5">{formatTime12hr(adj.staff?.shift?.start_time || '09:00') || 'None'}</div>
                       </div>
                       <div>
                         <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Actual IN</div>
-                        <div className="text-[#1A1A1A] font-bold mt-0.5">{formatTime12hr(actualIn) || 'None'}</div>
+                        <div className="text-[#1A1A1A] font-bold mt-0.5">{formatTime12hr(att?.check_in_time || '09:00') || 'None'}</div>
                       </div>
                       <div>
                         <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Early By</div>
@@ -979,6 +988,90 @@ export default function ApprovalsPage() {
               ))
             )
           )}
+        </div>
+      )}
+
+      {/* Bulk Action Bottom Bar */}
+      {selectedIds.length > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[10000] bg-[#1A1A1A] text-white border border-white/10 rounded-full px-6 py-3.5 shadow-2xl flex items-center justify-between space-x-6 animate-in slide-in-from-bottom duration-300">
+          <span className="text-xs font-extrabold tracking-wide whitespace-nowrap">
+            {selectedIds.length} items selected
+          </span>
+          <div className="flex gap-2">
+            {activeTab === 'fines' ? (
+              <>
+                <button
+                  onClick={() => handleBulkFineActionWithConfirm('waived')}
+                  className="bg-white/10 hover:bg-[#FDECEA] hover:text-[#C0392B] border border-white/5 hover:border-transparent text-white font-extrabold text-[10px] px-3.5 py-2 rounded-full active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+                >
+                  Waive Selected
+                </button>
+                <button
+                  onClick={() => handleBulkFineActionWithConfirm('confirmed')}
+                  className="bg-white text-black hover:bg-white/90 font-extrabold text-[10px] px-3.5 py-2 rounded-full active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+                >
+                  Confirm Selected
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={() => handleBulkAdjustmentActionWithConfirm('rejected')}
+                  className="bg-white/10 hover:bg-[#FDECEA] hover:text-[#C0392B] border border-white/5 hover:border-transparent text-white font-extrabold text-[10px] px-3.5 py-2 rounded-full active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+                >
+                  Reject Selected
+                </button>
+                <button
+                  onClick={() => handleBulkAdjustmentActionWithConfirm('approved')}
+                  className="bg-white text-black hover:bg-white/90 font-extrabold text-[10px] px-3.5 py-2 rounded-full active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+                >
+                  Approve Selected
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Confirm Modal */}
+      {bulkConfirm && (
+        <div className="fixed inset-0 z-[20000] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 select-none">
+          <div className="bg-white border border-[#E8E8E8] rounded-2xl p-6 max-w-sm w-full shadow-2xl flex flex-col items-center text-center animate-in zoom-in-95 duration-200">
+            <h3 className="text-base font-black text-[#1A1A1A] mb-2">Confirm Action</h3>
+            <p className="text-xs text-[var(--text-muted)] font-semibold leading-relaxed mb-6">
+              {bulkConfirm.message}
+            </p>
+            <div className="flex w-full gap-3">
+              <button
+                onClick={() => setBulkConfirm(null)}
+                className="flex-1 min-h-[40px] bg-[#F2F2F2] hover:bg-[#E8E8E8] active:scale-95 text-[#1A1A1A] text-xs font-bold rounded-xl transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  bulkConfirm.onConfirm();
+                  setBulkConfirm(null);
+                }}
+                className="flex-1 min-h-[40px] bg-[#1A1A1A] hover:bg-[#333333] active:scale-95 text-white text-xs font-bold rounded-xl transition-all cursor-pointer"
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Progress Modal */}
+      {bulkProgress && (
+        <div className="fixed inset-0 z-[20000] bg-black/65 backdrop-blur-md flex items-center justify-center p-4 select-none">
+          <div className="bg-white border border-[#E8E8E8] rounded-2xl p-8 max-w-sm w-full shadow-2xl flex flex-col items-center text-center animate-in zoom-in-95 duration-200">
+            <RefreshCw size={36} className="animate-spin text-[#1A1A1A] mb-4" />
+            <h3 className="text-sm font-black text-[#1A1A1A] mb-1">Please Wait</h3>
+            <p className="text-xs text-[var(--text-muted)] font-bold">
+              Processing {bulkProgress.current} of {bulkProgress.total}...
+            </p>
+          </div>
         </div>
       )}
 

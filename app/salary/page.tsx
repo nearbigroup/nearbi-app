@@ -8,7 +8,7 @@ import PaymentTrackerTab from '@/components/salary/PaymentTrackerTab';
 import MonthlyReportTab from '@/components/salary/MonthlyReportTab';
 import { Lock, Calculator, User, Calendar, RefreshCw, ChevronLeft, ChevronRight, AlertCircle } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
-import { calculateSalary, getDaysInMonth, calculateEarlyLeaveDeduction, calculatePaidDays, calculateBonusDays, calculateHourlySalary, calculateEarlyInPay, calculateMinutesWorked } from '@/lib/salary';
+import { calculateSalary, getDaysInMonth, calculateEarlyLeaveDeduction, calculatePaidDays, calculateBonusDays, calculateHourlySalary, calculateEarlyInPay, calculateMinutesWorked, autoCloseCheckouts } from '@/lib/salary';
 import { formatCurrency, getPastMonths, formatMonthDisplay, getCurrentMonthStr } from '@/components/salary/utils';
 
 type Tab = 'bulk_confirm' | 'payslip' | 'payments' | 'report' | 'calculator';
@@ -89,6 +89,17 @@ export default function SalaryPage() {
   const [earliestMonth, setEarliestMonth] = useState('');
   const [hasConfirmations, setHasConfirmations] = useState<boolean>(true);
   const [confirmationsLoading, setConfirmationsLoading] = useState<boolean>(true);
+
+  const { userBranch } = useAuth();
+
+  useEffect(() => {
+    if (userBranch) {
+      autoCloseCheckouts(userBranch);
+    } else {
+      autoCloseCheckouts('daily');
+      autoCloseCheckouts('hypermarket');
+    }
+  }, [userBranch]);
 
   const checkConfirmations = async () => {
     try {
@@ -207,7 +218,7 @@ export default function SalaryPage() {
           standardHours
         });
       } else {
-        const daysWorked = attRecords?.filter(r => r.check_in_time !== null && r.day_type !== 'weekly_off' && r.day_type !== 'holiday').length || 0;
+        const daysWorked = attRecords?.filter(r => r.check_in_time !== null && r.check_in_time !== undefined && r.check_in_time !== '').length || 0;
         const approvedOT = attRecords?.filter(r => r.ot_approved).reduce((sum, r) => sum + (r.ot_minutes || 0), 0) || 0;
         const approvedEarlyIn = attRecords?.filter(r => r.early_in_approved).reduce((sum, r) => sum + (r.early_in_minutes || 0), 0) || 0;
         const earlyLeave = attRecords?.reduce((sum, r) => sum + (r.early_leave_minutes || 0), 0) || 0;
@@ -381,7 +392,7 @@ export default function SalaryPage() {
           });
         } else {
           const daysActuallyWorked = attRecords?.filter(
-            (r) => r.check_in_time !== null && r.day_type !== 'weekly_off' && r.day_type !== 'holiday'
+            (r) => r.check_in_time !== null && r.check_in_time !== undefined && r.check_in_time !== ''
           ).length || 0;
 
           const approvedOTMinutes = attRecords?.filter(
@@ -837,6 +848,10 @@ function SalaryCalculatorTab({
                       <span className="text-white/50">Early leave:</span>
                       <span className="font-extrabold text-[var(--danger)]">-<CountUp value={displayData.earlyLeaveDeduction} prefix="₹" /></span>
                     </div>
+                    <div className="flex justify-between">
+                      <span className="text-white/50">Late arrival deduction:</span>
+                      <span className="font-extrabold text-[var(--danger)]">-<CountUp value={displayData.lateSalaryDeduction} prefix="₹" /></span>
+                    </div>
                     <div className="flex justify-between border-b border-white/15 pb-2.5">
                       <span className="text-white/50">Late fines:</span>
                       <span className="font-extrabold text-[var(--danger)]">-<CountUp value={displayData.finesSoFar} prefix="₹" /></span>
@@ -875,58 +890,97 @@ function SalaryCalculatorTab({
                 </div>
               </div>
 
-              <div className="space-y-4 pt-1">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <span className="text-[10px] font-bold text-white/40 uppercase tracking-wider block">Net Salary</span>
-                    <span className="text-2xl font-black text-white block mt-1 leading-none">
-                      {formatCurrency(displayData.netSalary)}
-                    </span>
+              {displayData.is_hourly ? (
+                <div className="space-y-4 pt-1">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <span className="text-[10px] font-bold text-white/40 uppercase tracking-wider block">Net Salary</span>
+                      <span className="text-2xl font-black text-white block mt-1 leading-none">
+                        {formatCurrency(displayData.netSalary)}
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[10px] font-bold text-white/40 uppercase tracking-wider block">Total Hours Logged</span>
+                      <span className="text-base font-extrabold text-white block mt-1 leading-none">
+                        {displayData.totalHours.toFixed(2)} hrs
+                      </span>
+                    </div>
                   </div>
-                  <div className="text-right">
-                    <span className="text-[10px] font-bold text-white/40 uppercase tracking-wider block">Days Worked</span>
-                    <span className="text-base font-extrabold text-white block mt-1 leading-none">
-                      {displayData.daysActuallyWorked ?? displayData.daysWorked ?? 0} / {displayData.calendarDays}
-                    </span>
-                  </div>
-                </div>
-                <div className="grid grid-cols-3 gap-y-3 gap-x-2 border-t border-white/10 pt-3.5 text-xs text-white/70">
-                  <div>
-                    <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Remaining Days</span>
-                    <span className="font-extrabold text-white block mt-0.5">0 days</span>
-                  </div>
-                  <div>
-                    <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Gross Pay</span>
-                    <span className="font-extrabold text-white block mt-0.5">
-                      {formatCurrency(displayData.grossPay)}
-                    </span>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">OT Earned</span>
-                    <span className="font-extrabold text-white block mt-0.5">
-                      {formatCurrency(displayData.otPay ?? displayData.otEarned ?? 0)}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Early Leave Deduct</span>
-                    <span className="font-extrabold text-white block mt-0.5">
-                      -{formatCurrency(displayData.earlyLeaveDeduction || 0)}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Fines So Far</span>
-                    <span className="font-extrabold text-white block mt-0.5">
-                      -{formatCurrency(displayData.finesSoFar ?? ((displayData.confirmedLateFines || 0) + (displayData.confirmedSpecialFines || 0)))}
-                    </span>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Paid Days</span>
-                    <span className="font-extrabold text-white block mt-0.5">
-                      {displayData.paidDays} days
-                    </span>
+                  <div className="grid grid-cols-2 gap-y-3 gap-x-2 border-t border-white/10 pt-3.5 text-xs text-white/70">
+                    <div>
+                      <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Hourly Rate</span>
+                      <span className="font-extrabold text-white block mt-0.5">
+                        {formatCurrency(displayData.hourlyRate)}/hr
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Standard Hours</span>
+                      <span className="font-extrabold text-white block mt-0.5">
+                        {displayData.standardHours} hrs
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
+              ) : (
+                <div className="space-y-4 pt-1">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <span className="text-[10px] font-bold text-white/40 uppercase tracking-wider block">Net Salary</span>
+                      <span className="text-2xl font-black text-white block mt-1 leading-none">
+                        {formatCurrency(displayData.netSalary)}
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[10px] font-bold text-white/40 uppercase tracking-wider block">Days Worked</span>
+                      <span className="text-base font-extrabold text-white block mt-1 leading-none">
+                        {displayData.daysActuallyWorked ?? displayData.daysWorked ?? 0} / {displayData.calendarDays}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-y-3 gap-x-2 border-t border-white/10 pt-3.5 text-xs text-white/70">
+                    <div>
+                      <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Remaining Days</span>
+                      <span className="font-extrabold text-white block mt-0.5">0 days</span>
+                    </div>
+                    <div>
+                      <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Gross Pay</span>
+                      <span className="font-extrabold text-white block mt-0.5">
+                        {formatCurrency(displayData.grossPay)}
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">OT Earned</span>
+                      <span className="font-extrabold text-white block mt-0.5">
+                        {formatCurrency(displayData.otPay ?? displayData.otEarned ?? 0)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Early Leave Deduct</span>
+                      <span className="font-extrabold text-white block mt-0.5">
+                        -{formatCurrency(displayData.earlyLeaveDeduction || 0)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Late Deductions</span>
+                      <span className="font-extrabold text-white block mt-0.5">
+                        -{formatCurrency(displayData.lateSalaryDeduction || 0)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Fines So Far</span>
+                      <span className="font-extrabold text-white block mt-0.5">
+                        -{formatCurrency(displayData.finesSoFar ?? ((displayData.confirmedLateFines || 0) + (displayData.confirmedSpecialFines || 0)))}
+                      </span>
+                    </div>
+                    <div className="text-right">
+                      <span className="text-[8px] font-bold text-white/30 uppercase tracking-wider block">Paid Days</span>
+                      <span className="font-extrabold text-white block mt-0.5">
+                        {displayData.paidDays} days
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           );
         })()
@@ -1064,6 +1118,12 @@ function SalaryCalculatorTab({
                     <span>Early leave:</span>
                     <span className={`${calcResult.earlyLeaveDeduction > 0 ? 'text-[var(--danger)]' : ''} font-bold`}>
                       -{formatCurrency(calcResult.earlyLeaveDeduction)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Late arrival deduction (permanent):</span>
+                    <span className={`${calcResult.lateSalaryDeduction > 0 ? 'text-[var(--danger)]' : ''} font-bold`}>
+                      -{formatCurrency(calcResult.lateSalaryDeduction)}
                     </span>
                   </div>
                   <div className="flex justify-between">

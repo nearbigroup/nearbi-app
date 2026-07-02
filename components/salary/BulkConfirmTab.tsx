@@ -6,7 +6,7 @@ import { useAuth } from '@/lib/auth-context';
 import { calculateSalary, calculateHourlySalary, calculateMinutesWorked } from '@/lib/salary';
 import { Staff, SalaryConfirmation } from './types';
 import { formatCurrency, getCurrentMonthStr, formatMonthDisplay } from './utils';
-import { Check, Search, AlertCircle } from 'lucide-react';
+import { Check, Search, AlertCircle, RefreshCw } from 'lucide-react';
 import { createAuditLog } from '@/lib/audit';
 import SpecialFinesSection from './SpecialFinesSection';
 
@@ -32,6 +32,9 @@ export default function BulkConfirmTab({
   const [salaryData, setSalaryData] = useState<Record<string, any>>({});
   const [extraLeaves, setExtraLeaves] = useState<Record<string, number>>({});
   const [selectedStaffIds, setSelectedStaffIds] = useState<string[]>([]);
+  const [bulkConfirm, setBulkConfirm] = useState<{ message: string; onConfirm: () => void } | null>(null);
+  const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null);
+  const [toastMsg, setToastMsg] = useState('');
   const [filterBranch, setFilterBranch] = useState<'all' | 'daily' | 'hypermarket'>('all');
   const [confirmingFines, setConfirmingFines] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -190,11 +193,11 @@ export default function BulkConfirmTab({
           ot_minutes: 0,
         };
       } else {
-        // Real days worked (present/late, not weekly off or holiday)
+        // Real days worked (any day with check-in time)
         const daysActuallyWorked = staffAtt.filter(
           (r) => r.check_in_time !== null &&
-          r.day_type !== 'weekly_off' &&
-          r.day_type !== 'holiday'
+          r.check_in_time !== undefined &&
+          r.check_in_time !== ''
         ).length;
 
         // Count genuine absent days and approved leave days
@@ -346,82 +349,95 @@ export default function BulkConfirmTab({
       return;
     }
 
-    if (!confirm(`Confirm salary for ${staffToConfirm.length} selected staff member(s)?`)) {
-      return;
-    }
-
-    setConfirming(true);
-    try {
-      const payload = staffToConfirm.map((s) => {
-        const bd = salaryData[s.id];
-        const isHourly = s.pay_type === 'hourly';
-        return {
-          staff_id: s.id,
-          month: month,
-          net_salary: bd.net_salary,
-          base_salary: s.monthly_salary,
-          paid_days: isHourly ? 0 : (bd.paid_days || 30),
-          leave_deduction: isHourly ? 0 : bd.leave_deduction,
-          ot_pay: isHourly ? 0 : bd.ot_pay,
-          early_in_pay: isHourly ? 0 : (bd.early_in_pay || 0),
-          early_leave_deduction: isHourly ? 0 : (bd.early_leave_deduction || 0),
-          extra_leave_days: isHourly ? 0 : (extraLeaves[s.id] || 0),
-          ot_minutes: isHourly ? 0 : (bd.ot_minutes || 0),
-          confirmed_fines: isHourly ? 0 : (bd.confirmed_fines || 0),
-          confirmed_special_fines: isHourly ? 0 : (bd.confirmed_special_fines || 0),
-          confirmed_by: user.email || 'Admin',
-          is_locked: true,
-          late_salary_deduction: isHourly ? 0 : (bd.late_salary_deduction || 0),
-          is_hourly: isHourly,
-          total_hours_logged: isHourly ? (bd.total_hours_logged || 0) : 0,
-          standard_hours: isHourly ? (bd.standard_hours || 0) : 0,
-          hourly_rate: isHourly ? (bd.hourly_rate || 0) : 0,
-        };
-      });
-
-      if (payload.length > 0) {
-        const { error } = await supabase.from('salary_confirmations').insert(payload);
-        if (error) throw error;
-        
-        await createAuditLog({
-          action: 'bulk_confirm_salaries',
-          table_name: 'salary_confirmations',
-          new_value: payload,
-          performed_by: user.email,
-          performed_by_role: user.role || 'admin',
-          reason: `Bulk confirmed salary for ${payload.length} staff members`
-        });
-
-        // Silent wall event logging
+    setBulkConfirm({
+      message: `Confirm salary for ${staffToConfirm.length} selected staff member(s)?`,
+      onConfirm: async () => {
+        setConfirming(true);
         try {
-          const events = staffToConfirm.map(s => {
+          const payload = staffToConfirm.map((s) => {
             const bd = salaryData[s.id];
+            const isHourly = s.pay_type === 'hourly';
             return {
-              event_type: 'salary_confirmed',
               staff_id: s.id,
-              staff_name: s.name,
-              branch_id: s.branch_id,
-              description: `Salary confirmed for ${s.name} for ${formatMonthDisplay(month)}: Net ₹${bd.net_salary.toLocaleString()}`
+              month: month,
+              net_salary: bd.net_salary,
+              base_salary: s.monthly_salary,
+              paid_days: isHourly ? 0 : (bd.paid_days || 30),
+              leave_deduction: isHourly ? 0 : bd.leave_deduction,
+              ot_pay: isHourly ? 0 : bd.ot_pay,
+              early_in_pay: isHourly ? 0 : (bd.early_in_pay || 0),
+              early_leave_deduction: isHourly ? 0 : (bd.early_leave_deduction || 0),
+              extra_leave_days: isHourly ? 0 : (extraLeaves[s.id] || 0),
+              ot_minutes: isHourly ? 0 : (bd.ot_minutes || 0),
+              confirmed_fines: isHourly ? 0 : (bd.confirmed_fines || 0),
+              confirmed_special_fines: isHourly ? 0 : (bd.confirmed_special_fines || 0),
+              confirmed_by: user.email || 'Admin',
+              is_locked: true,
+              late_salary_deduction: isHourly ? 0 : (bd.late_salary_deduction || 0),
+              is_hourly: isHourly,
+              total_hours_logged: isHourly ? (bd.total_hours_logged || 0) : 0,
+              standard_hours: isHourly ? (bd.standard_hours || 0) : 0,
+              hourly_rate: isHourly ? (bd.hourly_rate || 0) : 0,
             };
           });
-          await supabase.from('wall_events').insert(events);
-        } catch (e) {
-          console.error('Silent insert wall event failed:', e);
-        }
 
-        await fetchData();
-        setSelectedStaffIds([]); // Clear selection
-        alert('Selected salaries confirmed successfully!');
-        if (onConfirmationsUpdated) {
-          onConfirmationsUpdated();
+          if (payload.length > 0) {
+            setBulkProgress({ current: 0, total: payload.length });
+            let currentCount = 0;
+
+            for (const item of payload) {
+              const { error } = await supabase.from('salary_confirmations').insert(item);
+              if (error) throw error;
+              
+              currentCount++;
+              setBulkProgress({ current: currentCount, total: payload.length });
+            }
+
+            await createAuditLog({
+              action: 'bulk_confirm_salaries',
+              table_name: 'salary_confirmations',
+              new_value: { affected_count: payload.length },
+              performed_by: user.email,
+              performed_by_role: user.role || 'admin',
+              reason: `Bulk confirmed salary for ${payload.length} staff members`
+            });
+
+            // Silent wall event logging
+            try {
+              const events = staffToConfirm.map(s => {
+                const bd = salaryData[s.id];
+                return {
+                  event_type: 'salary_confirmed',
+                  staff_id: s.id,
+                  staff_name: s.name,
+                  branch_id: s.branch_id,
+                  description: `Salary confirmed for ${s.name} for ${formatMonthDisplay(month)}: Net ₹${bd.net_salary.toLocaleString()}`
+                };
+              });
+              await supabase.from('wall_events').insert(events);
+            } catch (e) {
+              console.error('Silent insert wall event failed:', e);
+            }
+
+            await fetchData();
+            setSelectedStaffIds([]); // Clear selection
+            
+            setToastMsg(`${payload.length} salaries confirmed ✓`);
+            setTimeout(() => setToastMsg(''), 3000);
+
+            if (onConfirmationsUpdated) {
+              onConfirmationsUpdated();
+            }
+          }
+        } catch (err) {
+          console.error(err);
+          alert('Failed to confirm salaries.');
+        } finally {
+          setBulkProgress(null);
+          setConfirming(false);
         }
       }
-    } catch (err) {
-      console.error(err);
-      alert('Failed to confirm salaries.');
-    } finally {
-      setConfirming(false);
-    }
+    });
   };
 
   const handleConfirmAll = async () => {
@@ -594,15 +610,6 @@ export default function BulkConfirmTab({
           />
           <span>Select All Unconfirmed ({filteredStaff.filter(s => !confirmations.find(c => c.staff_id === s.id)).length})</span>
         </label>
-        {selectedStaffIds.length > 0 && (
-          <button
-            onClick={() => handleConfirmSelected()}
-            disabled={confirming}
-            className="bg-[#1A1A1A] hover:bg-[#333333] text-white text-xs font-bold px-3 py-1.5 rounded-lg active:scale-95 transition-all cursor-pointer"
-          >
-            Confirm Selected ({selectedStaffIds.length})
-          </button>
-        )}
       </div>
 
       {/* Cards list */}
@@ -707,21 +714,27 @@ export default function BulkConfirmTab({
                     </span>
                   </div>
                   <div className="flex flex-col">
-                    <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Late Fines</span>
-                    <span className={`font-bold mt-0.5 ${bd.confirmed_fines > 0 ? 'text-[var(--danger)]' : 'text-[#555555]'}`}>
-                      -{formatCurrency(bd.confirmed_fines)}
+                    <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Late Deduct</span>
+                    <span className={`font-bold mt-0.5 ${bd.late_salary_deduction > 0 ? 'text-[var(--danger)]' : 'text-[#555555]'}`}>
+                      -{formatCurrency(bd.late_salary_deduction || 0)}
                     </span>
                   </div>
                   <div className="flex flex-col items-end">
-                    <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Early Leave Deduct</span>
-                    <span className={`font-bold mt-0.5 ${bd.early_leave_deduction > 0 ? 'text-[var(--danger)]' : 'text-[#555555]'}`}>
-                      -{formatCurrency(bd.early_leave_deduction || 0)}
+                    <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Late Fines</span>
+                    <span className={`font-bold mt-0.5 ${bd.confirmed_fines > 0 ? 'text-[var(--danger)]' : 'text-[#555555]'}`}>
+                      -{formatCurrency(bd.confirmed_fines)}
                     </span>
                   </div>
                   <div className="flex flex-col">
                     <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Special Fines</span>
                     <span className={`font-bold mt-0.5 ${bd.confirmed_special_fines > 0 ? 'text-[var(--danger)]' : 'text-[#555555]'}`}>
                       -{formatCurrency(bd.confirmed_special_fines)}
+                    </span>
+                  </div>
+                  <div className="flex flex-col items-end">
+                    <span className="text-[var(--text-muted)] text-[10px] font-bold uppercase">Early Leave Deduct</span>
+                    <span className={`font-bold mt-0.5 ${bd.early_leave_deduction > 0 ? 'text-[var(--danger)]' : 'text-[#555555]'}`}>
+                      -{formatCurrency(bd.early_leave_deduction || 0)}
                     </span>
                   </div>
                   <div className="flex flex-row justify-between items-center col-span-2 border-t border-[#E8E8E8] pt-2 mt-1">
@@ -802,6 +815,70 @@ export default function BulkConfirmTab({
         <div className="w-full bg-[var(--success-bg)] border border-[var(--success)]/20 text-[var(--success)] font-bold text-center py-3.5 rounded-xl print:hidden text-xs flex items-center justify-center space-x-1.5">
           <Check size={14} strokeWidth={1.5} />
           <span>All branch salaries confirmed for this month.</span>
+        </div>
+      )}
+      {/* Bulk Action Bottom Bar */}
+      {selectedStaffIds.length > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[10000] bg-[#1A1A1A] text-white border border-white/10 rounded-full px-6 py-3.5 shadow-2xl flex items-center justify-between space-x-6 animate-in slide-in-from-bottom duration-300">
+          <span className="text-xs font-extrabold tracking-wide whitespace-nowrap">
+            {selectedStaffIds.length} staff selected
+          </span>
+          <button
+            onClick={() => handleConfirmSelected()}
+            disabled={confirming}
+            className="bg-white text-black hover:bg-white/90 font-extrabold text-[10px] px-3.5 py-2 rounded-full active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+          >
+            Confirm Selected
+          </button>
+        </div>
+      )}
+
+      {/* Bulk Confirm Modal */}
+      {bulkConfirm && (
+        <div className="fixed inset-0 z-[20000] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 select-none">
+          <div className="bg-white border border-[#E8E8E8] rounded-2xl p-6 max-w-sm w-full shadow-2xl flex flex-col items-center text-center animate-in zoom-in-95 duration-200">
+            <h3 className="text-base font-black text-[#1A1A1A] mb-2">Confirm Action</h3>
+            <p className="text-xs text-[var(--text-muted)] font-semibold leading-relaxed mb-6">
+              {bulkConfirm.message}
+            </p>
+            <div className="flex w-full gap-3">
+              <button
+                onClick={() => setBulkConfirm(null)}
+                className="flex-1 min-h-[40px] bg-[#F2F2F2] hover:bg-[#E8E8E8] active:scale-95 text-[#1A1A1A] text-xs font-bold rounded-xl transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  bulkConfirm.onConfirm();
+                  setBulkConfirm(null);
+                }}
+                className="flex-1 min-h-[40px] bg-[#1A1A1A] hover:bg-[#333333] active:scale-95 text-white text-xs font-bold rounded-xl transition-all cursor-pointer"
+              >
+                Confirm
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Progress Modal */}
+      {bulkProgress && (
+        <div className="fixed inset-0 z-[20000] bg-black/65 backdrop-blur-md flex items-center justify-center p-4 select-none">
+          <div className="bg-white border border-[#E8E8E8] rounded-2xl p-8 max-w-sm w-full shadow-2xl flex flex-col items-center text-center animate-in zoom-in-95 duration-200">
+            <RefreshCw size={36} className="animate-spin text-[#1A1A1A] mb-4" />
+            <h3 className="text-sm font-black text-[#1A1A1A] mb-1">Please Wait</h3>
+            <p className="text-xs text-[var(--text-muted)] font-bold">
+              Processing {bulkProgress.current} of {bulkProgress.total}...
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Global Toast */}
+      {toastMsg && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[15000] bg-[var(--success-bg)] border border-[var(--success)]/20 text-[var(--success)] font-bold text-xs px-4 py-2.5 rounded-full shadow-lg">
+          {toastMsg}
         </div>
       )}
     </div>

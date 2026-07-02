@@ -27,6 +27,12 @@ import {
   Megaphone
 } from 'lucide-react';
 
+const getMinutes = (timeStr: string) => {
+  if (!timeStr) return 0;
+  const [h, m] = timeStr.split(':').map(Number);
+  return h * 60 + m;
+};
+
 interface StaffMember {
   id: string;
   name: string;
@@ -312,13 +318,13 @@ export default function DashboardPage() {
         if (s.pay_type === 'hourly') continue;
         if (!s.shift?.start_time) continue;
 
-        // Parse shift start time today
-        const [sh, sm] = s.shift.start_time.split(':').map(Number);
-        const shiftStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), sh, sm);
-        const minutesDiff = (now.getTime() - shiftStart.getTime()) / (60 * 1000);
+        const nowMins = now.getHours() * 60 + now.getMinutes();
+        const shiftStartMins = getMinutes(s.shift?.start_time || '09:00');
 
-        // If shift started 30+ mins ago
-        if (minutesDiff >= 30) {
+        if (nowMins < shiftStartMins + 30) {
+          // Too early — skip absent check
+          continue;
+        }
           // Check if checked in
           const checkedIn = attendance.some((a) => a.staff_id === s.id && a.check_in_time);
           if (!checkedIn) {
@@ -367,7 +373,6 @@ export default function DashboardPage() {
                 }
               }
             }
-          }
         }
       }
     } catch (err) {
@@ -445,26 +450,20 @@ export default function DashboardPage() {
           }
         } else {
           if (!isHourly) {
-            const shiftStartStr = s.shift?.start_time || '09:00';
-            const [sh, sm] = shiftStartStr.split(':').map(Number);
             const now = new Date();
-            const shiftStartToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), sh, sm);
-            const minutesDiff = (now.getTime() - shiftStartToday.getTime()) / (60 * 1000);
-            
-            if (minutesDiff >= 30) {
+            const nowMins = now.getHours() * 60 + now.getMinutes();
+            const shiftStartMins = getMinutes(s.shift?.start_time || '09:00');
+            if (nowMins >= shiftStartMins + 30) {
               absent++;
             }
           }
         }
       } else {
         if (!isHourly) {
-          const shiftStartStr = s.shift?.start_time || '09:00';
-          const [sh, sm] = shiftStartStr.split(':').map(Number);
           const now = new Date();
-          const shiftStartToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), sh, sm);
-          const minutesDiff = (now.getTime() - shiftStartToday.getTime()) / (60 * 1000);
-          
-          if (minutesDiff >= 30) {
+          const nowMins = now.getHours() * 60 + now.getMinutes();
+          const shiftStartMins = getMinutes(s.shift?.start_time || '09:00');
+          if (nowMins >= shiftStartMins + 30) {
             absent++;
           }
         }
@@ -505,13 +504,11 @@ export default function DashboardPage() {
     const att = attendanceList.find((a) => a.staff_id === s.id);
     if (att && att.check_in_time) return false;
 
-    const shiftStartStr = s.shift?.start_time || '09:00';
-    const [sh, sm] = shiftStartStr.split(':').map(Number);
     const now = new Date();
-    const shiftStartToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), sh, sm);
-    const minutesDiff = (now.getTime() - shiftStartToday.getTime()) / (60 * 1000);
+    const nowMins = now.getHours() * 60 + now.getMinutes();
+    const shiftStartMins = getMinutes(s.shift?.start_time || '09:00');
 
-    return minutesDiff >= 30;
+    return nowMins >= shiftStartMins + 30;
   });
 
   const handleCreateAnnouncement = async (e: React.FormEvent) => {

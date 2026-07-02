@@ -6,7 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { createNotification } from '@/lib/notifications';
 import { useRouter } from 'next/navigation';
 import { Check, LogOut, Camera, AlertCircle, UserCheck, Timer, AlertTriangle, Coffee, RotateCcw, CircleCheck } from 'lucide-react';
-import { calculateOTMinutes, calculateActualHours, calculateActualHoursWithBreaks, calculateEarlyLeaveMinutes, calculateLateMinutes } from '@/lib/salary';
+import { calculateOTMinutes, calculateActualHours, calculateActualHoursWithBreaks, calculateEarlyLeaveMinutes, calculateLateMinutes, autoCloseCheckouts } from '@/lib/salary';
 import { formatTime12hr } from '@/lib/utils';
 
 
@@ -58,6 +58,15 @@ export default function KioskPage() {
     }, 1000);
     autoCloseBreaks();
     return () => clearInterval(timer);
+  }, [effectiveBranch]);
+
+  useEffect(() => {
+    if (!effectiveBranch) return;
+    autoCloseCheckouts(effectiveBranch);
+    const interval = setInterval(() => {
+      autoCloseCheckouts(effectiveBranch);
+    }, 1800000); // 30 minutes
+    return () => clearInterval(interval);
   }, [effectiveBranch]);
 
   // Try to ensure bucket exists on app startup
@@ -238,7 +247,7 @@ export default function KioskPage() {
   };
 
   const startCamera = async (type: FlowType) => {
-    if (type === 'CHECK_IN' && staff) {
+    if (type === 'CHECK_IN' && staff && staff.pay_type !== 'hourly') {
       const now = new Date();
       const todayStr = now.toISOString().split('T')[0];
       const shiftStart = staff.shift?.start_time || staff.shifts?.start_time || '09:00';
@@ -432,7 +441,7 @@ export default function KioskPage() {
         });
       }
 
-      let resMsg = 'Checked out successfully!';
+      let resMsg = isHourly ? `Checked out — ${actualHrs.toFixed(2)} hrs logged today` : 'Checked out successfully!';
       let resDetails = '';
 
       if (otMins > 0) {
@@ -558,8 +567,13 @@ export default function KioskPage() {
 
         // Calculate early in
         let earlyInMinutes = 0;
-        if (!isHourly && currentMins < shiftMins) {
-          earlyInMinutes = shiftMins - currentMins;
+        if (!isHourly) {
+          const shiftStartMins = shiftMins;
+          const checkInMins = currentMins;
+          const earlyMins = Math.max(0, shiftStartMins - checkInMins);
+          if (earlyMins > 0) {
+            earlyInMinutes = earlyMins;
+          }
         }
 
         // Calculate minutes late using calculateLateMinutes
@@ -1346,7 +1360,11 @@ export default function KioskPage() {
               {staff.name}
             </div>
             <div className="text-white text-xs font-bold mb-8 bg-white/10 px-3 py-1 rounded-[20px] border border-white/20">
-              Shift: {staff.shift?.label} ({formatTime12hr(staff.shift?.start_time)} - {formatTime12hr(staff.shift?.end_time)})
+              {staff.pay_type === 'hourly' ? (
+                <span>Pay Type: Hourly / Flexible</span>
+              ) : (
+                <span>Shift: {staff.shift?.label} ({formatTime12hr(staff.shift?.start_time)} - {formatTime12hr(staff.shift?.end_time)})</span>
+              )}
             </div>
 
             <div className="w-full grid grid-cols-2 gap-3.5 px-4">
