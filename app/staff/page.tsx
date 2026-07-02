@@ -1221,11 +1221,37 @@ export default function StaffPage() {
 
     // Set default join date to today
     const todayStr = new Date().toISOString().split('T')[0];
-    setFormData((prev) => ({
-      ...prev,
-      join_date: todayStr,
-      branch_id: userBranch || '', // pre-select branch if isolated
-    }));
+    setFormData((prev) => {
+      const updated = {
+        ...prev,
+        join_date: todayStr,
+        branch_id: userBranch || prev.branch_id,
+      };
+
+      // Prefill from URL query params (Hired Candidates)
+      if (typeof window !== 'undefined') {
+        const urlParams = new URLSearchParams(window.location.search);
+        const prefillName = urlParams.get('prefill_name');
+        const prefillDept = urlParams.get('prefill_dept');
+        const prefillPhone = urlParams.get('prefill_phone');
+        const prefillBranch = urlParams.get('prefill_branch');
+
+        if (prefillName) {
+          updated.name = prefillName;
+          updated.department = prefillDept || '';
+          updated.mobile_number = prefillPhone || '';
+          updated.branch_id = prefillBranch || updated.branch_id;
+          
+          // Open panel automatically
+          setShowAddPanel(true);
+          
+          // Clean URL params to avoid opening again on refresh
+          const newUrl = window.location.pathname;
+          window.history.replaceState({}, '', newUrl);
+        }
+      }
+      return updated;
+    });
 
     // Realtime channel
     const channel = supabase

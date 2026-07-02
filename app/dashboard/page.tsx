@@ -71,6 +71,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   const [latestAnn, setLatestAnn] = useState<any>(null);
+  const [newCandidatesCount, setNewCandidatesCount] = useState(0);
 
   // Month-end checklist counts
   const [checklistIssues, setChecklistIssues] = useState(0);
@@ -237,6 +238,23 @@ export default function DashboardPage() {
         });
       } else {
         setLatestAnn(null);
+      }
+
+      // Fetch new candidates today (ops_manager only)
+      if (user?.role === 'ops_manager') {
+        const now = new Date();
+        const yr = now.getFullYear();
+        const mo = now.getMonth() + 1;
+        const dy = now.getDate();
+        const todayLocalStr = `${yr}-${String(mo).padStart(2, '0')}-${String(dy).padStart(2, '0')}`;
+
+        const { count: cCount } = await supabase
+          .from('job_candidates')
+          .select('id', { count: 'exact', head: true })
+          .eq('status', 'new')
+          .eq('walk_in_date', todayLocalStr);
+
+        setNewCandidatesCount(cCount || 0);
       }
 
       // 6. Run automatic absent alerts check
@@ -1047,6 +1065,24 @@ export default function DashboardPage() {
                     <span className="text-[13px] font-bold text-[#1A1A1A]">Settings</span>
                   </Link>
                 </>
+              )}
+
+              {/* Candidates Quick Action (Ops Manager only) */}
+              {user?.role === 'ops_manager' && (
+                <Link
+                  href="/candidates"
+                  className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group col-span-2 relative"
+                >
+                  <div className="w-9 h-9 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center mb-2 mx-auto relative">
+                    <Users size={16} strokeWidth={1.5} className="text-white" />
+                    {newCandidatesCount > 0 && (
+                      <span className="absolute -top-1 -right-1 bg-blue-500 text-white rounded-full w-5 h-5 text-[10px] font-black flex items-center justify-center border border-white">
+                        {newCandidatesCount}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[13px] font-bold text-[#1A1A1A]">Candidates</span>
+                </Link>
               )}
 
               {/* The Wall Quick Action (Hidden from Admin) */}
