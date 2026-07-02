@@ -21,6 +21,7 @@ export default function KioskPage() {
   const [kioskState, setKioskState] = useState<KioskState>('IDLE');
   const [pin, setPin] = useState('');
   const [staff, setStaff] = useState<any>(null);
+  const [loadedBreakSettings, setLoadedBreakSettings] = useState<any>(null);
   const [flow, setFlow] = useState<FlowType>(null);
   const [errorMsg, setErrorMsg] = useState('');
   const [pendingCheckout, setPendingCheckout] = useState<any>(null);
@@ -202,6 +203,30 @@ export default function KioskPage() {
         normalizedShift = Array.isArray(data.shifts) ? data.shifts[0] : data.shifts;
       }
       data.shift = normalizedShift;
+
+      // Fetch break settings for their branch
+      const branchId = data.branch_id || 'daily';
+      const { data: bSettings } = await supabase
+        .from('break_settings')
+        .select('*')
+        .eq('branch_id', branchId)
+        .maybeSingle();
+
+      setLoadedBreakSettings(bSettings || {
+        branch_id: branchId,
+        morning_tea_duration: 10,
+        morning_tea_start: '09:30',
+        morning_tea_end: '11:30',
+        morning_tea_enabled: true,
+        food_break_duration: 25,
+        food_break_start: '12:00',
+        food_break_end: '15:00',
+        food_break_enabled: true,
+        evening_tea_duration: 10,
+        evening_tea_start: '16:00',
+        evening_tea_end: '18:30',
+        evening_tea_enabled: true,
+      });
 
       setStaff(data);
       setKioskState('STAFF_FOUND');
@@ -1351,70 +1376,108 @@ export default function KioskPage() {
           </div>
         )}
 
-        {kioskState === 'STAFF_FOUND' && staff && (
-          <div className="w-full flex flex-col items-center">
-            <div className="text-[#999999] text-xs font-bold uppercase tracking-wider mb-1">
-              Welcome back
-            </div>
-            <div className="text-3xl font-extrabold text-white text-center mb-1">
-              {staff.name}
-            </div>
-            <div className="text-white text-xs font-bold mb-8 bg-white/10 px-3 py-1 rounded-[20px] border border-white/20">
-              {staff.pay_type === 'hourly' ? (
-                <span>Pay Type: Hourly / Flexible</span>
-              ) : (
-                <span>Shift: {staff.shift?.label} ({formatTime12hr(staff.shift?.start_time)} - {formatTime12hr(staff.shift?.end_time)})</span>
-              )}
-            </div>
+        {kioskState === 'STAFF_FOUND' && staff && (() => {
+          const isBreakStartVisible = (() => {
+            if (!loadedBreakSettings) return true;
+            const now = new Date();
+            const current_time_mins = now.getHours() * 60 + now.getMinutes();
 
-            <div className="w-full grid grid-cols-2 gap-3.5 px-4">
+            const parseTimeToMins = (tStr: string) => {
+              if (!tStr) return 0;
+              const [h, m] = tStr.split(':').map(Number);
+              return h * 60 + m;
+            };
+
+            const morning_start = parseTimeToMins(loadedBreakSettings.morning_tea_start);
+            const morning_end = parseTimeToMins(loadedBreakSettings.morning_tea_end);
+            const food_start = parseTimeToMins(loadedBreakSettings.food_break_start);
+            const food_end = parseTimeToMins(loadedBreakSettings.food_break_end);
+            const evening_start = parseTimeToMins(loadedBreakSettings.evening_tea_start);
+            const evening_end = parseTimeToMins(loadedBreakSettings.evening_tea_end);
+
+            if (current_time_mins >= morning_start && current_time_mins <= morning_end) {
+              return loadedBreakSettings.morning_tea_enabled !== false;
+            }
+            if (current_time_mins >= food_start && current_time_mins <= food_end) {
+              return loadedBreakSettings.food_break_enabled !== false;
+            }
+            if (current_time_mins >= evening_start && current_time_mins <= evening_end) {
+              return loadedBreakSettings.evening_tea_enabled !== false;
+            }
+            return true;
+          })();
+
+          return (
+            <div className="w-full flex flex-col items-center">
+              <div className="text-[#999999] text-xs font-bold uppercase tracking-wider mb-1">
+                Welcome back
+              </div>
+              <div className="text-3xl font-extrabold text-white text-center mb-1">
+                {staff.name}
+              </div>
+              <div className="text-white text-xs font-bold mb-8 bg-white/10 px-3 py-1 rounded-[20px] border border-white/20">
+                {staff.pay_type === 'hourly' ? (
+                  <span>Pay Type: Hourly / Flexible</span>
+                ) : (
+                  <span>Shift: {staff.shift?.label} ({formatTime12hr(staff.shift?.start_time)} - {formatTime12hr(staff.shift?.end_time)})</span>
+                )}
+              </div>
+
+              <div className="w-full grid grid-cols-2 gap-3.5 px-4">
+                <button
+                  type="button"
+                  onClick={() => startCamera('CHECK_IN')}
+                  className="bg-[rgba(45,122,58,0.15)] border border-[rgba(45,122,58,0.3)] hover:bg-[rgba(45,122,58,0.25)] text-[#2D7A3A] py-[18px] rounded-[12px] text-xs font-bold flex flex-col items-center justify-center space-y-2 active:scale-[0.98] transition-all min-h-[48px]"
+                >
+                  <UserCheck size={22} strokeWidth={1.5} />
+                  <span>CHECK IN</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => startCamera('CHECK_OUT')}
+                  className="bg-[rgba(26,95,168,0.15)] border border-[rgba(26,95,168,0.3)] hover:bg-[rgba(26,95,168,0.25)] text-[#1A5FA8] py-[18px] rounded-[12px] text-xs font-bold flex flex-col items-center justify-center space-y-2 active:scale-[0.98] transition-all min-h-[48px]"
+                >
+                  <LogOut size={22} strokeWidth={1.5} />
+                  <span>CHECK OUT</span>
+                </button>
+
+                {isBreakStartVisible ? (
+                  <button
+                    type="button"
+                    onClick={handleBreakStart}
+                    className="bg-[rgba(184,134,11,0.15)] border border-[rgba(184,134,11,0.3)] hover:bg-[rgba(184,134,11,0.25)] text-[#B8860B] py-[18px] rounded-[12px] text-xs font-bold flex flex-col items-center justify-center space-y-2 active:scale-[0.98] transition-all min-h-[48px]"
+                  >
+                    <Coffee size={22} strokeWidth={1.5} />
+                    <span>BREAK START</span>
+                  </button>
+                ) : (
+                  <div className="bg-[#333]/10 border border-[#333]/20 text-[#666] py-[18px] rounded-[12px] text-xs font-bold flex flex-col items-center justify-center space-y-2 opacity-40 min-h-[48px] select-none">
+                    <Coffee size={22} strokeWidth={1.5} />
+                    <span className="uppercase text-[9px] tracking-wider font-extrabold text-red-500">Break Disabled</span>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleBreakEnd}
+                  className="bg-transparent border border-white/20 hover:bg-white/10 text-white py-[18px] rounded-[12px] text-xs font-bold flex flex-col items-center justify-center space-y-2 active:scale-[0.98] transition-all min-h-[48px]"
+                >
+                  <RotateCcw size={22} strokeWidth={1.5} />
+                  <span>BREAK END</span>
+                </button>
+              </div>
+
               <button
                 type="button"
-                onClick={() => startCamera('CHECK_IN')}
-                className="bg-[rgba(45,122,58,0.15)] border border-[rgba(45,122,58,0.3)] hover:bg-[rgba(45,122,58,0.25)] text-[#2D7A3A] py-[18px] rounded-[12px] text-xs font-bold flex flex-col items-center justify-center space-y-2 active:scale-[0.98] transition-all min-h-[48px]"
+                onClick={resetKiosk}
+                className="mt-8 border border-[#333333] text-[#999999] hover:text-white px-4 py-2.5 rounded-[12px] text-xs font-bold bg-transparent transition-all min-h-[40px]"
               >
-                <UserCheck size={22} strokeWidth={1.5} />
-                <span>CHECK IN</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => startCamera('CHECK_OUT')}
-                className="bg-[rgba(26,95,168,0.15)] border border-[rgba(26,95,168,0.3)] hover:bg-[rgba(26,95,168,0.25)] text-[#1A5FA8] py-[18px] rounded-[12px] text-xs font-bold flex flex-col items-center justify-center space-y-2 active:scale-[0.98] transition-all min-h-[48px]"
-              >
-                <LogOut size={22} strokeWidth={1.5} />
-                <span>CHECK OUT</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleBreakStart}
-                className="bg-[rgba(184,134,11,0.15)] border border-[rgba(184,134,11,0.3)] hover:bg-[rgba(184,134,11,0.25)] text-[#B8860B] py-[18px] rounded-[12px] text-xs font-bold flex flex-col items-center justify-center space-y-2 active:scale-[0.98] transition-all min-h-[48px]"
-              >
-                <Coffee size={22} strokeWidth={1.5} />
-                <span>BREAK START</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={handleBreakEnd}
-                className="bg-transparent border border-white/20 hover:bg-white/10 text-white py-[18px] rounded-[12px] text-xs font-bold flex flex-col items-center justify-center space-y-2 active:scale-[0.98] transition-all min-h-[48px]"
-              >
-                <RotateCcw size={22} strokeWidth={1.5} />
-                <span>BREAK END</span>
+                Cancel
               </button>
             </div>
-
-            <button
-              type="button"
-              onClick={resetKiosk}
-              className="mt-8 border border-[#333333] text-[#999999] hover:text-white px-4 py-2.5 rounded-[12px] text-xs font-bold bg-transparent transition-all min-h-[40px]"
-
-            >
-              Cancel
-            </button>
-          </div>
-        )}
+          );
+        })()}
 
         {kioskState === 'CAMERA' && (
           <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 md:p-8 backdrop-blur-sm">

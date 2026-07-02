@@ -54,6 +54,7 @@ export default function AnnouncementsPage() {
   // Selected announcement for receipts
   const [selectedAnn, setSelectedAnn] = useState<Announcement | null>(null);
   const [editingAnn, setEditingAnn] = useState<Announcement | null>(null);
+  const [readCountForWarning, setReadCountForWarning] = useState(0);
   const [receipts, setReceipts] = useState<ReadReceipt[]>([]);
   const [loadingReceipts, setLoadingReceipts] = useState(false);
 
@@ -172,7 +173,22 @@ export default function AnnouncementsPage() {
     }
   };
 
-  const startEdit = (ann: Announcement) => {
+  const startEdit = async (ann: Announcement) => {
+    try {
+      const { count, error } = await supabase
+        .from('announcement_reads')
+        .select('*', { count: 'exact', head: true })
+        .eq('announcement_id', ann.id);
+      if (!error && count !== null) {
+        setReadCountForWarning(count);
+      } else {
+        setReadCountForWarning(0);
+      }
+    } catch (e) {
+      console.error(e);
+      setReadCountForWarning(0);
+    }
+
     setEditingAnn(ann);
     setTitle(ann.title);
     setMessage(ann.message);
@@ -242,6 +258,9 @@ export default function AnnouncementsPage() {
   };
 
   const handleDelete = async (id: string) => {
+    if (!user) return;
+    const annToDelete = announcements.find(a => a.id === id);
+    if (!annToDelete) return;
     if (!confirm('Are you sure you want to delete this announcement? This will also delete all associated read receipt records.')) return;
     try {
       // 1. Delete read receipts
@@ -257,6 +276,16 @@ export default function AnnouncementsPage() {
         .delete()
         .eq('id', id);
       if (annErr) throw annErr;
+
+      await createAuditLog({
+        action: 'delete',
+        table_name: 'staff_announcements',
+        record_id: id,
+        new_value: null,
+        performed_by: user.email,
+        performed_by_role: user.role,
+        reason: `Deleted announcement "${annToDelete.title}"`
+      });
 
       setToastMsg('Announcement and read receipts deleted ✓');
       setTimeout(() => setToastMsg(''), 3000);
@@ -531,24 +560,27 @@ export default function AnnouncementsPage() {
                           <Eye size={12} />
                           <span>Read Receipts</span>
                         </button>
-                        {isAuthorized && (
-                          <>
-                            <button
-                              onClick={() => startEdit(ann)}
-                              className="text-gray-500 hover:text-black transition-colors flex items-center gap-0.5 cursor-pointer"
-                              title="Edit"
-                            >
-                              <Pencil size={12} />
-                            </button>
-                            <button
-                              onClick={() => handleDelete(ann.id)}
-                              className="text-[var(--danger)] hover:text-[#A93226] transition-colors flex items-center gap-0.5 cursor-pointer"
-                              title="Delete"
-                            >
-                              <Trash2 size={12} />
-                            </button>
-                          </>
-                        )}
+                        {(() => {
+                          const canEditDelete = user?.role === 'ops_manager' && (ann.created_by === user.name || ann.created_by === user.email);
+                          return canEditDelete && (
+                            <>
+                              <button
+                                onClick={() => startEdit(ann)}
+                                className="text-gray-500 hover:text-black transition-colors flex items-center gap-0.5 cursor-pointer"
+                                title="Edit"
+                              >
+                                <Pencil size={12} />
+                              </button>
+                              <button
+                                onClick={() => handleDelete(ann.id)}
+                                className="text-[var(--danger)] hover:text-[#A93226] transition-colors flex items-center gap-0.5 cursor-pointer"
+                                title="Delete"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            </>
+                          );
+                        })()}
                       </div>
                     </div>
                   </div>
@@ -673,6 +705,11 @@ export default function AnnouncementsPage() {
             </div>
 
             <form onSubmit={handleUpdate} className="space-y-3.5 text-xs">
+              {readCountForWarning > 0 && (
+                <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-3 text-xs font-semibold leading-relaxed">
+                  ⚠️ {readCountForWarning} staff already read this. They won't be re-notified of the edit.
+                </div>
+              )}
               <div>
                 <label className="block text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider mb-1">Title</label>
                 <input

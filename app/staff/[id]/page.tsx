@@ -25,7 +25,9 @@ import {
   HelpCircle,
   FileMinus,
   CheckCircle2,
-  Trash2
+  Trash2,
+  Download,
+  Flag
 } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import { formatTime12hr } from '@/lib/utils';
@@ -74,6 +76,9 @@ interface AttendanceRecord {
   day_type?: string;
   late_salary_deduction_minutes?: number;
   auto_closed?: boolean;
+  photo_flagged?: boolean;
+  photo_flag_reason?: string | null;
+  photo_flagged_by?: string | null;
 }
 
 interface LateFine {
@@ -194,7 +199,17 @@ export default function StaffProfilePage() {
     dayBreaks: BreakLog[];
     dayFines: (LateFine | SpecialFine)[];
   } | null>(null);
-  const [selectedPhoto, setSelectedPhoto] = useState<{ url: string; title: string } | null>(null);
+  const [selectedPhoto, setSelectedPhoto] = useState<{
+    url: string;
+    title: string;
+    name?: string;
+    date?: string;
+    label?: string;
+    attendanceId?: string;
+    photo_flagged?: boolean;
+    photo_flag_reason?: string;
+    photo_flagged_by?: string;
+  } | null>(null);
   const [toastMsg, setToastMsg] = useState('');
 
   // Editing past attendance states
@@ -2514,12 +2529,31 @@ export default function StaffProfilePage() {
                             {formatTime12hr(selectedDayDetail.record.check_in_time) || '—'}
                           </span>
                           {selectedDayDetail.record.check_in_photo ? (
-                            <button 
-                              onClick={() => setSelectedPhoto({ url: selectedDayDetail.record!.check_in_photo!, title: 'Check In Selfie' })}
-                              className="w-10 h-10 rounded-full overflow-hidden mt-2 border border-[#4ADE80]/30 cursor-pointer hover:border-white transition-all active:scale-90"
-                            >
-                              <img src={selectedDayDetail.record.check_in_photo} alt="IN" className="w-full h-full object-cover" />
-                            </button>
+                            <div className="relative">
+                              <button 
+                                onClick={() => setSelectedPhoto({ 
+                                  url: selectedDayDetail.record!.check_in_photo!, 
+                                  title: 'Check In Selfie',
+                                  name: staff?.name,
+                                  date: selectedDayDetail.record!.date,
+                                  label: 'Check In Photo',
+                                  attendanceId: selectedDayDetail.record!.id,
+                                  photo_flagged: selectedDayDetail.record!.photo_flagged,
+                                  photo_flag_reason: selectedDayDetail.record!.photo_flag_reason || undefined,
+                                  photo_flagged_by: selectedDayDetail.record!.photo_flagged_by || undefined
+                                })}
+                                className={`w-10 h-10 rounded-full overflow-hidden mt-2 border cursor-pointer hover:border-white transition-all active:scale-95 ${
+                                  selectedDayDetail.record.photo_flagged ? 'border-amber-500 ring-2 ring-amber-500/20' : 'border-[#4ADE80]/30'
+                                }`}
+                              >
+                                <img src={selectedDayDetail.record.check_in_photo} alt="IN" className="w-full h-full object-cover" />
+                              </button>
+                              {selectedDayDetail.record.photo_flagged && (
+                                <span className="absolute top-1.5 -right-0.5 bg-amber-500 text-white rounded-full w-4.5 h-4.5 flex items-center justify-center border border-white shadow">
+                                  <Flag size={9} fill="currentColor" />
+                                </span>
+                              )}
+                            </div>
                           ) : (
                             <span className="text-[9px] text-[var(--text-muted)] italic mt-2.5">No photo</span>
                           )}
@@ -2531,12 +2565,31 @@ export default function StaffProfilePage() {
                             {formatTime12hr(selectedDayDetail.record.check_out_time) || '—'}
                           </span>
                           {selectedDayDetail.record.check_out_photo ? (
-                            <button 
-                              onClick={() => setSelectedPhoto({ url: selectedDayDetail.record!.check_out_photo!, title: 'Check Out Selfie' })}
-                              className="w-10 h-10 rounded-full overflow-hidden mt-2 border border-[#60A5FA]/30 cursor-pointer hover:border-white transition-all active:scale-90"
-                            >
-                              <img src={selectedDayDetail.record.check_out_photo} alt="OUT" className="w-full h-full object-cover" />
-                            </button>
+                            <div className="relative">
+                              <button 
+                                onClick={() => setSelectedPhoto({ 
+                                  url: selectedDayDetail.record!.check_out_photo!, 
+                                  title: 'Check Out Selfie',
+                                  name: staff?.name,
+                                  date: selectedDayDetail.record!.date,
+                                  label: 'Check Out Photo',
+                                  attendanceId: selectedDayDetail.record!.id,
+                                  photo_flagged: selectedDayDetail.record!.photo_flagged,
+                                  photo_flag_reason: selectedDayDetail.record!.photo_flag_reason || undefined,
+                                  photo_flagged_by: selectedDayDetail.record!.photo_flagged_by || undefined
+                                })}
+                                className={`w-10 h-10 rounded-full overflow-hidden mt-2 border cursor-pointer hover:border-white transition-all active:scale-95 ${
+                                  selectedDayDetail.record.photo_flagged ? 'border-amber-500 ring-2 ring-amber-500/20' : 'border-[#60A5FA]/30'
+                                }`}
+                              >
+                                <img src={selectedDayDetail.record.check_out_photo} alt="OUT" className="w-full h-full object-cover" />
+                              </button>
+                              {selectedDayDetail.record.photo_flagged && (
+                                <span className="absolute top-1.5 -right-0.5 bg-amber-500 text-white rounded-full w-4.5 h-4.5 flex items-center justify-center border border-white shadow">
+                                  <Flag size={9} fill="currentColor" />
+                                </span>
+                              )}
+                            </div>
                           ) : (
                             <span className="text-[9px] text-[var(--text-muted)] italic mt-2.5">No photo</span>
                           )}
@@ -2678,13 +2731,66 @@ export default function StaffProfilePage() {
 
       {/* Selfie Zoom Modal */}
       {selectedPhoto && (
-        <div className="fixed inset-0 z-[13000] bg-black/90 flex items-center justify-center p-4" onClick={() => setSelectedPhoto(null)}>
-          <div className="relative max-w-sm w-full bg-[var(--bg-surface)] rounded-2xl border border-[var(--border-strong)] p-4 flex flex-col items-center">
-            <button onClick={() => setSelectedPhoto(null)} className="absolute top-3 right-3 text-[var(--text-muted)] hover:text-white flex items-center justify-center p-1">
-              <X size={16} />
+        <div className="fixed inset-0 z-[13000] bg-black/90 flex flex-col justify-between p-6" onClick={() => setSelectedPhoto(null)}>
+          {/* Top Bar with metadata and close button */}
+          <div className="flex justify-between items-start w-full text-white relative z-10">
+            <div>
+              <h3 className="text-base font-extrabold tracking-tight">
+                {selectedPhoto.name || 'Selfie Zoom'}
+              </h3>
+              <p className="text-xs text-white/70 font-semibold mt-1">
+                {selectedPhoto.label || selectedPhoto.title}
+                {selectedPhoto.date ? ` • ${selectedPhoto.date}` : ''}
+              </p>
+            </div>
+            <button
+              onClick={() => setSelectedPhoto(null)}
+              className="text-white/80 hover:text-white p-2 rounded-full hover:bg-white/10 transition-colors flex items-center justify-center cursor-pointer"
+            >
+              <X size={24} strokeWidth={2} />
             </button>
-            <h4 className="text-white text-sm font-bold mb-3">{selectedPhoto.title}</h4>
-            <img src={selectedPhoto.url} alt="Selfie zoom" className="w-full max-h-[60vh] object-contain rounded-lg border border-[var(--border)]" />
+          </div>
+
+          {/* Centered Full-size Photo */}
+          <div className="flex-1 flex items-center justify-center my-4">
+            <img
+              src={selectedPhoto.url}
+              alt="Verification selfie zoom"
+              className="max-w-full max-h-[75vh] object-contain rounded-[16px] shadow-2xl border border-white/10"
+            />
+          </div>
+
+          {/* Bottom actions bar */}
+          <div className="flex flex-col items-center space-y-4 pb-4 z-10 w-full max-w-md mx-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-center gap-3 w-full">
+              {user?.role === 'ops_manager' && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      const response = await fetch(selectedPhoto.url);
+                      const blob = await response.blob();
+                      const blobUrl = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = blobUrl;
+                      const inOut = selectedPhoto.label === 'Check In Photo' ? 'In' : 'Out';
+                      a.download = `${selectedPhoto.name || 'Staff'}_${selectedPhoto.date || 'Date'}_${inOut}.jpg`;
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                      URL.revokeObjectURL(blobUrl);
+                    } catch (err) {
+                      console.error('Failed to download photo:', err);
+                      window.open(selectedPhoto.url, '_blank');
+                    }
+                  }}
+                  className="bg-white hover:bg-gray-200 text-black font-extrabold text-xs px-5 py-2.5 rounded-[12px] flex items-center space-x-1.5 transition-all shadow-lg cursor-pointer"
+                >
+                  <Download size={18} />
+                  <span>Download HD</span>
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { createAuditLog } from '@/lib/audit';
-import { Clock, RefreshCw, CircleCheck, CircleX, AlertTriangle, X, AlertCircle, Download, Upload, Check, List, LayoutGrid, MoreVertical, Plus, Camera } from 'lucide-react';
+import { Clock, RefreshCw, CircleCheck, CircleX, AlertTriangle, X, AlertCircle, Download, Upload, Check, List, LayoutGrid, MoreVertical, Plus, Camera, Flag } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import * as XLSX from 'xlsx';
 import { DEPARTMENTS } from '@/lib/data';
@@ -2912,7 +2912,7 @@ export default function AttendancePage() {
                               });
                             }}
                             className={`w-9 h-9 rounded-full overflow-hidden border shadow-sm hover:scale-105 active:scale-95 transition-all cursor-pointer flex-shrink-0 ${
-                              item.record!.photo_flagged ? 'border-red-500 ring-2 ring-red-500/20' : 'border-[#E8E8E8]'
+                              item.record!.photo_flagged ? 'border-amber-500 ring-2 ring-amber-500/20' : 'border-[#E8E8E8]'
                             }`}
                           >
                             <img
@@ -2922,8 +2922,8 @@ export default function AttendancePage() {
                             />
                           </button>
                           {item.record!.photo_flagged && (
-                            <span className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-4 h-4 flex items-center justify-center text-[9px] font-black border border-white animate-pulse">
-                              ⚠️
+                            <span className="absolute -top-1 -right-1 bg-amber-500 text-white rounded-full w-4 h-4 flex items-center justify-center border border-white shadow">
+                              <Flag size={8} fill="currentColor" />
                             </span>
                           )}
                         </div>
@@ -2995,7 +2995,7 @@ export default function AttendancePage() {
                                 });
                               }}
                               className={`w-4.5 h-4.5 rounded-full overflow-hidden border active:scale-90 ${
-                                item.record.photo_flagged ? 'border-red-500 ring-1 ring-red-500/35' : 'border-[#2D7A3A]/25'
+                                item.record.photo_flagged ? 'border-amber-500 ring-1 ring-amber-500/35' : 'border-[#2D7A3A]/25'
                               }`}
                             >
                               <img
@@ -3005,8 +3005,8 @@ export default function AttendancePage() {
                               />
                             </button>
                             {item.record.photo_flagged && (
-                              <span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white rounded-full w-2 h-2 flex items-center justify-center text-[5px] font-black border border-white">
-                                !
+                              <span className="absolute -top-0.5 -right-0.5 bg-amber-500 text-white rounded-full w-2 h-2 flex items-center justify-center border border-white shadow">
+                                <Flag size={5} fill="currentColor" />
                               </span>
                             )}
                           </div>
@@ -3031,8 +3031,10 @@ export default function AttendancePage() {
                                   e.stopPropagation();
                                   setSelectedPhoto({
                                     url: item.record!.check_out_photo!,
-                                    label: `${item.name} - Check Out`,
+                                    name: item.name,
+                                    label: 'Check Out Photo',
                                     time: formatTime12hr(item.record!.check_out_time) || '',
+                                    date: item.record!.date,
                                     attendanceId: item.record!.id,
                                     photo_flagged: item.record!.photo_flagged,
                                     photo_flag_reason: item.record!.photo_flag_reason || undefined,
@@ -3040,7 +3042,7 @@ export default function AttendancePage() {
                                   });
                                 }}
                                 className={`w-4.5 h-4.5 rounded-full overflow-hidden border active:scale-90 ${
-                                  item.record.photo_flagged ? 'border-red-500 ring-1 ring-red-500/35' : 'border-[#1A5FA8]/25'
+                                  item.record.photo_flagged ? 'border-amber-500 ring-1 ring-amber-500/35' : 'border-[#1A5FA8]/25'
                                 }`}
                               >
                                 <img
@@ -3050,8 +3052,8 @@ export default function AttendancePage() {
                                 />
                               </button>
                               {item.record.photo_flagged && (
-                                <span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white rounded-full w-2 h-2 flex items-center justify-center text-[5px] font-black border border-white">
-                                  !
+                                <span className="absolute -top-0.5 -right-0.5 bg-amber-500 text-white rounded-full w-2 h-2 flex items-center justify-center border border-white shadow">
+                                  <Flag size={5} fill="currentColor" />
                                 </span>
                               )}
                             </div>
@@ -3196,12 +3198,12 @@ export default function AttendancePage() {
 
           {/* Bottom actions bar */}
           <div className="flex flex-col items-center space-y-4 pb-4 z-10 w-full max-w-md mx-auto" onClick={(e) => e.stopPropagation()}>
-            {selectedPhoto.attendanceId && (user?.role === 'ops_manager' || user?.role === 'admin') && (
+            {selectedPhoto.attendanceId && user?.role === 'ops_manager' && (
               <div className="w-full bg-white/10 backdrop-blur border border-white/20 rounded-[14px] p-4 text-white text-xs space-y-3">
                 {selectedPhoto.photo_flagged ? (
                   <div className="space-y-2 text-left">
                     <p className="font-extrabold text-red-400 flex items-center gap-1 text-[11px]">
-                      ⚠️ FLAGGED BAD QUALITY / BLURRY
+                      ⚠️ FLAGGED QUALITY ISSUE
                     </p>
                     <p className="text-[10px] text-white/80 font-bold leading-normal">
                       Reason: <span className="font-mono text-white bg-white/10 px-1 py-0.5 rounded">{selectedPhoto.photo_flag_reason}</span>
@@ -3219,26 +3221,28 @@ export default function AttendancePage() {
                   </div>
                 ) : (
                   <div className="space-y-3 text-left">
-                    <p className="font-extrabold text-white/90 text-[11px]">
-                      Flag Photo Quality Issues
+                    <p className="font-extrabold text-white/90 text-[11px] flex items-center gap-1">
+                      <Flag size={14} /> Flag Photo Quality Issues
                     </p>
                     <div className="flex gap-2">
-                      <input
-                        type="text"
-                        placeholder="Reason (e.g. Blurry selfie)"
-                        id="flag-reason-input"
-                        className="flex-1 bg-black/40 border border-white/20 rounded-[10px] px-3 py-2 text-white text-xs focus:outline-none focus:border-white font-semibold"
-                        defaultValue="Blurry selfie"
-                      />
+                      <select
+                        id="flag-reason-select"
+                        className="flex-1 bg-black text-white border border-white/20 rounded-[10px] px-3 py-2 text-white text-xs focus:outline-none focus:border-white font-semibold [color-scheme:dark]"
+                      >
+                        <option value="Face covered">Face covered</option>
+                        <option value="Photo unclear">Photo unclear</option>
+                        <option value="Wrong person suspected">Wrong person suspected</option>
+                        <option value="Other">Other</option>
+                      </select>
                       <button
                         type="button"
                         onClick={() => {
-                          const input = document.getElementById('flag-reason-input') as HTMLInputElement;
-                          handleFlagPhoto(input?.value || 'Blurry selfie');
+                          const select = document.getElementById('flag-reason-select') as HTMLSelectElement;
+                          handleFlagPhoto(select?.value || 'Face covered');
                         }}
                         className="bg-white hover:bg-gray-200 text-black font-extrabold text-[11px] px-4 rounded-[10px] active:scale-95 transition-all cursor-pointer"
                       >
-                        Flag Blurry
+                        Flag Photo
                       </button>
                     </div>
                   </div>
@@ -3247,7 +3251,7 @@ export default function AttendancePage() {
             )}
 
             <div className="flex justify-center gap-3 w-full">
-              {(user?.role === 'ops_manager' || user?.role === 'admin') && (
+              {user?.role === 'ops_manager' && (
                 <button
                   type="button"
                   onClick={async () => {
@@ -3257,7 +3261,8 @@ export default function AttendancePage() {
                       const blobUrl = URL.createObjectURL(blob);
                       const a = document.createElement('a');
                       a.href = blobUrl;
-                      a.download = `${selectedPhoto.name || 'staff'}_${selectedPhoto.date || 'photo'}.jpg`;
+                      const inOut = selectedPhoto.label === 'Check In Photo' ? 'In' : 'Out';
+                      a.download = `${selectedPhoto.name || 'Staff'}_${selectedPhoto.date || 'Date'}_${inOut}.jpg`;
                       document.body.appendChild(a);
                       a.click();
                       document.body.removeChild(a);
@@ -3269,7 +3274,7 @@ export default function AttendancePage() {
                   }}
                   className="bg-white hover:bg-gray-200 text-black font-extrabold text-xs px-5 py-2.5 rounded-[12px] flex items-center space-x-1.5 transition-all shadow-lg cursor-pointer"
                 >
-                  <Download size={14} />
+                  <Download size={18} />
                   <span>Download HD</span>
                 </button>
               )}

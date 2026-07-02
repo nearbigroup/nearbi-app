@@ -90,7 +90,7 @@ export default function SettingsPage() {
 
   const [savingSettings, setSavingSettings] = useState(false);
 
-  const [selectedBreakBranch, setSelectedBreakBranch] = useState<'daily' | 'hypermarket'>('daily');
+  const [selectedBreakBranch, setSelectedBreakBranch] = useState<'all' | 'daily' | 'hypermarket'>('all');
 
   const [breakSettings, setBreakSettings] = useState<BreakSettings>({
     morning_tea_duration: 10,
@@ -235,7 +235,7 @@ export default function SettingsPage() {
     }
   };
 
-  const loadCredentials = () => {
+  const loadCredentials = async () => {
     if (typeof window === 'undefined') return;
     try {
       const customUsersJson = localStorage.getItem('nearbi_custom_users');
@@ -257,8 +257,18 @@ export default function SettingsPage() {
 
       setSystemUsers(usersArray);
 
-      const blockedJson = localStorage.getItem('nearbi_blocked_users');
-      setBlockedUsers(blockedJson ? JSON.parse(blockedJson) : []);
+      // Load blocked users from DB
+      const { data: blockedData, error } = await supabase
+        .from('user_permissions')
+        .select('user_email')
+        .eq('is_blocked', true);
+      
+      if (!error && blockedData) {
+        setBlockedUsers(blockedData.map(r => r.user_email.toLowerCase().trim()));
+      } else {
+        const blockedJson = localStorage.getItem('nearbi_blocked_users');
+        setBlockedUsers(blockedJson ? JSON.parse(blockedJson) : []);
+      }
     } catch (err) {
       console.error(err);
     }
@@ -317,28 +327,50 @@ export default function SettingsPage() {
     }
   };
 
-  const handleToggleBlockUser = (email: string) => {
+  const handleToggleBlockUser = async (email: string, role: string) => {
     const targetEmail = email.toLowerCase().trim();
     if (targetEmail === 'adminnearbi@gmail.com') {
       alert("Cannot block the primary owner account.");
       return;
     }
+    if (user?.email?.toLowerCase().trim() === targetEmail) {
+      alert("Cannot self-block your own logged in session.");
+      return;
+    }
     try {
+      const isCurrentlyBlocked = blockedUsers.includes(targetEmail);
+      
+      const payload = {
+        user_email: targetEmail,
+        role: role,
+        is_blocked: !isCurrentlyBlocked,
+        blocked_by: !isCurrentlyBlocked ? (user?.email || 'admin') : null,
+        blocked_at: !isCurrentlyBlocked ? new Date().toISOString() : null,
+        updated_at: new Date().toISOString()
+      };
+
+      const { error } = await supabase
+        .from('user_permissions')
+        .upsert(payload, { onConflict: 'user_email' });
+
+      if (error) throw error;
+
+      // Update local storage backup
       const blockedJson = localStorage.getItem('nearbi_blocked_users');
       let blocked: string[] = blockedJson ? JSON.parse(blockedJson) : [];
-      
-      if (blocked.includes(targetEmail)) {
-        blocked = blocked.filter(e => e !== targetEmail);
-        showToast('User unblocked ✓');
-      } else {
-        blocked.push(targetEmail);
+      if (!isCurrentlyBlocked) {
+        if (!blocked.includes(targetEmail)) blocked.push(targetEmail);
+        setBlockedUsers(prev => [...prev, targetEmail]);
         showToast('User blocked ✓');
+      } else {
+        blocked = blocked.filter(e => e !== targetEmail);
+        setBlockedUsers(prev => prev.filter(e => e !== targetEmail));
+        showToast('User unblocked ✓');
       }
-
       localStorage.setItem('nearbi_blocked_users', JSON.stringify(blocked));
-      setBlockedUsers(blocked);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      alert('Failed to save block status: ' + err.message);
     }
   };
 
@@ -352,10 +384,11 @@ export default function SettingsPage() {
     if (isLoading || !canSeeSalaryBreakdown) return;
     const loadScopedBreaks = async () => {
       try {
+        const queryBranch = selectedBreakBranch === 'all' ? 'daily' : selectedBreakBranch;
         const { data: breakData, error: breakE } = await supabase
           .from('break_settings')
           .select('*')
-          .eq('branch_id', selectedBreakBranch)
+          .eq('branch_id', queryBranch)
           .maybeSingle();
 
         if (breakE) throw breakE;
@@ -760,8 +793,7 @@ export default function SettingsPage() {
     e.preventDefault();
     setSavingBreakSettings(true);
     try {
-      const payload: any = {
-        branch_id: selectedBreakBranch,
+      const basePayload = {
         morning_tea_duration: Number(breakSettings.morning_tea_duration),
         morning_tea_start: breakSettings.morning_tea_start,
         morning_tea_end: breakSettings.morning_tea_end,
@@ -778,15 +810,58 @@ export default function SettingsPage() {
         updated_at: new Date().toISOString(),
       };
 
-      if (breakSettings.id) {
-        payload.id = breakSettings.id;
+      if (selectedBreakBranch === 'all') {
+        // Upsert for daily
+        const { data: dailyExist } = await supabase
+          .from('break_settings')
+          .select('id')
+          .eq('branch_id', 'daily')
+          .maybeSingle();
+
+        const dailyPayload = {
+          ...basePayload,
+          branch_id: 'daily',
+          id: dailyExist?.id || undefined
+        };
+
+        const { error: errDaily } = await supabase
+          .from('break_settings')
+          .upsert(dailyPayload);
+        if (errDaily) throw errDaily;
+
+        // Upsert for hypermarket
+        const { data: hyperExist } = await supabase
+          .from('break_settings')
+          .select('id')
+          .eq('branch_id', 'hypermarket')
+          .maybeSingle();
+
+        const hyperPayload = {
+          ...basePayload,
+          branch_id: 'hypermarket',
+          id: hyperExist?.id || undefined
+        };
+
+        const { error: errHyper } = await supabase
+          .from('break_settings')
+          .upsert(hyperPayload);
+        if (errHyper) throw errHyper;
+      } else {
+        const payload: any = {
+          ...basePayload,
+          branch_id: selectedBreakBranch,
+        };
+        if (breakSettings.id) {
+          payload.id = breakSettings.id;
+        }
+
+        const { error } = await supabase
+          .from('break_settings')
+          .upsert(payload);
+
+        if (error) throw error;
       }
 
-      const { error } = await supabase
-        .from('break_settings')
-        .upsert(payload);
-
-      if (error) throw error;
       showToast('Break settings saved successfully!');
     } catch (err: any) {
       console.error('Save break settings error:', err);
@@ -1196,6 +1271,7 @@ export default function SettingsPage() {
                   onChange={(e) => setSelectedBreakBranch(e.target.value as any)}
                   className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-lg px-2 py-1 text-xs font-bold text-[#1A1A1A] focus:outline-none"
                 >
+                  <option value="all">All Branches</option>
                   <option value="daily">Nearbi Daily</option>
                   <option value="hypermarket">Nearbi Hypermarket</option>
                 </select>
@@ -1669,7 +1745,7 @@ export default function SettingsPage() {
                             <td className="p-3 text-right flex justify-end gap-2">
                               <button
                                 type="button"
-                                onClick={() => handleToggleBlockUser(u.email)}
+                                onClick={() => handleToggleBlockUser(u.email, u.role)}
                                 className={`px-2.5 py-1.5 font-bold text-[10px] rounded-md transition-all active:scale-95 cursor-pointer border ${
                                   isBlocked
                                     ? 'bg-[#EDF7EF] border-[#2D7A3A]/20 text-[#2D7A3A] hover:bg-[#EDF7EF]/80'

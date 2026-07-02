@@ -189,6 +189,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const mergedUsers = getMergedUsers();
     const validUser = mergedUsers[normalizedEmail];
     if (validUser && validUser.password === pass) {
+      // Check if blocked in user_permissions
+      try {
+        const { data: perm } = await supabase
+          .from('user_permissions')
+          .select('is_blocked')
+          .eq('user_email', normalizedEmail)
+          .maybeSingle();
+
+        if (perm?.is_blocked) {
+          alert("Your access has been disabled. Contact admin.");
+          return false;
+        }
+      } catch (err) {
+        console.error('Error checking user_permissions:', err);
+      }
+
       const { password, ...userWithoutPassword } = validUser;
       setUser(userWithoutPassword);
       
