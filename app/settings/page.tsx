@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth, VALID_USERS } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
+import bcrypt from 'bcryptjs';
 import { useRouter } from 'next/navigation';
 import { Lock, Plus, Trash2, CheckCircle2, Circle, Search, X } from 'lucide-react';
 import { calculateLateMinutes } from '@/lib/salary';
@@ -127,6 +128,15 @@ export default function SettingsPage() {
   const [newCredRole, setNewCredRole] = useState<'admin' | 'ops_manager' | 'staff_executive' | 'kiosk'>('staff_executive');
   const [newCredBranch, setNewCredBranch] = useState<string>('all');
   const [showAddCredModal, setShowAddCredModal] = useState(false);
+
+  // app_logins credentials states
+  const [appLogins, setAppLogins] = useState<any[]>([]);
+  const [showEditLoginModal, setShowEditLoginModal] = useState(false);
+  const [editingLogin, setEditingLogin] = useState<any>(null);
+  const [editEmail, setEditEmail] = useState('');
+  const [editPassword, setEditPassword] = useState('');
+  const [showPasswordMap, setShowPasswordMap] = useState<Record<string, boolean>>({});
+  const [savingLogin, setSavingLogin] = useState(false);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -269,8 +279,59 @@ export default function SettingsPage() {
         const blockedJson = localStorage.getItem('nearbi_blocked_users');
         setBlockedUsers(blockedJson ? JSON.parse(blockedJson) : []);
       }
+
+      // Load app logins from DB
+      const { data: loginsData, error: loginsError } = await supabase
+        .from('app_logins')
+        .select('*')
+        .order('display_name');
+      if (!loginsError && loginsData) {
+        setAppLogins(loginsData);
+      }
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleOpenEditLogin = (login: any) => {
+    setEditingLogin(login);
+    setEditEmail(login.email);
+    setEditPassword('');
+    setShowEditLoginModal(true);
+  };
+
+  const handleSaveLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editEmail.trim()) {
+      alert("Email is required.");
+      return;
+    }
+    setSavingLogin(true);
+    try {
+      const payload: any = {
+        email: editEmail.trim().toLowerCase(),
+        updated_at: new Date().toISOString()
+      };
+
+      if (editPassword.trim()) {
+        payload.password_hash = bcrypt.hashSync(editPassword.trim(), 10);
+      }
+
+      const { error } = await supabase
+        .from('app_logins')
+        .update(payload)
+        .eq('id', editingLogin.id);
+
+      if (error) throw error;
+
+      showToast(`Login updated for ${editingLogin.display_name} ✓`);
+      setShowEditLoginModal(false);
+      loadCredentials();
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to update login: ' + err.message);
+    } finally {
+      setSavingLogin(false);
     }
   };
 
@@ -1775,6 +1836,73 @@ export default function SettingsPage() {
             </div>
           )}
 
+          {/* Login Credentials Section (Admin Only) */}
+          {user?.role === 'admin' && (
+            <div className="space-y-4 pt-6">
+              <div>
+                <h2 className="text-[#1A1A1A] font-extrabold text-sm tracking-wider uppercase">
+                  Login Credentials
+                </h2>
+                <div className="text-[#E8E8E8] text-xs font-semibold select-none leading-none my-1">
+                  ─────────────────────────────
+                </div>
+              </div>
+
+              <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-5 shadow-sm space-y-4">
+                <p className="text-[var(--text-muted)] text-[10px] font-semibold leading-normal">
+                  Manage the login emails and passwords for the standard roles in the system.
+                </p>
+
+                <div className="overflow-x-auto border border-[#E8E8E8] rounded-[12px]">
+                  <table className="w-full text-left text-xs whitespace-nowrap border-collapse">
+                    <thead>
+                      <tr className="text-[#999999] uppercase font-bold text-[9px] bg-[#F2F2F2] border-b border-[#E8E8E8]">
+                        <th className="p-3">Display Name</th>
+                        <th className="p-3">Email / Username</th>
+                        <th className="p-3">Password</th>
+                        <th className="p-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#E8E8E8]">
+                      {appLogins.map((login) => {
+                        const showPass = showPasswordMap[login.id] || false;
+                        return (
+                          <tr key={login.id} className="hover:bg-[#F8F8F8] transition-colors">
+                            <td className="p-3 font-bold text-[#1A1A1A]">{login.display_name}</td>
+                            <td className="p-3 font-mono text-[#555555]">{login.email}</td>
+                            <td className="p-3 font-mono text-[#555555]">
+                              <div className="flex items-center space-x-2">
+                                <span className="max-w-[200px] truncate block">
+                                  {showPass ? login.password_hash : '••••••••'}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => setShowPasswordMap(prev => ({ ...prev, [login.id]: !showPass }))}
+                                  className="text-[#1A1A1A] hover:underline text-[10px] font-bold cursor-pointer"
+                                >
+                                  {showPass ? 'Hide' : 'Show'}
+                                </button>
+                              </div>
+                            </td>
+                            <td className="p-3 text-right flex justify-end">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditLogin(login)}
+                                className="px-3 py-1.5 font-bold text-[10px] bg-white border border-[#E8E8E8] rounded-md text-[#1A1A1A] hover:bg-[#F8F8F8] active:scale-95 transition-all cursor-pointer"
+                              >
+                                Edit Credentials
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Danger Zone Section (Admin Only) */}
           {user?.role === 'admin' && (
             <div className="space-y-4 pt-6">
@@ -2026,6 +2154,70 @@ export default function SettingsPage() {
                   className="flex-1 min-h-[40px] bg-[#1A1A1A] text-white hover:bg-[#333333] font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
                 >
                   Save User
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit App Login Modal */}
+      {showEditLoginModal && editingLogin && (
+        <div className="fixed inset-0 z-[12000] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-white border border-[#E8E8E8] rounded-[20px] max-w-sm w-full p-6 flex flex-col space-y-4 shadow-2xl">
+            <div className="flex justify-between items-center">
+              <h3 className="text-[#1A1A1A] text-base font-bold">Edit Login: {editingLogin.display_name}</h3>
+              <button
+                type="button"
+                onClick={() => setShowEditLoginModal(false)}
+                className="text-[#999999] hover:text-[#1A1A1A] cursor-pointer"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveLogin} className="space-y-3.5">
+              <div>
+                <label className="block text-[10px] font-bold text-[#999999] uppercase tracking-wider mb-1">
+                  Email Address / Username
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={editEmail}
+                  onChange={(e) => setEditEmail(e.target.value)}
+                  placeholder="e.g. email@nearbi.com"
+                  className="w-full text-[#1A1A1A] font-bold bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-xs focus:outline-none focus:border-[#1A1A1A]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-[#999999] uppercase tracking-wider mb-1">
+                  New Password (leave blank to keep unchanged)
+                </label>
+                <input
+                  type="password"
+                  value={editPassword}
+                  onChange={(e) => setEditPassword(e.target.value)}
+                  placeholder="Enter new password"
+                  className="w-full text-[#1A1A1A] font-bold bg-[#F8F8F8] border border-[#E8E8E8] rounded-[12px] p-3 text-xs focus:outline-none focus:border-[#1A1A1A]"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowEditLoginModal(false)}
+                  className="flex-1 min-h-[40px] bg-white border border-[#E8E8E8] text-[#1A1A1A] hover:bg-[#F8F8F8] font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingLogin}
+                  className="flex-1 min-h-[40px] bg-[#1A1A1A] text-white hover:bg-[#333333] font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer flex items-center justify-center"
+                >
+                  {savingLogin ? 'Saving...' : 'Save Changes'}
                 </button>
               </div>
             </form>

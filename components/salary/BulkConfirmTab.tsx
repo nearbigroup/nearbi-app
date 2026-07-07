@@ -17,7 +17,7 @@ export default function BulkConfirmTab({
   selectedMonth?: string;
   onConfirmationsUpdated?: () => void;
 }) {
-  const { user } = useAuth();
+  const { user, userBranch } = useAuth();
   const [loading, setLoading] = useState(true);
   const [confirming, setConfirming] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -47,11 +47,19 @@ export default function BulkConfirmTab({
       setErrorMsg('');
       
       // 1. Fetch active staff
-      const { data: staffData, error: staffError } = await supabase
+      let staffQuery = supabase
         .from('staff')
         .select('*, branch:branches(name), shift:shifts(*)')
         .eq('active', true)
-        .order('name');
+        .eq('is_trial', false);
+
+      if (user?.role === 'nearbi_homes_supervisor') {
+        staffQuery = staffQuery.eq('branch_id', 'hypermarket').eq('department', 'Nearbi Homes');
+      } else if (userBranch) {
+        staffQuery = staffQuery.eq('branch_id', userBranch);
+      }
+
+      const { data: staffData, error: staffError } = await staffQuery.order('name');
          
       if (staffError) throw staffError;
       if (!staffData) return;
@@ -150,7 +158,7 @@ export default function BulkConfirmTab({
 
   useEffect(() => {
     fetchData();
-  }, [month]);
+  }, [month, user, userBranch]);
 
   useEffect(() => {
     // Recalculate salaries when staff list, attendance records, extra leaves, late fines, or special fines change
@@ -333,6 +341,7 @@ export default function BulkConfirmTab({
   }, [staffList, attendanceRecords, extraLeaves, lateFines, specialFines, leaveRequests]);
 
   const handleUpdateLeave = (staffId: string, delta: number) => {
+    if (user?.role === 'partner_viewer' || user?.role === 'nearbi_homes_supervisor') return;
     setExtraLeaves((prev) => {
       const current = prev[staffId] || 0;
       return { ...prev, [staffId]: Math.max(0, current + delta) };
@@ -340,6 +349,7 @@ export default function BulkConfirmTab({
   };
 
   const handleConfirmSelected = async (targetStaffIds?: string[]) => {
+    if (user?.role === 'partner_viewer' || user?.role === 'nearbi_homes_supervisor') return;
     if (!user) return;
     
     const idsToConfirm = targetStaffIds || selectedStaffIds;
@@ -446,6 +456,7 @@ export default function BulkConfirmTab({
   };
 
   const handleConfirmAll = async () => {
+    if (user?.role === 'partner_viewer' || user?.role === 'nearbi_homes_supervisor') return;
     const unconfirmed = filteredStaff.filter((s) => !confirmations.find((c) => c.staff_id === s.id));
     if (unconfirmed.length === 0) {
       alert('No unconfirmed salaries for this month.');
@@ -456,6 +467,7 @@ export default function BulkConfirmTab({
   };
 
   const handleConfirmAllFines = async () => {
+    if (user?.role === 'partner_viewer' || user?.role === 'nearbi_homes_supervisor') return;
     if (!user) return;
     const pendingFines = lateFines.filter(lf => !lf.confirmed && !lf.waived);
     if (pendingFines.length === 0) {
@@ -557,13 +569,15 @@ export default function BulkConfirmTab({
               <AlertCircle size={16} />
               <span>There are {count} pending late fines totaling {formatCurrency(total)}.</span>
             </div>
-            <button
-              onClick={handleConfirmAllFines}
-              disabled={confirmingFines}
-              className="bg-[#B8860B] hover:bg-[#9E720A] text-white text-[10px] font-black uppercase px-3 py-1.5 rounded-lg active:scale-95 transition-all cursor-pointer"
-            >
-              {confirmingFines ? 'Confirming...' : 'Confirm All Fines'}
-            </button>
+            {user?.role !== 'partner_viewer' && user?.role !== 'nearbi_homes_supervisor' && (
+              <button
+                onClick={handleConfirmAllFines}
+                disabled={confirmingFines}
+                className="bg-[#B8860B] hover:bg-[#9E720A] text-white text-[10px] font-black uppercase px-3 py-1.5 rounded-lg active:scale-95 transition-all cursor-pointer"
+              >
+                {confirmingFines ? 'Confirming...' : 'Confirm All Fines'}
+              </button>
+            )}
           </div>
         );
       })()}
@@ -598,24 +612,26 @@ export default function BulkConfirmTab({
       </div>
 
       {/* Select All / Checkbox controls */}
-      <div className="flex justify-between items-center bg-white border border-[#E8E8E8] rounded-xl p-3 print:hidden shadow-sm">
-        <label className="flex items-center space-x-2.5 text-xs font-bold text-[#1A1A1A] cursor-pointer">
-          <input
-            type="checkbox"
-            checked={filteredStaff.length > 0 && selectedStaffIds.length === filteredStaff.filter(s => !confirmations.find(c => c.staff_id === s.id)).length}
-            onChange={(e) => {
-              const unconfirmedFiltered = filteredStaff.filter(s => !confirmations.find(c => c.staff_id === s.id));
-              if (e.target.checked) {
-                setSelectedStaffIds(unconfirmedFiltered.map(s => s.id));
-              } else {
-                setSelectedStaffIds([]);
-              }
-            }}
-            className="w-4 h-4 rounded border-gray-300 text-[#1A1A1A] focus:ring-[#1A1A1A]"
-          />
-          <span>Select All Unconfirmed ({filteredStaff.filter(s => !confirmations.find(c => c.staff_id === s.id)).length})</span>
-        </label>
-      </div>
+      {user?.role !== 'partner_viewer' && user?.role !== 'nearbi_homes_supervisor' && (
+        <div className="flex justify-between items-center bg-white border border-[#E8E8E8] rounded-xl p-3 print:hidden shadow-sm">
+          <label className="flex items-center space-x-2.5 text-xs font-bold text-[#1A1A1A] cursor-pointer">
+            <input
+              type="checkbox"
+              checked={filteredStaff.length > 0 && selectedStaffIds.length === filteredStaff.filter(s => !confirmations.find(c => c.staff_id === s.id)).length}
+              onChange={(e) => {
+                const unconfirmedFiltered = filteredStaff.filter(s => !confirmations.find(c => c.staff_id === s.id));
+                if (e.target.checked) {
+                  setSelectedStaffIds(unconfirmedFiltered.map(s => s.id));
+                } else {
+                  setSelectedStaffIds([]);
+                }
+              }}
+              className="w-4 h-4 rounded border-gray-300 text-[#1A1A1A] focus:ring-[#1A1A1A]"
+            />
+            <span>Select All Unconfirmed ({filteredStaff.filter(s => !confirmations.find(c => c.staff_id === s.id)).length})</span>
+          </label>
+        </div>
+      )}
 
       {/* Cards list */}
       <div className="space-y-3">
@@ -631,7 +647,7 @@ export default function BulkConfirmTab({
             >
               {/* Profile Card Header */}
               <div className="flex items-center space-x-3">
-                {!isConfirmed && (
+                {!isConfirmed && user?.role !== 'partner_viewer' && user?.role !== 'nearbi_homes_supervisor' && (
                   <input
                     type="checkbox"
                     checked={selectedStaffIds.includes(s.id)}
@@ -755,24 +771,33 @@ export default function BulkConfirmTab({
               <div className="flex items-center justify-between pt-3 border-t border-[#E8E8E8] print:hidden">
                 {!isConfirmed ? (
                   <>
-                    <div className="flex items-center space-x-2 bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-1.5">
-                      <span className="text-[10px] font-bold text-[#555555] mr-1">Extra Leave:</span>
-                      <button
-                        onClick={() => handleUpdateLeave(s.id, -1)}
-                        className="w-6 h-6 rounded bg-[#EBEBEB] hover:bg-[#D0D0D0] active:scale-95 text-[#1A1A1A] font-bold text-xs flex items-center justify-center cursor-pointer"
-                      >
-                        -
-                      </button>
-                      <span className="w-5 text-center text-xs font-bold text-[#1A1A1A]">
-                        {extraLeaves[s.id] || 0}
-                      </span>
-                      <button
-                        onClick={() => handleUpdateLeave(s.id, 1)}
-                        className="w-6 h-6 rounded bg-[#EBEBEB] hover:bg-[#D0D0D0] active:scale-95 text-[#1A1A1A] font-bold text-xs flex items-center justify-center cursor-pointer"
-                      >
-                        +
-                      </button>
-                    </div>
+                    {user?.role === 'partner_viewer' || user?.role === 'nearbi_homes_supervisor' ? (
+                      <div className="flex items-center space-x-2 bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl px-3 py-1.5">
+                        <span className="text-[10px] font-bold text-[#555555]">Extra Leave:</span>
+                        <span className="text-xs font-bold text-[#1A1A1A]">
+                          {extraLeaves[s.id] || 0}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="flex items-center space-x-2 bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-1.5">
+                        <span className="text-[10px] font-bold text-[#555555] mr-1">Extra Leave:</span>
+                        <button
+                          onClick={() => handleUpdateLeave(s.id, -1)}
+                          className="w-6 h-6 rounded bg-[#EBEBEB] hover:bg-[#D0D0D0] active:scale-95 text-[#1A1A1A] font-bold text-xs flex items-center justify-center cursor-pointer"
+                        >
+                          -
+                        </button>
+                        <span className="w-5 text-center text-xs font-bold text-[#1A1A1A]">
+                          {extraLeaves[s.id] || 0}
+                        </span>
+                        <button
+                          onClick={() => handleUpdateLeave(s.id, 1)}
+                          className="w-6 h-6 rounded bg-[#EBEBEB] hover:bg-[#D0D0D0] active:scale-95 text-[#1A1A1A] font-bold text-xs flex items-center justify-center cursor-pointer"
+                        >
+                          +
+                        </button>
+                      </div>
+                    )}
                     <span className="text-[10px] font-bold text-[var(--warning)] bg-[var(--warning-bg)] border border-[var(--warning)]/20 px-2.5 py-0.5 rounded-[20px] uppercase">
                       Pending
                     </span>
@@ -808,7 +833,11 @@ export default function BulkConfirmTab({
       </div>
 
       {/* Action triggers */}
-      {unconfirmedCount > 0 ? (
+      {user?.role === 'partner_viewer' || user?.role === 'nearbi_homes_supervisor' ? (
+        <div className="w-full bg-[#F2F2F2] border border-[#E8E8E8] text-[#999] font-bold text-center py-3.5 rounded-xl print:hidden text-xs flex items-center justify-center space-x-1.5">
+          <span>Salary Confirmations (Read Only Mode)</span>
+        </div>
+      ) : unconfirmedCount > 0 ? (
         <button
           onClick={handleConfirmAll}
           disabled={confirming}
@@ -823,7 +852,7 @@ export default function BulkConfirmTab({
         </div>
       )}
       {/* Bulk Action Bottom Bar */}
-      {selectedStaffIds.length > 0 && (
+      {selectedStaffIds.length > 0 && user?.role !== 'partner_viewer' && user?.role !== 'nearbi_homes_supervisor' && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[10000] bg-[#1A1A1A] text-white border border-white/10 rounded-full px-6 py-3.5 shadow-2xl flex items-center justify-between space-x-6 animate-in slide-in-from-bottom duration-300">
           <span className="text-xs font-extrabold tracking-wide whitespace-nowrap">
             {selectedStaffIds.length} staff selected

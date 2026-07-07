@@ -533,7 +533,7 @@ export default function KioskPage() {
       const isHourly = staff.pay_type === 'hourly';
       const shiftStart = staff.shift?.start_time || staff.shifts?.start_time || '09:00';
       const shiftEnd = staff.shift?.end_time || staff.shifts?.end_time || '18:00';
-      const otMins = isHourly ? 0 : calculateOTMinutes(shiftEnd, actualOut, shiftStart);
+      const otMins = isHourly ? 0 : calculateOTMinutes(shiftEnd, actualOut, shiftStart, staff.ot_threshold_minutes);
       const actualHrs = calculateActualHours(record.check_in_time, actualOut);
       const earlyLeaveMins = isHourly ? 0 : calculateEarlyLeaveMinutes(shiftEnd, actualOut, shiftStart);
 
@@ -577,7 +577,7 @@ export default function KioskPage() {
       }
 
       // Create OT adjustments and notifications if OT is > 0
-      if (otMins > 0) {
+      if (otMins > 0 && !staff.is_trial) {
         await supabase.from('attendance_adjustments').insert({
           staff_id: staff.id,
           date: todayStr,
@@ -827,7 +827,7 @@ export default function KioskPage() {
         }
 
         // Insert late fine if any
-        if (fineAmount > 0) {
+        if (fineAmount > 0 && !staff.is_trial) {
           await supabase.from('late_fines').upsert({
             staff_id: staff.id,
             date: todayStr,
@@ -851,7 +851,7 @@ export default function KioskPage() {
         }
 
         // Insert notification if early check-in needs approval
-        if (earlyInMinutes > 0) {
+        if (earlyInMinutes > 0 && !staff.is_trial) {
           await supabase.from('attendance_adjustments').insert({
             staff_id: staff.id,
             date: todayStr,
@@ -1543,8 +1543,13 @@ export default function KioskPage() {
               <div className="text-[#999999] text-xs font-bold uppercase tracking-wider mb-1">
                 Welcome back
               </div>
-              <div className="text-3xl font-extrabold text-white text-center mb-1">
-                {staff.name}
+              <div className="text-3xl font-extrabold text-white text-center mb-1 flex items-center justify-center gap-2">
+                <span>{staff.name}</span>
+                {staff.is_trial && (
+                  <span className="bg-[#FFF0F0] border border-[#C0392B]/25 text-[#C0392B] text-[9.5px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider">
+                    Trial
+                  </span>
+                )}
               </div>
               <div className="text-white text-xs font-bold mb-8 bg-white/10 px-3 py-1 rounded-[20px] border border-white/20">
                 {staff.pay_type === 'hourly' ? (
@@ -1789,7 +1794,14 @@ export default function KioskPage() {
                 )}
               </div>
 
-              <h2 className="text-2xl font-black mb-1 truncate max-w-full text-white">{staff.name}</h2>
+              <h2 className="text-2xl font-black mb-1 truncate max-w-full text-white flex items-center justify-center gap-2">
+                <span>{staff.name}</span>
+                {staff.is_trial && (
+                  <span className="bg-[#FFF0F0] border border-[#C0392B]/25 text-[#C0392B] text-[9.5px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider">
+                    Trial
+                  </span>
+                )}
+              </h2>
               <div className="bg-white/10 border border-white/20 text-xs font-bold px-3 py-1 rounded-[20px] mb-5 text-white">
                 {formatTime(currentTime).split(' ')[0]}
               </div>

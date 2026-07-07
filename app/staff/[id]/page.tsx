@@ -46,6 +46,9 @@ interface StaffMember {
   active: boolean;
   pay_type?: string;
   standard_hours?: number;
+  ot_threshold_minutes?: number;
+  is_trial?: boolean;
+  candidate_id?: string | null;
   shift?: {
     id: string;
     label: string;
@@ -453,7 +456,7 @@ export default function StaffProfilePage() {
         const offDaysPerMonth = staff.off_days_per_month !== undefined ? staff.off_days_per_month : 4;
         const earned = offDaysPerMonth === 0 ? 0 : Math.min(Math.floor(daysWorked / 6), offDaysPerMonth);
 
-        if (usedWeeklyOffs >= earned) {
+        if (usedWeeklyOffs >= earned && !staff.is_trial) {
           alert(`${staff.name} has no weekly off balance remaining this month. Earned: ${earned} | Used: ${usedWeeklyOffs}`);
           setIsSavingAttendance(false);
           return;
@@ -502,7 +505,7 @@ export default function StaffProfilePage() {
               shortAttendance = true;
             }
 
-            otMinutes = calculateOTMinutes(effectiveEnd, finalCheckOut, effectiveStart);
+            otMinutes = calculateOTMinutes(effectiveEnd, finalCheckOut, effectiveStart, staff.ot_threshold_minutes);
             earlyLeaveMinutes = calculateEarlyLeaveMinutes(effectiveEnd, finalCheckOut, effectiveStart);
           }
         }
@@ -972,6 +975,9 @@ export default function StaffProfilePage() {
     if (staff) {
       if (user?.role === 'staff_executive' && user.branch && staff.branch_id !== user.branch) {
         showToast('Access denied to other branch profiles');
+        router.replace('/staff');
+      } else if (user?.role === 'nearbi_homes_supervisor' && (staff.branch_id !== 'hypermarket' || staff.department !== 'Nearbi Homes')) {
+        showToast('Access denied to profiles outside Nearbi Homes');
         router.replace('/staff');
       }
     }
@@ -1505,6 +1511,9 @@ export default function StaffProfilePage() {
                 <MapPin size={10} />
                 {staff.branch_id === 'daily' ? 'Daily' : 'Hypermarket'}
               </span>
+              <span className="bg-white/10 border border-white/20 text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 uppercase">
+                OT: {staff.ot_threshold_minutes || 30}m
+              </span>
             </div>
             <p className="text-xs text-[var(--text-secondary)] font-semibold flex items-center gap-1">
               <Clock size={12} className="text-[var(--text-muted)]" />
@@ -1563,7 +1572,7 @@ export default function StaffProfilePage() {
         <div className="bg-[var(--bg-elevated)] border border-[var(--border-strong)] rounded-xl p-3 flex justify-between items-center text-xs font-bold text-[var(--text-secondary)]">
           <span className="uppercase text-[9px] tracking-wider text-[var(--text-muted)]">Weekly Off Balance</span>
           <span className="text-[#1A1A1A] font-extrabold font-mono">
-            {staff?.pay_type === 'hourly' ? 'N/A — Hourly' : `${weeklyOffStats.earnedQuota} Earned | ${weeklyOffStats.weeklyOffsUsed} Used | ${weeklyOffStats.weeklyOffsRemaining} Remaining`}
+            {staff?.pay_type === 'hourly' ? 'N/A — Hourly' : staff?.is_trial ? 'N/A — Trial' : `${weeklyOffStats.earnedQuota} Earned | ${weeklyOffStats.weeklyOffsUsed} Used | ${weeklyOffStats.weeklyOffsRemaining} Remaining`}
           </span>
         </div>
 
@@ -1575,14 +1584,14 @@ export default function StaffProfilePage() {
                 <span className="text-[9px] font-bold uppercase tracking-wider text-[var(--text-muted)]">Performance Score</span>
                 <div className="flex items-baseline space-x-1.5 mt-0.5">
                   <span className="text-lg font-black text-white font-mono leading-none">
-                    {staff?.pay_type === 'hourly' ? 'N/A' : (perfScore?.total_score ?? '—')}
+                    {staff?.pay_type === 'hourly' || staff?.is_trial ? 'N/A' : (perfScore?.total_score ?? '—')}
                   </span>
-                  {staff?.pay_type !== 'hourly' && <span className="text-[10px] text-[var(--text-secondary)] font-bold">/ 100</span>}
+                  {staff?.pay_type !== 'hourly' && !staff?.is_trial && <span className="text-[10px] text-[var(--text-secondary)] font-bold">/ 100</span>}
                 </div>
               </div>
-              {staff?.pay_type === 'hourly' ? (
+              {staff?.pay_type === 'hourly' || staff?.is_trial ? (
                 <span className="text-[10px] font-extrabold px-2 py-0.5 rounded uppercase tracking-wide text-blue-400 bg-blue-500/10">
-                  Hourly Staff
+                  {staff?.is_trial ? 'Trial Staff' : 'Hourly Staff'}
                 </span>
               ) : perfScore ? (
                 <span className={`text-[10px] font-extrabold px-2 py-0.5 rounded uppercase tracking-wide ${getPerfGrade(perfScore.total_score).color} ${getPerfGrade(perfScore.total_score).bg}`}>
@@ -1590,8 +1599,8 @@ export default function StaffProfilePage() {
                 </span>
               ) : null}
             </div>
-            {staff?.pay_type === 'hourly' ? (
-              <p className="text-[9px] text-[var(--text-muted)] italic mt-2.5">N/A — Hourly</p>
+            {staff?.pay_type === 'hourly' || staff?.is_trial ? (
+              <p className="text-[9px] text-[var(--text-muted)] italic mt-2.5">{staff?.is_trial ? 'N/A — Trial' : 'N/A — Hourly'}</p>
             ) : perfScore ? (
               <div className="w-full bg-black/35 h-1.5 rounded-full overflow-hidden mt-2.5 border border-white/5">
                 <div 
@@ -2606,31 +2615,37 @@ export default function StaffProfilePage() {
                             {formatTime12hr(selectedDayDetail.record.check_in_time) || '—'}
                           </span>
                           {selectedDayDetail.record.check_in_photo ? (
-                            <div className="relative">
-                              <button 
-                                onClick={() => setSelectedPhoto({ 
-                                  url: selectedDayDetail.record!.check_in_photo!, 
-                                  title: 'Check In Selfie',
-                                  name: staff?.name,
-                                  date: selectedDayDetail.record!.date,
-                                  label: 'Check In Photo',
-                                  attendanceId: selectedDayDetail.record!.id,
-                                  photo_flagged: selectedDayDetail.record!.photo_flagged,
-                                  photo_flag_reason: selectedDayDetail.record!.photo_flag_reason || undefined,
-                                  photo_flagged_by: selectedDayDetail.record!.photo_flagged_by || undefined
-                                })}
-                                className={`w-10 h-10 rounded-full overflow-hidden mt-2 border cursor-pointer hover:border-white transition-all active:scale-95 ${
-                                  selectedDayDetail.record.photo_flagged ? 'border-amber-500 ring-2 ring-amber-500/20' : 'border-[#4ADE80]/30'
-                                }`}
-                              >
-                                <img src={selectedDayDetail.record.check_in_photo} alt="IN" className="w-full h-full object-cover" />
-                              </button>
-                              {selectedDayDetail.record.photo_flagged && (
-                                <span className="absolute top-1.5 -right-0.5 bg-amber-500 text-white rounded-full w-4.5 h-4.5 flex items-center justify-center border border-white shadow">
-                                  <Flag size={9} fill="currentColor" />
-                                </span>
-                              )}
-                            </div>
+                            user?.role === 'nearbi_homes_supervisor' ? (
+                              <div className="w-10 h-10 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center mt-2 border border-white/15">
+                                <User size={18} />
+                              </div>
+                            ) : (
+                              <div className="relative">
+                                <button 
+                                  onClick={() => setSelectedPhoto({ 
+                                    url: selectedDayDetail.record!.check_in_photo!, 
+                                    title: 'Check In Selfie',
+                                    name: staff?.name,
+                                    date: selectedDayDetail.record!.date,
+                                    label: 'Check In Photo',
+                                    attendanceId: selectedDayDetail.record!.id,
+                                    photo_flagged: selectedDayDetail.record!.photo_flagged,
+                                    photo_flag_reason: selectedDayDetail.record!.photo_flag_reason || undefined,
+                                    photo_flagged_by: selectedDayDetail.record!.photo_flagged_by || undefined
+                                  })}
+                                  className={`w-10 h-10 rounded-full overflow-hidden mt-2 border cursor-pointer hover:border-white transition-all active:scale-95 ${
+                                    selectedDayDetail.record.photo_flagged ? 'border-amber-500 ring-2 ring-amber-500/20' : 'border-[#4ADE80]/30'
+                                  }`}
+                                >
+                                  <img src={selectedDayDetail.record.check_in_photo} alt="IN" className="w-full h-full object-cover" />
+                                </button>
+                                {selectedDayDetail.record.photo_flagged && (
+                                  <span className="absolute top-1.5 -right-0.5 bg-amber-500 text-white rounded-full w-4.5 h-4.5 flex items-center justify-center border border-white shadow">
+                                    <Flag size={9} fill="currentColor" />
+                                  </span>
+                                )}
+                              </div>
+                            )
                           ) : (
                             <span className="text-[9px] text-[var(--text-muted)] italic mt-2.5">No photo</span>
                           )}
@@ -2642,31 +2657,37 @@ export default function StaffProfilePage() {
                             {formatTime12hr(selectedDayDetail.record.check_out_time) || '—'}
                           </span>
                           {selectedDayDetail.record.check_out_photo ? (
-                            <div className="relative">
-                              <button 
-                                onClick={() => setSelectedPhoto({ 
-                                  url: selectedDayDetail.record!.check_out_photo!, 
-                                  title: 'Check Out Selfie',
-                                  name: staff?.name,
-                                  date: selectedDayDetail.record!.date,
-                                  label: 'Check Out Photo',
-                                  attendanceId: selectedDayDetail.record!.id,
-                                  photo_flagged: selectedDayDetail.record!.photo_flagged,
-                                  photo_flag_reason: selectedDayDetail.record!.photo_flag_reason || undefined,
-                                  photo_flagged_by: selectedDayDetail.record!.photo_flagged_by || undefined
-                                })}
-                                className={`w-10 h-10 rounded-full overflow-hidden mt-2 border cursor-pointer hover:border-white transition-all active:scale-95 ${
-                                  selectedDayDetail.record.photo_flagged ? 'border-amber-500 ring-2 ring-amber-500/20' : 'border-[#60A5FA]/30'
-                                }`}
-                              >
-                                <img src={selectedDayDetail.record.check_out_photo} alt="OUT" className="w-full h-full object-cover" />
-                              </button>
-                              {selectedDayDetail.record.photo_flagged && (
-                                <span className="absolute top-1.5 -right-0.5 bg-amber-500 text-white rounded-full w-4.5 h-4.5 flex items-center justify-center border border-white shadow">
-                                  <Flag size={9} fill="currentColor" />
-                                </span>
-                              )}
-                            </div>
+                            user?.role === 'nearbi_homes_supervisor' ? (
+                              <div className="w-10 h-10 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center mt-2 border border-white/15">
+                                <User size={18} />
+                              </div>
+                            ) : (
+                              <div className="relative">
+                                <button 
+                                  onClick={() => setSelectedPhoto({ 
+                                    url: selectedDayDetail.record!.check_out_photo!, 
+                                    title: 'Check Out Selfie',
+                                    name: staff?.name,
+                                    date: selectedDayDetail.record!.date,
+                                    label: 'Check Out Photo',
+                                    attendanceId: selectedDayDetail.record!.id,
+                                    photo_flagged: selectedDayDetail.record!.photo_flagged,
+                                    photo_flag_reason: selectedDayDetail.record!.photo_flag_reason || undefined,
+                                    photo_flagged_by: selectedDayDetail.record!.photo_flagged_by || undefined
+                                  })}
+                                  className={`w-10 h-10 rounded-full overflow-hidden mt-2 border cursor-pointer hover:border-white transition-all active:scale-95 ${
+                                    selectedDayDetail.record.photo_flagged ? 'border-amber-500 ring-2 ring-amber-500/20' : 'border-[#60A5FA]/30'
+                                  }`}
+                                >
+                                  <img src={selectedDayDetail.record.check_out_photo} alt="OUT" className="w-full h-full object-cover" />
+                                </button>
+                                {selectedDayDetail.record.photo_flagged && (
+                                  <span className="absolute top-1.5 -right-0.5 bg-amber-500 text-white rounded-full w-4.5 h-4.5 flex items-center justify-center border border-white shadow">
+                                    <Flag size={9} fill="currentColor" />
+                                  </span>
+                                )}
+                              </div>
+                            )
                           ) : (
                             <span className="text-[9px] text-[var(--text-muted)] italic mt-2.5">No photo</span>
                           )}
@@ -2836,7 +2857,7 @@ export default function StaffProfilePage() {
       })()}
 
       {/* Selfie Zoom Modal */}
-      {selectedPhoto && (
+      {selectedPhoto && user?.role !== 'nearbi_homes_supervisor' && (
         <div className="fixed inset-0 z-[13000] bg-black/90 flex flex-col justify-between p-6" onClick={() => setSelectedPhoto(null)}>
           {/* Top Bar with metadata and close button */}
           <div className="flex justify-between items-start w-full text-white relative z-10">

@@ -36,6 +36,9 @@ interface StaffMember {
   mobile_number?: string | null;
   profile_pending?: boolean;
   active: boolean;
+  ot_threshold_minutes?: number;
+  is_trial?: boolean;
+  candidate_id?: string | null;
   shift?: Shift;
   staff_accounts?: {
     id: string;
@@ -72,6 +75,7 @@ export default function StaffPage() {
     join_date: '',
     date_of_birth: '',
     mobile_number: '',
+    ot_threshold_minutes: 30,
   });
   
   const [formError, setFormError] = useState('');
@@ -144,6 +148,7 @@ export default function StaffPage() {
     join_date: '',
     date_of_birth: '',
     mobile_number: '',
+    ot_threshold_minutes: 30,
   });
   const [originalShiftId, setOriginalShiftId] = useState('');
   const [originalPin, setOriginalPin] = useState('');
@@ -184,6 +189,12 @@ export default function StaffPage() {
       .single();
 
     if (shiftErr || !newShift) throw shiftErr || new Error('New shift not found');
+
+    const { data: staffData } = await supabase
+      .from('staff')
+      .select('ot_threshold_minutes')
+      .eq('id', staffId)
+      .single();
 
     // Fetch all attendance for this month
     const { data: attRecords, error: attErr } = await supabase
@@ -249,7 +260,7 @@ export default function StaffPage() {
         const shiftEndMins = eh * 60 + em;
         const checkOutMins = coh * 60 + com;
         const otDiff = checkOutMins - shiftEndMins;
-        otMinutes = otDiff >= 30 ? otDiff : 0;
+        otMinutes = otDiff >= (staffData?.ot_threshold_minutes || 30) ? otDiff : 0;
       }
 
       // Recalculate early leave minutes
@@ -406,6 +417,12 @@ export default function StaffPage() {
       const lastDayNum = new Date(year, month, 0).getDate();
       const lastDay = `${year}-${String(month).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
 
+      const { data: staffData } = await supabase
+        .from('staff')
+        .select('ot_threshold_minutes')
+        .eq('id', staffId)
+        .single();
+
       const { data: attRecords, error: fetchErr } = await supabase
         .from('attendance')
         .select('*')
@@ -438,7 +455,8 @@ export default function StaffPage() {
           ? calculateOTMinutes(
               newShift.end_time,
               record.check_out_time,
-              newShift.start_time
+              newShift.start_time,
+              staffData?.ot_threshold_minutes || 30
             )
           : 0;
         const newEarlyLeaveMins = record.check_out_time
@@ -503,6 +521,7 @@ export default function StaffPage() {
       join_date: s.join_date ? s.join_date.substring(0, 10) : '',
       date_of_birth: s.date_of_birth ? s.date_of_birth.substring(0, 10) : '',
       mobile_number: s.mobile_number || '',
+      ot_threshold_minutes: s.ot_threshold_minutes !== undefined ? Number(s.ot_threshold_minutes) : 30,
     });
     setOriginalShiftId(s.shift_id || '');
     setOriginalPin(s.pin);
@@ -573,6 +592,7 @@ export default function StaffPage() {
         join_date,
         date_of_birth,
         mobile_number,
+        ot_threshold_minutes,
       } = editStaffForm;
 
       if (!name || !pin || !branch_id || !department || !join_date) {
@@ -616,6 +636,7 @@ export default function StaffPage() {
         join_date,
         date_of_birth: date_of_birth || null,
         mobile_number: mobile_number || null,
+        ot_threshold_minutes: Number(ot_threshold_minutes) || 30,
       };
 
       const { error: updateErr } = await supabase
@@ -1303,14 +1324,31 @@ export default function StaffPage() {
     try {
       let query = supabase.from('staff').select('*, shift:shifts(*), staff_accounts(*)').eq('active', true);
       
-      // Branch isolation
-      if (userBranch) {
+      // Branch isolation / Scoping
+      if (user?.role === 'nearbi_homes_supervisor') {
+        query = query.eq('branch_id', 'hypermarket').eq('department', 'Nearbi Homes');
+      } else if (userBranch) {
         query = query.eq('branch_id', userBranch);
       }
-      
       const { data, error } = await query.order('name');
       if (error) throw error;
-      setStaff((data || []) as unknown as StaffMember[]);
+      
+      const staffList = (data || []) as unknown as StaffMember[];
+      setStaff(staffList);
+
+      if (typeof window !== 'undefined') {
+        const urlParams = new URLSearchParams(window.location.search);
+        const editId = urlParams.get('edit');
+        if (editId) {
+          const s = staffList.find(x => x.id === editId);
+          if (s) {
+            handleOpenEditStaff(s);
+            // Clean URL params to avoid opening again on refresh
+            const newUrl = window.location.pathname;
+            window.history.replaceState({}, '', newUrl);
+          }
+        }
+      }
     } catch (err) {
       console.error(err);
       setErrorMsg('Could not load staff list.');
@@ -1435,6 +1473,7 @@ export default function StaffPage() {
       let errorCount = 0;
 
       for (const s of staff) {
+        if (s.is_trial) continue;
         try {
           // Fetch attendance for this month
           const { data: attRecords } = await supabase
@@ -1655,6 +1694,7 @@ export default function StaffPage() {
       join_date: new Date().toISOString().split('T')[0],
       date_of_birth: '',
       mobile_number: '',
+      ot_threshold_minutes: 30,
     });
     setIsCustomShift(false);
     setShowAddPanel(true);
@@ -1727,6 +1767,7 @@ export default function StaffPage() {
         join_date: formData.join_date,
         date_of_birth: formData.date_of_birth || null,
         mobile_number: formData.mobile_number.trim() || null,
+        ot_threshold_minutes: Number(formData.ot_threshold_minutes) || 30,
         active: true,
       };
 
@@ -2149,13 +2190,15 @@ export default function StaffPage() {
               </button>
             </>
           )}
-          <button
-            onClick={handleOpenAddPanel}
-            className="bg-[#1A1A1A] text-white hover:bg-[#333333] font-bold px-4 py-2 rounded-[12px] text-sm flex items-center space-x-1.5 active:scale-95 transition-all shadow-md"
-          >
-            <Plus size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
-            <span>Add Staff</span>
-          </button>
+          {(user?.role === 'admin' || user?.role === 'ops_manager' || user?.role === 'staff_executive') && (
+            <button
+              onClick={handleOpenAddPanel}
+              className="bg-[#1A1A1A] text-white hover:bg-[#333333] font-bold px-4 py-2 rounded-[12px] text-sm flex items-center space-x-1.5 active:scale-95 transition-all shadow-md"
+            >
+              <Plus size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
+              <span>Add Staff</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -2388,6 +2431,14 @@ export default function StaffPage() {
                       {s.profile_pending && (
                         <span className="bg-[#FFF0F0] border border-[#C0392B]/25 text-[#C0392B] text-[9.5px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider flex items-center">
                           DOB Missing
+                        </span>
+                      )}
+                      <span className="bg-[#F8F8F8] border border-[#E8E8E8] text-[#555555] text-[9.5px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider">
+                        OT: {s.ot_threshold_minutes || 30}m
+                      </span>
+                      {s.is_trial && (
+                        <span className="bg-[#FFF0F0] border border-[#C0392B]/25 text-[#C0392B] text-[9.5px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider flex items-center">
+                          Trial — Not Hired
                         </span>
                       )}
                     </div>
@@ -2768,6 +2819,35 @@ export default function StaffPage() {
                   </div>
                 </div>
 
+                {/* OT Threshold Choice */}
+                <div>
+                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1.5">
+                    OT starts after
+                  </label>
+                  <div className="flex gap-2">
+                    {[
+                      { key: 30, label: '30 min' },
+                      { key: 10, label: '10 min' }
+                    ].map((opt) => {
+                      const isSelected = (formData.ot_threshold_minutes || 30) === opt.key;
+                      return (
+                        <button
+                          key={opt.key}
+                          type="button"
+                          onClick={() => setFormData({ ...formData, ot_threshold_minutes: opt.key })}
+                          className={`flex-1 py-2.5 rounded-[12px] border text-xs font-bold transition-all cursor-pointer ${
+                            isSelected
+                              ? 'bg-[#1A1A1A] text-white border-[#1A1A1A]'
+                              : 'bg-white text-[#555555] border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-95'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
                 {formData.pay_type === 'hourly' ? (
                   <div className="space-y-1.5">
                     <label className="block text-xs font-bold text-[var(--text-muted)] mb-1">
@@ -3142,6 +3222,35 @@ export default function StaffPage() {
                           }`}
                         >
                           {pt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* OT Threshold Choice */}
+                <div>
+                  <label className="block text-xs font-bold text-[var(--text-muted)] mb-1.5">
+                    OT starts after
+                  </label>
+                  <div className="flex gap-2">
+                    {[
+                      { key: 30, label: '30 min' },
+                      { key: 10, label: '10 min' }
+                    ].map((opt) => {
+                      const isSelected = (editStaffForm.ot_threshold_minutes || 30) === opt.key;
+                      return (
+                        <button
+                          key={opt.key}
+                          type="button"
+                          onClick={() => setEditStaffForm({ ...editStaffForm, ot_threshold_minutes: opt.key })}
+                          className={`flex-1 py-2.5 rounded-[12px] border text-xs font-bold transition-all cursor-pointer ${
+                            isSelected
+                              ? 'bg-[#1A1A1A] text-white border-[#1A1A1A]'
+                              : 'bg-white text-[#555555] border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-95'
+                          }`}
+                        >
+                          {opt.label}
                         </button>
                       );
                     })}

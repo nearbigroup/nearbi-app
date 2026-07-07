@@ -53,8 +53,10 @@ export default function LeavePage() {
     try {
       let query = supabase.from('leave_requests').select('*, staff:staff_id!inner(*)');
       
-      // Branch isolation for branch HR
-      if (userBranch) {
+      // Branch isolation / Scoping
+      if (user?.role === 'nearbi_homes_supervisor') {
+        query = query.eq('staff.branch_id', 'hypermarket').eq('staff.department', 'Nearbi Homes');
+      } else if (userBranch) {
         query = query.eq('staff.branch_id', userBranch);
       }
       
@@ -88,7 +90,7 @@ export default function LeavePage() {
     return () => {
       channel.unsubscribe();
     };
-  }, [userBranch]);
+  }, [userBranch, user]);
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -96,8 +98,12 @@ export default function LeavePage() {
   };
 
   const handleAction = async (id: string, status: 'approved' | 'rejected') => {
+    if (user?.role === 'partner_viewer' || user?.role === 'nearbi_homes_supervisor') return;
     const approverName = user?.name || user?.email || 'HR';
     try {
+      const req = requests.find((r) => r.id === id);
+      if (!req) return;
+
       const { error } = await supabase
         .from('leave_requests')
         .update({
@@ -108,36 +114,196 @@ export default function LeavePage() {
 
       if (error) throw error;
 
-      const req = requests.find((r) => r.id === id);
-      if (req) {
-        try {
-          await supabase.from('wall_events').insert({
-            event_type: status === 'approved' ? 'leave_approved' : 'leave_rejected',
+      // Add wall event for approvals
+      if (req.staff) {
+        const { error: wallErr } = await supabase
+          .from('wall_events')
+          .insert({
             staff_id: req.staff_id,
-            staff_name: req.staff?.name,
-            branch_id: req.staff?.branch_id,
+            branch_id: req.staff.branch_id,
+            event_type: status === 'approved' ? 'leave_approved' : 'leave_rejected',
+            title: status === 'approved' ? 'Leave Approved' : 'Leave Rejected',
             description: `${req.staff?.name}'s leave request for ${new Date(req.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} was ${status} by ${approverName}`
           });
-        } catch (e) {
-          console.error('Silent insert wall event failed:', e);
-        }
-
-        await createAuditLog({
-          action: status === 'approved' ? 'approve_leave' : 'reject_leave',
-          table_name: 'leave_requests',
-          record_id: id,
-          new_value: { status, approved_by: approverName },
-          performed_by: user?.email || 'admin',
-          performed_by_role: user?.role || 'admin',
-          reason: status === 'approved' ? 'Approved leave request' : 'Rejected leave request'
-        });
+        if (wallErr) console.error('Error inserting wall event for leave action:', wallErr);
       }
 
-      showToast(`Leave request ${status}!`);
+      // Log action
+      await createAuditLog({
+        action: status === 'approved' ? 'approve_leave' : 'reject_leave',
+        table_name: 'leave_requests',
+        record_id: id,
+        new_value: { status, approved_by: approverName },
+        performed_by: user?.email || 'admin',
+        performed_by_role: user?.role || 'admin',
+        reason: status === 'approved' ? 'Approved leave request' : 'Rejected leave request'
+      });
+
+      showToast(status === 'approved' ? 'Leave request approved!' : 'Leave request rejected!');
       fetchRequests();
-    } catch (err) {
-      console.error(err);
-      showToast('Error processing leave request.');
+    } catch (err: any) {
+      alert('Failed to update leave request: ' + err.message);
+    }
+  };
+
+  const handleApproveClick = async (req: LeaveRequest) => {
+    if (user?.role === 'partner_viewer' || user?.role === 'nearbi_homes_supervisor') return;
+    // Weekend leave restriction (Saturday and Sunday)
+    const reqDate = new Date(req.date);
+    const dayOfWeek = reqDate.getDay();
+    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6; // 0 = Sunday, 6 = Saturday
+    if (isWeekend) {
+      if (user?.role === 'staff_executive') {
+        alert('This is a weekend leave request. Only the Operations Manager or Admin can approve weekend leaves.');
+        return;
+      }
+      // For ops_manager and admin, show confirmation
+      const dayName = req.day_of_week || reqDate.toLocaleDateString('en-US', { weekday: 'long' });
+      if (!confirm(`This is a ${dayName} leave request. Weekends are peak business days. Confirm approval?`)) {
+        return;
+      }
+    }
+
+    // Check if they want to approve as Weekly Off
+    let approveAsWeeklyOff = false;
+    if (req.staff?.off_days_per_month > 0) {
+      approveAsWeeklyOff = confirm(`Do you want to approve this leave request as a WEEKLY OFF day?\n\n(Click Cancel to approve as a standard Leave request)`);
+    }
+
+    const { remaining } = await checkWeeklyOffQuota(req.staff_id);
+
+    if (approveAsWeeklyOff && remaining <= 0) {
+      setQuotaWarning({
+        id: req.id,
+        staffId: req.staff_id,
+        staffName: req.staff?.name || 'Staff',
+        earnedQuota: 0,
+        deductionAmount: 0,
+        approveAsWeeklyOff: true
+      });
+      return;
+    }
+
+    await executeApproval(req.id, approveAsWeeklyOff);
+  };
+
+  const executeApproval = async (id: string, isWeeklyOff: boolean) => {
+    if (user?.role === 'partner_viewer' || user?.role === 'nearbi_homes_supervisor') return;
+    const req = requests.find((r) => r.id === id);
+    if (!req) return;
+
+    try {
+      const approverName = user?.name || user?.email || 'Admin';
+
+      const { error } = await supabase
+        .from('leave_requests')
+        .update({
+          status: 'approved',
+          approved_by: approverName,
+          is_quota_leave: false,
+          is_weekly_off: isWeeklyOff
+        })
+        .eq('id', id);
+
+      if (error) throw error;
+
+      // Automatically insert/update attendance record for this day as 'leave'
+      const { error: attErr } = await supabase
+        .from('attendance')
+        .upsert({
+          staff_id: req.staff_id,
+          date: req.date,
+          status: 'absent',
+          day_type: isWeeklyOff ? 'weekly_off' : 'leave',
+          marked_by: approverName,
+          override_approved_by: approverName,
+          ot_approved: false
+        }, { onConflict: 'staff_id,date' });
+
+      if (attErr) {
+        console.error('Failed to upsert attendance record for approved leave:', attErr);
+      }
+
+      // Add wall event
+      if (req.staff) {
+        const { error: wallErr } = await supabase
+          .from('wall_events')
+          .insert({
+            staff_id: req.staff_id,
+            branch_id: req.staff.branch_id,
+            event_type: 'leave_approved',
+            title: 'Leave Approved',
+            description: `${req.staff?.name}'s leave request for ${new Date(req.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} was approved by ${approverName}${isWeeklyOff ? ' as Weekly Off' : ''}`
+          });
+        if (wallErr) console.error('Error inserting wall event for leave approval:', wallErr);
+      }
+
+      // Log action
+      await createAuditLog({
+        action: 'approve_leave',
+        table_name: 'leave_requests',
+        record_id: id,
+        new_value: { status: 'approved', approved_by: approverName, is_quota_leave: false, is_weekly_off: isWeeklyOff },
+        performed_by: user?.email || 'admin',
+        performed_by_role: user?.role || 'admin',
+        reason: isWeeklyOff ? 'Approved as Weekly Off' : 'Approved (Standard Unpaid Leave)'
+      });
+
+      showToast('Leave request approved!');
+      setQuotaWarning(null);
+      fetchRequests();
+    } catch (err: any) {
+      alert('Failed to approve leave: ' + err.message);
+    }
+  };
+
+  const rejectRequest = async (id: string) => {
+    if (user?.role === 'partner_viewer' || user?.role === 'nearbi_homes_supervisor') return;
+    try {
+      const req = requests.find((r) => r.id === id);
+      if (!req) return;
+
+      const approverName = user?.name || user?.email || 'Admin';
+
+      const { error } = await supabase
+        .from('leave_requests')
+        .update({
+          status: 'rejected',
+          approved_by: approverName,
+        })
+        .eq('id', id);
+
+      if (error) throw error;
+
+      // Add wall event
+      if (req.staff) {
+        const { error: wallErr } = await supabase
+          .from('wall_events')
+          .insert({
+            staff_id: req.staff_id,
+            branch_id: req.staff.branch_id,
+            event_type: 'leave_rejected',
+            title: 'Leave Rejected',
+            description: `${req.staff?.name}'s leave request for ${new Date(req.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} was rejected by ${approverName}`
+          });
+        if (wallErr) console.error('Error inserting wall event for leave rejection:', wallErr);
+      }
+
+      // Log action
+      await createAuditLog({
+        action: 'reject_leave',
+        table_name: 'leave_requests',
+        record_id: id,
+        new_value: { status: 'rejected', approved_by: approverName },
+        performed_by: user?.email || 'admin',
+        performed_by_role: user?.role || 'admin',
+        reason: 'Rejected leave request'
+      });
+
+      showToast('Leave Rejected');
+      fetchRequests();
+    } catch (err: any) {
+      alert('Failed to reject leave: ' + err.message);
     }
   };
 
@@ -181,144 +347,6 @@ export default function LeavePage() {
 
     return { earnedQuota, used, remaining };
   };
-
-  const handleApproveClick = async (req: LeaveRequest) => {
-    // Weekend leave restriction (Saturday and Sunday)
-    const reqDate = new Date(req.date);
-    const dayOfWeek = reqDate.getDay();
-    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6; // 0 = Sunday, 6 = Saturday
-    if (isWeekend) {
-      if (user?.role === 'staff_executive') {
-        alert('This is a weekend leave request. Only the Operations Manager or Admin can approve weekend leaves.');
-        return;
-      }
-      // For ops_manager and admin, show confirmation
-      const dayName = req.day_of_week || reqDate.toLocaleDateString('en-US', { weekday: 'long' });
-      if (!confirm(`This is a ${dayName} leave request. Weekends are peak business days. Confirm approval?`)) {
-        return;
-      }
-    }
-
-    // Check if they want to approve as Weekly Off
-    let approveAsWeeklyOff = false;
-    if (req.staff?.off_days_per_month > 0) {
-      approveAsWeeklyOff = confirm(`Do you want to approve this leave request as a WEEKLY OFF day?\n\n(Click Cancel to approve as a standard Leave request)`);
-    }
-
-    try {
-      setLoading(true);
-      const { earnedQuota, remaining } = await checkWeeklyOffQuota(req.staff_id);
-      setLoading(false);
-
-      const monthlySalary = req.staff.monthly_salary || 0;
-      const dailyRate = Math.round(monthlySalary / 30);
-
-      if (approveAsWeeklyOff) {
-        if (remaining > 0) {
-          // Approve within quota
-          await executeApproval(req.id, true);
-        } else {
-          // Show warning modal
-          setQuotaWarning({
-            id: req.id,
-            staffId: req.staff_id,
-            staffName: req.staff.name,
-            earnedQuota,
-            deductionAmount: dailyRate,
-            approveAsWeeklyOff: true,
-          });
-        }
-      } else {
-        // Standard leave always causes deduction warning
-        setQuotaWarning({
-          id: req.id,
-          staffId: req.staff_id,
-          staffName: req.staff.name,
-          earnedQuota,
-          deductionAmount: dailyRate,
-          approveAsWeeklyOff: false,
-        });
-      }
-    } catch (err) {
-      console.error(err);
-      setLoading(false);
-      showToast('Error checking weekly off quota.');
-    }
-  };
-
-  const executeApproval = async (id: string, isWeeklyOff: boolean = false) => {
-    const req = requests.find((r) => r.id === id);
-    const isWeekend = req?.requires_ops_approval;
-    const approverName = user?.name || user?.email || 'Admin';
-    try {
-      const { error } = await supabase
-        .from('leave_requests')
-        .update({
-          status: 'approved',
-          approved_by: approverName,
-          is_quota_leave: false, // Standard leaves are always unpaid now
-          is_weekly_off: isWeeklyOff,
-        })
-        .eq('id', id);
-
-      if (error) throw error;
-
-      if (req) {
-        // Upsert attendance record for the leave day to keep attendance register in sync
-        const { error: attErr } = await supabase
-          .from('attendance')
-          .upsert({
-            staff_id: req.staff_id,
-            date: req.date,
-            day_type: isWeeklyOff ? 'weekly_off' : 'leave',
-            status: isWeeklyOff ? 'weekly_off' : 'absent', // absent status is standard for leave days
-            check_in_time: null,
-            check_out_time: null,
-            marked_by: approverName,
-            color_code: 'green',
-            minutes_late: 0,
-            actual_hours_worked: 0,
-            ot_minutes: 0,
-            early_leave_minutes: 0,
-            ot_approved: false
-          }, { onConflict: 'staff_id,date' });
-
-        if (attErr) {
-          console.error('Failed to upsert attendance record for approved leave:', attErr);
-        }
-
-        try {
-          await supabase.from('wall_events').insert({
-            event_type: 'leave_approved',
-            staff_id: req.staff_id,
-            staff_name: req.staff?.name,
-            branch_id: req.staff?.branch_id,
-            description: `${req.staff?.name}'s leave request for ${new Date(req.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })} was approved by ${approverName}${isWeeklyOff ? ' as Weekly Off' : ''}`
-          });
-        } catch (e) {
-          console.error('Silent insert wall event failed:', e);
-        }
-
-        await createAuditLog({
-          action: 'approve_leave',
-          table_name: 'leave_requests',
-          record_id: id,
-          new_value: { status: 'approved', approved_by: approverName, is_quota_leave: false, is_weekly_off: isWeeklyOff },
-          performed_by: user?.email || 'admin',
-          performed_by_role: user?.role || 'admin',
-          reason: isWeeklyOff ? 'Approved as Weekly Off' : 'Approved (Standard Unpaid Leave)'
-        });
-      }
-
-      showToast('Leave request approved!');
-      setQuotaWarning(null);
-      fetchRequests();
-    } catch (err) {
-      console.error(err);
-      showToast('Error approving leave request.');
-    }
-  };
-
 
   // Group by status
   const pendingRequests = requests.filter((r) => r.status === 'pending');
@@ -510,27 +538,33 @@ export default function LeavePage() {
 
               {/* Actions row */}
               {activeTab === 'pending' ? (
-                <div className="flex gap-3">
-                  <button
-                    onClick={() => handleAction(r.id, 'rejected')}
-                    className="flex-1 min-h-[40px] bg-[var(--danger-bg)] border border-[var(--danger)]/20 text-[var(--danger)] hover:bg-[var(--danger-bg)]/80 text-xs font-bold rounded-[12px] active:scale-95 transition-all flex items-center justify-center space-x-1.5 cursor-pointer"
-                  >
-                    <X size={14} strokeWidth={1.5} />
-                    <span>Reject</span>
-                  </button>
-                  <button
-                    onClick={() => handleApproveClick(r)}
-                    disabled={r.requires_ops_approval && user?.role === 'staff_executive'}
-                    className={`flex-1 min-h-[40px] font-bold text-xs rounded-[12px] active:scale-95 transition-transform flex items-center justify-center space-x-1.5 cursor-pointer ${
-                      r.requires_ops_approval && user?.role === 'staff_executive'
-                        ? 'bg-[#E8E8E8] text-[#999] cursor-not-allowed'
-                        : 'bg-[#1A1A1A] text-white hover:bg-[#333333]'
-                    }`}
-                  >
-                    <Check size={14} strokeWidth={1.5} />
-                    <span>{r.requires_ops_approval && user?.role === 'staff_executive' ? 'Ops Only' : 'Approve'}</span>
-                  </button>
-                </div>
+                user?.role === 'partner_viewer' || user?.role === 'nearbi_homes_supervisor' ? (
+                  <div className="text-center py-2.5 text-xs text-[#999] font-bold border border-[#E8E8E8] rounded-[12px] bg-[#F8F8F8]">
+                    Pending Approval (Read Only)
+                  </div>
+                ) : (
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => handleAction(r.id, 'rejected')}
+                      className="flex-1 min-h-[40px] bg-[var(--danger-bg)] border border-[var(--danger)]/20 text-[var(--danger)] hover:bg-[var(--danger-bg)]/80 text-xs font-bold rounded-[12px] active:scale-95 transition-all flex items-center justify-center space-x-1.5 cursor-pointer"
+                    >
+                      <X size={14} strokeWidth={1.5} />
+                      <span>Reject</span>
+                    </button>
+                    <button
+                      onClick={() => handleApproveClick(r)}
+                      disabled={r.requires_ops_approval && user?.role === 'staff_executive'}
+                      className={`flex-1 min-h-[40px] font-bold text-xs rounded-[12px] active:scale-95 transition-transform flex items-center justify-center space-x-1.5 cursor-pointer ${
+                        r.requires_ops_approval && user?.role === 'staff_executive'
+                          ? 'bg-[#E8E8E8] text-[#999] cursor-not-allowed'
+                          : 'bg-[#1A1A1A] text-white hover:bg-[#333333]'
+                      }`}
+                    >
+                      <Check size={14} strokeWidth={1.5} />
+                      <span>{r.requires_ops_approval && user?.role === 'staff_executive' ? 'Ops Only' : 'Approve'}</span>
+                    </button>
+                  </div>
+                )
               ) : (
                 <div
                   className={`text-xs font-bold p-3 rounded-[12px] border flex flex-col items-center justify-center space-y-1.5 ${
@@ -599,7 +633,7 @@ export default function LeavePage() {
               </button>
               <button
                 type="button"
-                onClick={() => executeApproval(quotaWarning.id, quotaWarning.approveAsWeeklyOff)}
+                onClick={() => executeApproval(quotaWarning.id, !!quotaWarning.approveAsWeeklyOff)}
                 className="flex-1 min-h-[40px] bg-[#1A1A1A] text-white hover:bg-[#333333] font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
               >
                 Approve with Deduction

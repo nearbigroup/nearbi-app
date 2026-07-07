@@ -2,11 +2,13 @@
 
 import React, { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
+import { useAuth } from '@/lib/auth-context';
 import { Staff, SalaryConfirmation } from './types';
 import { formatCurrency, getPastMonths, formatMonthDisplay } from './utils';
 import { AlertTriangle, FileText, Share2 } from 'lucide-react';
 
 export default function PayslipTab({ selectedMonth: propMonth }: { selectedMonth?: string }) {
+  const { user, userBranch } = useAuth();
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   const [staffList, setStaffList] = useState<Staff[]>([]);
@@ -32,11 +34,19 @@ export default function PayslipTab({ selectedMonth: propMonth }: { selectedMonth
     try {
       setLoading(true);
       setErrorMsg('');
-      const { data, error } = await supabase
+      let query = supabase
         .from('staff')
         .select('*, branch:branches(name), shift:shifts(*)')
         .eq('active', true)
-        .order('name');
+        .eq('is_trial', false);
+
+      if (user?.role === 'nearbi_homes_supervisor') {
+        query = query.eq('branch_id', 'hypermarket').eq('department', 'Nearbi Homes');
+      } else if (userBranch) {
+        query = query.eq('branch_id', userBranch);
+      }
+
+      const { data, error } = await query.order('name');
       if (error) throw error;
       setStaffList((data || []) as unknown as Staff[]);
     } catch (err) {
@@ -65,7 +75,7 @@ export default function PayslipTab({ selectedMonth: propMonth }: { selectedMonth
 
   useEffect(() => {
     fetchStaff();
-  }, []);
+  }, [user, userBranch]);
 
   useEffect(() => {
     if (selectedStaffId && selectedMonth) {

@@ -242,7 +242,9 @@ export default function DashboardPage() {
         .select('*, shift:shifts(*)')
         .eq('active', true);
 
-      if (userBranch) {
+      if (user?.role === 'nearbi_homes_supervisor') {
+        staffQuery = staffQuery.eq('branch_id', 'hypermarket').eq('department', 'Nearbi Homes');
+      } else if (userBranch) {
         staffQuery = staffQuery.eq('branch_id', userBranch);
       }
       const { data: staffData, error: staffErr } = await staffQuery;
@@ -259,9 +261,11 @@ export default function DashboardPage() {
       // 3. Fetch pending leaves count
       let leavesQuery = supabase
         .from('leave_requests')
-        .select('id, staff!inner(branch_id)', { count: 'exact', head: true })
+        .select('id, staff!inner(branch_id, department)', { count: 'exact', head: true })
         .eq('status', 'pending');
-      if (userBranch) {
+      if (user?.role === 'nearbi_homes_supervisor') {
+        leavesQuery = leavesQuery.eq('staff.branch_id', 'hypermarket').eq('staff.department', 'Nearbi Homes');
+      } else if (userBranch) {
         leavesQuery = leavesQuery.eq('staff.branch_id', userBranch);
       }
       const { count: lCount, error: lErr } = await leavesQuery;
@@ -271,9 +275,11 @@ export default function DashboardPage() {
       // 4. Fetch pending approvals (OT + Early In)
       let approvalsQuery = supabase
         .from('attendance_adjustments')
-        .select('id, staff!inner(branch_id)', { count: 'exact', head: true })
+        .select('id, staff!inner(branch_id, department)', { count: 'exact', head: true })
         .eq('status', 'pending');
-      if (userBranch) {
+      if (user?.role === 'nearbi_homes_supervisor') {
+        approvalsQuery = approvalsQuery.eq('staff.branch_id', 'hypermarket').eq('staff.department', 'Nearbi Homes');
+      } else if (userBranch) {
         approvalsQuery = approvalsQuery.eq('staff.branch_id', userBranch);
       }
       const { count: aCount, error: aErr } = await approvalsQuery;
@@ -307,11 +313,13 @@ export default function DashboardPage() {
       // B. Pending OT adjustments count
       let otQuery = supabase
         .from('attendance_adjustments')
-        .select('id, staff!inner(branch_id, active)', { count: 'exact' })
+        .select('id, staff!inner(branch_id, department, active)', { count: 'exact' })
         .eq('status', 'pending')
         .eq('type', 'ot')
         .eq('staff.active', true);
-      if (userBranch) {
+      if (user?.role === 'nearbi_homes_supervisor') {
+        otQuery = otQuery.eq('staff.branch_id', 'hypermarket').eq('staff.department', 'Nearbi Homes');
+      } else if (userBranch) {
         otQuery = otQuery.eq('staff.branch_id', userBranch);
       }
       const { count: otCount } = await otQuery;
@@ -320,12 +328,14 @@ export default function DashboardPage() {
       // C. Confirm fines count
       let finesQuery = supabase
         .from('late_fines')
-        .select('id, staff!inner(branch_id, active)', { count: 'exact' })
+        .select('id, staff!inner(branch_id, department, active)', { count: 'exact' })
         .eq('waived', false)
         .eq('confirmed', false)
         .eq('staff.active', true)
         .eq('month', currentMonthStr);
-      if (userBranch) {
+      if (user?.role === 'nearbi_homes_supervisor') {
+        finesQuery = finesQuery.eq('staff.branch_id', 'hypermarket').eq('staff.department', 'Nearbi Homes');
+      } else if (userBranch) {
         finesQuery = finesQuery.eq('staff.branch_id', userBranch);
       }
       const { count: fineCount } = await finesQuery;
@@ -346,7 +356,9 @@ export default function DashboardPage() {
         .select('staff_id')
         .eq('month', currentMonthStr);
       const paidStaffIds = new Set((paymentsData || []).map((p) => p.staff_id));
-      const unpaidCount = (confirmationsData || []).filter((c) => !paidStaffIds.has(c.staff_id)).length;
+      const unpaidCount = (confirmationsData || [])
+        .filter((c) => activeStaffIds.has(c.staff_id))
+        .filter((c) => !paidStaffIds.has(c.staff_id)).length;
       setChecklistUnpaid(unpaidCount);
 
       // F. Fetch latest announcement stats
@@ -975,14 +987,14 @@ export default function DashboardPage() {
           )}
 
           {/* Alerts section */}
-          {(absentStaffAlerts.length > 0 || lateArrivalsAlerts.length > 0 || pendingLeavesCount > 0 || pendingApprovalsCount > 0 || latestAnn) && (
+          {(absentStaffAlerts.length > 0 || lateArrivalsAlerts.length > 0 || pendingLeavesCount > 0 || pendingApprovalsCount > 0 || (latestAnn && user?.role !== 'nearbi_homes_supervisor')) && (
             <div className="space-y-3">
               <h4 className="text-[#999999] text-[11px] font-black uppercase tracking-wider">
                 Alerts
               </h4>
 
               {/* Latest Announcement read receipt card */}
-              {latestAnn && (
+              {latestAnn && user?.role !== 'nearbi_homes_supervisor' && (
                 <Link
                   href="/announcements"
                   className="block bg-white border border-[#E8E8E8] border-l-[4px] border-l-amber-500 rounded-[14px] p-4 text-left active:bg-[#F8F8F8] transition-colors shadow-sm"
@@ -1075,7 +1087,7 @@ export default function DashboardPage() {
           )}
 
           {/* Birthday Tracker Card */}
-          {user?.role !== 'admin' && (() => {
+          {user?.role !== 'admin' && user?.role !== 'nearbi_homes_supervisor' && (() => {
             const activeBranchStaff = staffList.filter((s) => s.branch_id === activeTab);
             const activeBranchBirthdays = activeBranchStaff
               .filter((s) => s.date_of_birth)
@@ -1181,27 +1193,27 @@ export default function DashboardPage() {
 
               {/* Owner/Ops only Settings + Salary links */}
               {canSeeSalaryBreakdown && (
-                <>
-                  <Link
-                    href="/salary"
-                    className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group"
-                  >
-                    <div className="w-9 h-9 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center mb-2">
-                      <Wallet size={16} strokeWidth={1.5} className="text-white" />
-                    </div>
-                    <span className="text-[13px] font-bold text-[#1A1A1A]">Salary</span>
-                  </Link>
+                <Link
+                  href="/salary"
+                  className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group"
+                >
+                  <div className="w-9 h-9 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center mb-2">
+                    <Wallet size={16} strokeWidth={1.5} className="text-white" />
+                  </div>
+                  <span className="text-[13px] font-bold text-[#1A1A1A]">Salary</span>
+                </Link>
+              )}
 
-                  <Link
-                    href="/settings"
-                    className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group"
-                  >
-                    <div className="w-9 h-9 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center mb-2">
-                      <Settings size={16} strokeWidth={1.5} className="text-white" />
-                    </div>
-                    <span className="text-[13px] font-bold text-[#1A1A1A]">Settings</span>
-                  </Link>
-                </>
+              {user?.role !== 'partner_viewer' && user?.role !== 'nearbi_homes_supervisor' && canSeeSalaryBreakdown && (
+                <Link
+                  href="/settings"
+                  className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group"
+                >
+                  <div className="w-9 h-9 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center mb-2">
+                    <Settings size={16} strokeWidth={1.5} className="text-white" />
+                  </div>
+                  <span className="text-[13px] font-bold text-[#1A1A1A]">Settings</span>
+                </Link>
               )}
 
               {/* Candidates Quick Action (Ops Manager only) */}
@@ -1222,8 +1234,8 @@ export default function DashboardPage() {
                 </Link>
               )}
 
-              {/* The Wall Quick Action (Hidden from Admin) */}
-              {user?.role !== 'admin' && (
+              {/* The Wall Quick Action (Hidden from Admin and Supervisor) */}
+              {user?.role !== 'admin' && user?.role !== 'nearbi_homes_supervisor' && (
                 <Link
                   href="/wall"
                   className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group col-span-2"

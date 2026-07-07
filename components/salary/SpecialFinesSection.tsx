@@ -73,11 +73,13 @@ export default function SpecialFinesSection({
   }, [staffId, month]);
 
   const handleEditStart = (fine: SpecialFine) => {
+    if (user?.role === 'partner_viewer' || user?.role === 'nearbi_homes_supervisor') return;
     setEditingId(fine.id);
     setEditVal(String(fine.edited_amount ?? fine.amount));
   };
 
   const handleEditSave = async (id: string) => {
+    if (user?.role === 'partner_viewer' || user?.role === 'nearbi_homes_supervisor') return;
     const num = Number(editVal);
     if (isNaN(num) || num < 0) {
       alert('Invalid amount');
@@ -105,6 +107,7 @@ export default function SpecialFinesSection({
 
   const handleSaveWaive = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (user?.role === 'partner_viewer' || user?.role === 'nearbi_homes_supervisor') return;
     if (!selectedFineForWaive) return;
 
     const inputVal = Number(waivedAmountInput);
@@ -155,6 +158,7 @@ export default function SpecialFinesSection({
   };
 
   const handleConfirm = async (id: string) => {
+    if (user?.role === 'partner_viewer' || user?.role === 'nearbi_homes_supervisor') return;
     try {
       const { error } = await supabase
         .from('special_fines')
@@ -187,6 +191,7 @@ export default function SpecialFinesSection({
   };
 
   const handleConfirmAll = async () => {
+    if (user?.role === 'partner_viewer' || user?.role === 'nearbi_homes_supervisor') return;
     const pendingIds = fines.filter(f => !f.confirmed && !f.waived).map(f => f.id);
     if (pendingIds.length === 0) return;
 

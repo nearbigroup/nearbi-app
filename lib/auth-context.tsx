@@ -3,8 +3,9 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { supabase } from './supabase';
+import bcrypt from 'bcryptjs';
 
-export type Role = 'admin' | 'ops_manager' | 'staff_executive' | 'kiosk' | 'staff';
+export type Role = 'admin' | 'ops_manager' | 'staff_executive' | 'kiosk' | 'staff' | 'nearbi_homes_supervisor' | 'partner_viewer';
 
 export interface AuthUser {
   email: string;
@@ -50,6 +51,20 @@ export const VALID_USERS: Record<string, AuthUser & { password: string }> = {
     role: 'staff_executive',
     branch: 'hypermarket',
     name: 'Hypermarket HR'
+  },
+  'nearbihomes@nearbi.com': {
+    email: 'nearbihomes@nearbi.com',
+    password: 'homes@123',
+    role: 'nearbi_homes_supervisor',
+    branch: 'hypermarket',
+    name: 'Nearbi Homes Supervisor'
+  },
+  'partner@nearbi.com': {
+    email: 'partner@nearbi.com',
+    password: 'partner@123',
+    role: 'partner_viewer',
+    branch: null,
+    name: 'Partner Viewer'
   },
   'staffkiosk@gmail.com': {
     email: 'staffkiosk@gmail.com',
@@ -186,45 +201,78 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    const mergedUsers = getMergedUsers();
-    const validUser = mergedUsers[normalizedEmail];
-    if (validUser && validUser.password === pass) {
-      // Check if blocked in user_permissions
-      try {
-        const { data: perm } = await supabase
-          .from('user_permissions')
-          .select('is_blocked')
-          .eq('user_email', normalizedEmail)
-          .maybeSingle();
+    try {
+      const { data: dbUser, error: dbErr } = await supabase
+        .from('app_logins')
+        .select('*')
+        .eq('email', normalizedEmail)
+        .maybeSingle();
 
-        if (perm?.is_blocked) {
-          alert("Your access has been disabled. Contact admin.");
-          return false;
+      if (dbErr) throw dbErr;
+
+      if (dbUser) {
+        const match = bcrypt.compareSync(pass, dbUser.password_hash);
+        if (!match) return false;
+
+        // Check if blocked in user_permissions
+        try {
+          const { data: perm } = await supabase
+            .from('user_permissions')
+            .select('is_blocked')
+            .eq('user_email', normalizedEmail)
+            .maybeSingle();
+
+          if (perm?.is_blocked) {
+            alert("Your access has been disabled. Contact admin.");
+            return false;
+          }
+        } catch (err) {
+          console.error('Error checking user_permissions:', err);
         }
-      } catch (err) {
-        console.error('Error checking user_permissions:', err);
-      }
 
-      const { password, ...userWithoutPassword } = validUser;
-      setUser(userWithoutPassword);
-      
-      // Default branch for branch-specific users
-      const initialBranch = userWithoutPassword.branch;
-      setUserBranchState(initialBranch);
-      
-      localStorage.setItem('nearbi_user', JSON.stringify(userWithoutPassword));
-      if (initialBranch) {
-        localStorage.setItem('nearbi_branch', initialBranch);
-      } else {
-        localStorage.removeItem('nearbi_branch');
-      }
+        let mappedRole: Role = 'staff';
+        let mappedBranch: string | null = null;
 
-      if (userWithoutPassword.role === 'kiosk') {
-        router.push('/kiosk');
-      } else {
-        router.push('/dashboard');
+        if (dbUser.role_key === 'daily_hr') {
+          mappedRole = 'staff_executive';
+          mappedBranch = 'daily';
+        } else if (dbUser.role_key === 'hyper_hr') {
+          mappedRole = 'staff_executive';
+          mappedBranch = 'hypermarket';
+        } else if (dbUser.role_key === 'nearbi_homes_supervisor') {
+          mappedRole = 'nearbi_homes_supervisor';
+          mappedBranch = 'hypermarket';
+        } else {
+          mappedRole = dbUser.role_key as Role;
+          mappedBranch = null;
+        }
+
+        const userWithoutPassword: AuthUser = {
+          email: dbUser.email,
+          role: mappedRole,
+          branch: mappedBranch,
+          name: dbUser.display_name
+        };
+
+        setUser(userWithoutPassword);
+        setUserBranchState(mappedBranch);
+        
+        localStorage.setItem('nearbi_user', JSON.stringify(userWithoutPassword));
+        if (mappedBranch) {
+          localStorage.setItem('nearbi_branch', mappedBranch);
+        } else {
+          localStorage.removeItem('nearbi_branch');
+        }
+
+        if (userWithoutPassword.role === 'kiosk') {
+          router.push('/kiosk');
+        } else {
+          router.push('/dashboard');
+        }
+        return true;
       }
-      return true;
+    } catch (err) {
+      console.error('Error query app_logins:', err);
     }
     return false;
   };
@@ -304,10 +352,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const canSeeSalaryBreakdown = user?.role === 'admin' || user?.role === 'ops_manager';
+  const canSeeSalaryBreakdown = user?.role === 'admin' || user?.role === 'ops_manager' || user?.role === 'partner_viewer' || user?.role === 'nearbi_homes_supervisor';
   const canSeeAllBranches =
     user?.role === 'admin' ||
     user?.role === 'ops_manager' ||
+    user?.role === 'partner_viewer' ||
     (user?.role === 'staff_executive' && user.branch === null);
 
   return (

@@ -8,7 +8,7 @@ import { formatCurrency, getCurrentMonthStr, formatMonthDisplay } from './utils'
 import { Check, X } from 'lucide-react';
 
 export default function PaymentTrackerTab({ selectedMonth }: { selectedMonth?: string }) {
-  const { user } = useAuth();
+  const { user, userBranch } = useAuth();
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   const [toastMsg, setToastMsg] = useState('');
@@ -37,10 +37,19 @@ export default function PaymentTrackerTab({ selectedMonth }: { selectedMonth?: s
       setLoading(true);
       setErrorMsg('');
       
-      const { data: staffData, error: staffError } = await supabase
+      let query = supabase
         .from('staff')
         .select('*, branch:branches(name)')
-        .eq('active', true);
+        .eq('active', true)
+        .eq('is_trial', false);
+
+      if (user?.role === 'nearbi_homes_supervisor') {
+        query = query.eq('branch_id', 'hypermarket').eq('department', 'Nearbi Homes');
+      } else if (userBranch) {
+        query = query.eq('branch_id', userBranch);
+      }
+
+      const { data: staffData, error: staffError } = await query;
       
       if (staffError) throw staffError;
 
@@ -72,18 +81,20 @@ export default function PaymentTrackerTab({ selectedMonth }: { selectedMonth?: s
 
   useEffect(() => {
     fetchData();
-  }, [month]);
+  }, [month, user, userBranch]);
 
   const handleOpenPayment = (s: Staff, conf: SalaryConfirmation | null) => {
+    if (user?.role === 'partner_viewer' || user?.role === 'nearbi_homes_supervisor') return;
     setSelectedStaff(s);
     setSelectedConf(conf);
-    setPayAmount(conf ? conf.net_salary.toString() : s.monthly_salary.toString());
+    setPayAmount(conf ? String(conf.net_salary) : String(s.monthly_salary || 0));
     setPayMode('upi');
     setPayDate(new Date().toISOString().split('T')[0]);
     setPayNotes('');
   };
 
   const handleConfirmPayment = async () => {
+    if (user?.role === 'partner_viewer' || user?.role === 'nearbi_homes_supervisor') return;
     if (!user || !selectedStaff) return;
     setSubmitting(true);
     try {
@@ -248,12 +259,18 @@ export default function PaymentTrackerTab({ selectedMonth }: { selectedMonth?: s
                   <div className="text-sm font-bold text-[var(--warning)] mb-2">
                     {formatCurrency(displayAmount)}
                   </div>
-                  <button
-                    onClick={() => handleOpenPayment(s, conf || null)}
-                    className="bg-[var(--warning-bg)] text-[var(--warning)] border border-[var(--warning)]/20 px-3.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider hover:bg-[var(--warning-bg)]/80 cursor-pointer"
-                  >
-                    Mark Paid
-                  </button>
+                  {user?.role === 'partner_viewer' || user?.role === 'nearbi_homes_supervisor' ? (
+                    <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider bg-gray-100 border border-gray-200 px-2 py-1 rounded">
+                      Unpaid
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => handleOpenPayment(s, conf || null)}
+                      className="bg-[var(--warning-bg)] text-[var(--warning)] border border-[var(--warning)]/20 px-3.5 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider hover:bg-[var(--warning-bg)]/80 cursor-pointer"
+                    >
+                      Mark Paid
+                    </button>
+                  )}
                 </div>
               </div>
             );

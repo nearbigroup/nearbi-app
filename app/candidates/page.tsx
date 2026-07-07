@@ -43,6 +43,7 @@ interface Candidate {
   added_by: string;
   created_at: string;
   updated_at: string;
+  trial_kiosk_active?: boolean;
 }
 
 export default function CandidatesPage() {
@@ -87,6 +88,7 @@ export default function CandidatesPage() {
   });
   const [formStatus, setFormStatus] = useState<'new' | 'shortlisted' | 'rejected' | 'hired' | 'on_hold'>('new');
   const [submitting, setSubmitting] = useState(false);
+  const [trialKioskActive, setTrialKioskActive] = useState(false);
 
   // File Upload State
   const [photoFile, setPhotoFile] = useState<File | null>(null);
@@ -211,9 +213,14 @@ export default function CandidatesPage() {
         notes: notes.trim() || null,
         walk_in_date: walkInDate,
         added_by: user.email,
+        trial_kiosk_active: trialKioskActive,
       });
 
       if (error) throw error;
+
+      if (trialKioskActive) {
+        await syncTrialStaffRow(candidateId, true, fullName.trim(), phoneNumber.trim() || '', branch);
+      }
 
       await createAuditLog({
         action: 'create_candidate',
@@ -249,6 +256,7 @@ export default function CandidatesPage() {
     setPhotoPreview(null);
     setIdPhotoFile(null);
     setIdPhotoPreview(null);
+    setTrialKioskActive(false);
   };
 
   const handleStatusChange = async (candidate: Candidate, newStatus: 'new' | 'shortlisted' | 'rejected' | 'hired' | 'on_hold') => {
@@ -297,6 +305,171 @@ export default function CandidatesPage() {
     } catch (err: any) {
       console.error(err);
       alert('Failed to update candidate status.');
+    }
+  };
+
+  const syncTrialStaffRow = async (
+    candidateId: string,
+    active: boolean,
+    name: string,
+    phone: string,
+    branchId: string
+  ) => {
+    if (active) {
+      const { data: pinsData } = await supabase
+        .from('staff')
+        .select('pin')
+        .eq('active', true);
+      const activePins = new Set(pinsData?.map((s: any) => s.pin) || []);
+      
+      let generatedPin = '';
+      let attempts = 0;
+      while (attempts < 100) {
+        const candidatePin = String(Math.floor(1000 + Math.random() * 9000));
+        if (!activePins.has(candidatePin)) {
+          generatedPin = candidatePin;
+          break;
+        }
+        attempts++;
+      }
+      if (!generatedPin) {
+        throw new Error("Unable to generate a unique PIN. Please try again.");
+      }
+
+      const { data: existingStaff } = await supabase
+        .from('staff')
+        .select('id')
+        .eq('candidate_id', candidateId)
+        .maybeSingle();
+
+      if (existingStaff) {
+        await supabase
+          .from('staff')
+          .update({
+            active: true,
+            name,
+            mobile_number: phone || null,
+            branch_id: branchId,
+            is_trial: true,
+            pay_type: 'trial',
+            department: 'Nearbi Trial'
+          })
+          .eq('id', existingStaff.id);
+      } else {
+        await supabase
+          .from('staff')
+          .insert({
+            candidate_id: candidateId,
+            name,
+            mobile_number: phone || null,
+            branch_id: branchId,
+            pin: generatedPin,
+            shift_id: 's1',
+            is_trial: true,
+            pay_type: 'trial',
+            active: true,
+            department: 'Nearbi Trial',
+            monthly_salary: 0,
+            join_date: new Date().toISOString().split('T')[0]
+          });
+      }
+    } else {
+      await supabase
+        .from('staff')
+        .update({ active: false })
+        .eq('candidate_id', candidateId);
+    }
+  };
+
+  const handleToggleTrialKioskAccess = async (candidate: Candidate, active: boolean) => {
+    try {
+      const { error: candErr } = await supabase
+        .from('job_candidates')
+        .update({ trial_kiosk_active: active })
+        .eq('id', candidate.id);
+      if (candErr) throw candErr;
+
+      await syncTrialStaffRow(candidate.id, active, candidate.full_name, candidate.phone_number || '', candidate.branch_id || 'daily');
+
+      setCandidates(prev => prev.map(c => c.id === candidate.id ? { ...c, trial_kiosk_active: active } : c));
+      setSelectedCandidate(prev => prev && prev.id === candidate.id ? { ...prev, trial_kiosk_active: active } : prev);
+      
+      showToast(`Trial kiosk access ${active ? 'enabled' : 'disabled'} successfully.`);
+    } catch (err: any) {
+      console.error(err);
+      alert(err.message || "Failed to update trial kiosk access.");
+    }
+  };
+
+  const handleConvertToFullStaff = async (candidate: Candidate) => {
+    try {
+      const { data: linkedStaff, error: fetchErr } = await supabase
+        .from('staff')
+        .select('id')
+        .eq('candidate_id', candidate.id)
+        .maybeSingle();
+
+      if (fetchErr) throw fetchErr;
+
+      if (linkedStaff) {
+        const { error: updateErr } = await supabase
+          .from('staff')
+          .update({ is_trial: false, active: true })
+          .eq('id', linkedStaff.id);
+        if (updateErr) throw updateErr;
+
+        showToast('Converted successfully! Redirecting...');
+        setSelectedCandidate(null);
+        router.push(`/staff?edit=${linkedStaff.id}`);
+      } else {
+        const { data: pinsData } = await supabase
+          .from('staff')
+          .select('pin')
+          .eq('active', true);
+        const activePins = new Set(pinsData?.map((s: any) => s.pin) || []);
+        
+        let generatedPin = '';
+        let attempts = 0;
+        while (attempts < 100) {
+          const candidatePin = String(Math.floor(1000 + Math.random() * 9000));
+          if (!activePins.has(candidatePin)) {
+            generatedPin = candidatePin;
+            break;
+          }
+          attempts++;
+        }
+        if (!generatedPin) {
+          throw new Error("Unable to generate a unique PIN.");
+        }
+
+        const { data: newStaff, error: insertErr } = await supabase
+          .from('staff')
+          .insert({
+            candidate_id: candidate.id,
+            name: candidate.full_name,
+            mobile_number: candidate.phone_number || null,
+            branch_id: candidate.branch_id || 'daily',
+            pin: generatedPin,
+            shift_id: 's1',
+            is_trial: false,
+            pay_type: 'fixed_shift',
+            active: true,
+            department: candidate.departments[0] || 'Nearbi Trial',
+            monthly_salary: 0,
+            join_date: new Date().toISOString().split('T')[0]
+          })
+          .select('id')
+          .single();
+
+        if (insertErr) throw insertErr;
+
+        showToast('Created staff record! Redirecting...');
+        setSelectedCandidate(null);
+        router.push(`/staff?edit=${newStaff.id}`);
+      }
+    } catch (err: any) {
+      console.error(err);
+      alert(err.message || 'Failed to convert to full staff.');
     }
   };
 
@@ -738,6 +911,20 @@ export default function CandidatesPage() {
                 </select>
               </div>
 
+              {/* Enable Trial Kiosk Access */}
+              <div className="flex items-center space-x-2 py-1">
+                <input
+                  type="checkbox"
+                  id="enable-trial-kiosk"
+                  checked={trialKioskActive}
+                  onChange={(e) => setTrialKioskActive(e.target.checked)}
+                  className="rounded border-[#E8E8E8] text-[#1A1A1A] focus:ring-[#1A1A1A] w-4 h-4 cursor-pointer"
+                />
+                <label htmlFor="enable-trial-kiosk" className="text-xs font-bold text-[#1a1a1a] cursor-pointer selection:bg-transparent select-none">
+                  Enable trial kiosk access (before hiring)
+                </label>
+              </div>
+
               {/* Photo Upload (Selfie - Required) */}
               <div>
                 <label className="block text-[10px] font-black text-[var(--text-muted)] uppercase tracking-wider mb-1.5">
@@ -980,6 +1167,33 @@ export default function CandidatesPage() {
                   className="w-full text-xs leading-relaxed"
                 />
               </div>
+
+              {/* Trial Kiosk Access Toggle */}
+              <div className="flex items-center space-x-2 py-2 border-t border-[#F0F0F0]">
+                <input
+                  type="checkbox"
+                  id="detail-trial-kiosk"
+                  checked={selectedCandidate.trial_kiosk_active || false}
+                  onChange={(e) => handleToggleTrialKioskAccess(selectedCandidate, e.target.checked)}
+                  className="rounded border-[#E8E8E8] text-[#1A1A1A] focus:ring-[#1A1A1A] w-4 h-4 cursor-pointer"
+                />
+                <label htmlFor="detail-trial-kiosk" className="text-xs font-bold text-[#1a1a1a] cursor-pointer selection:bg-transparent select-none">
+                  Enable trial kiosk access (before hiring)
+                </label>
+              </div>
+
+              {/* Convert to Full Staff button */}
+              {selectedCandidate.status === 'hired' && (
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={() => handleConvertToFullStaff(selectedCandidate)}
+                    className="w-full min-h-[44px] bg-[#2D7A3A] text-white hover:bg-[#256330] font-bold text-xs rounded-xl transition-all shadow flex items-center justify-center space-x-1.5 cursor-pointer active:scale-95 mb-2"
+                  >
+                    <span>Convert to Full Staff</span>
+                  </button>
+                </div>
+              )}
 
               {/* Danger Actions: Delete Candidate */}
               <div className="border-t border-[#F0F0F0] pt-4 flex gap-3">

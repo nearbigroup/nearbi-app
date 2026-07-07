@@ -14,7 +14,7 @@ const getMinutes = (timeStr: string) => {
   return h * 60 + m;
 };
 
-const isCheckoutValidForOT = (checkoutTime: string | null | undefined, shiftEndTime: string | null | undefined) => {
+const isCheckoutValidForOT = (checkoutTime: string | null | undefined, shiftEndTime: string | null | undefined, thresholdMinutes: number = 30) => {
   if (!checkoutTime || !shiftEndTime) return false;
   
   const parseMins = (str: string) => {
@@ -29,7 +29,7 @@ const isCheckoutValidForOT = (checkoutTime: string | null | undefined, shiftEndT
   if (diff < -720) diff += 1440;
   if (diff > 720) diff -= 1440;
   
-  return diff >= 30;
+  return diff >= thresholdMinutes;
 };
 
 type ApprovalTab = 'ot' | 'early_in' | 'fines';
@@ -39,6 +39,9 @@ interface Staff {
   name: string;
   department: string;
   branch_id: string;
+  ot_threshold_minutes?: number;
+  is_trial?: boolean;
+  candidate_id?: string;
   shift: {
     start_time: string;
     end_time: string;
@@ -126,7 +129,11 @@ export default function ApprovalsPage() {
       for (const att of attWithOT || []) {
         if (!att.staff) continue;
         if (att.staff.pay_type === 'hourly') continue;
-        if (userBranch && att.staff.branch_id !== userBranch) continue;
+        if (user?.role === 'nearbi_homes_supervisor') {
+          if (att.staff.branch_id !== 'hypermarket' || att.staff.department !== 'Nearbi Homes') continue;
+        } else if (userBranch && att.staff.branch_id !== userBranch) {
+          continue;
+        }
 
         const { data: existing } = await supabase
           .from('attendance_adjustments')
@@ -155,7 +162,9 @@ export default function ApprovalsPage() {
         .select('*, staff!inner(*, shift:shifts(*))')
         .eq('status', 'pending');
 
-      if (userBranch) {
+      if (user?.role === 'nearbi_homes_supervisor') {
+        adjQuery = adjQuery.eq('staff.branch_id', 'hypermarket').eq('staff.department', 'Nearbi Homes');
+      } else if (userBranch) {
         adjQuery = adjQuery.eq('staff.branch_id', userBranch);
       }
 
@@ -172,7 +181,9 @@ export default function ApprovalsPage() {
         .eq('waived', false)
         .eq('confirmed', false);
 
-      if (userBranch) {
+      if (user?.role === 'nearbi_homes_supervisor') {
+        fineQuery = fineQuery.eq('staff.branch_id', 'hypermarket').eq('staff.department', 'Nearbi Homes');
+      } else if (userBranch) {
         fineQuery = fineQuery.eq('staff.branch_id', userBranch);
       }
 
@@ -265,14 +276,15 @@ export default function ApprovalsPage() {
 
   // Adjustments actions handlers
   const handleAdjustmentAction = async (adj: Adjustment, action: 'approved' | 'rejected') => {
+    if (user?.role === 'partner_viewer') return;
     if (adj.type === 'ot' && action === 'approved') {
       const attRecord = attendanceMap[`${adj.staff_id}_${adj.date}`];
       if (!attRecord || !attRecord.check_out_time) {
         alert("Cannot approve Overtime: checkout time is not recorded.");
         return;
       }
-      if (!isCheckoutValidForOT(attRecord.check_out_time, adj.staff?.shift?.end_time)) {
-        alert(`Cannot approve Overtime: Checkout time (${attRecord.check_out_time}) must be at least 30 minutes past shift end (${adj.staff?.shift?.end_time || 'N/A'}).`);
+      if (!isCheckoutValidForOT(attRecord.check_out_time, adj.staff?.shift?.end_time, adj.staff?.ot_threshold_minutes)) {
+        alert(`Cannot approve Overtime: Checkout time (${attRecord.check_out_time}) must be at least ${adj.staff?.ot_threshold_minutes || 30} minutes past shift end (${adj.staff?.shift?.end_time || 'N/A'}).`);
         return;
       }
     }
@@ -335,15 +347,15 @@ export default function ApprovalsPage() {
   const handleApproveAllOT = async () => {
     const validOTToApprove = otPending.filter((adj) => {
       const att = attendanceMap[`${adj.staff_id}_${adj.date}`];
-      return att && isCheckoutValidForOT(att.check_out_time, adj.staff?.shift?.end_time);
+      return att && isCheckoutValidForOT(att.check_out_time, adj.staff?.shift?.end_time, adj.staff?.ot_threshold_minutes);
     });
 
     if (validOTToApprove.length === 0) {
-      alert("No pending OT records meet the 30+ minute checkout criteria.");
+      alert("No pending OT records meet their staff checkout criteria.");
       return;
     }
 
-    if (!confirm(`Are you sure you want to approve all ${validOTToApprove.length} eligible OT claims? (Skipping ${otPending.length - validOTToApprove.length} claims that do not meet the 30+ min checkout criteria).`)) {
+    if (!confirm(`Are you sure you want to approve all ${validOTToApprove.length} eligible OT claims? (Skipping ${otPending.length - validOTToApprove.length} claims that do not meet their staff checkout criteria).`)) {
       return;
     }
 
@@ -402,6 +414,7 @@ export default function ApprovalsPage() {
   };
 
   const handleBulkAdjustmentAction = async (action: 'approved' | 'rejected') => {
+    if (user?.role === 'partner_viewer') return;
     const selectedAdjustments = adjustments.filter(a => selectedIds.includes(a.id));
     const selectedCount = selectedAdjustments.length;
     if (selectedCount === 0) return;
@@ -409,10 +422,10 @@ export default function ApprovalsPage() {
     if (action === 'approved' && activeTab === 'ot') {
       const invalid = selectedAdjustments.some(adj => {
         const attRecord = attendanceMap[`${adj.staff_id}_${adj.date}`];
-        return !attRecord || !attRecord.check_out_time || !isCheckoutValidForOT(attRecord.check_out_time, adj.staff?.shift?.end_time);
+        return !attRecord || !attRecord.check_out_time || !isCheckoutValidForOT(attRecord.check_out_time, adj.staff?.shift?.end_time, adj.staff?.ot_threshold_minutes);
       });
       if (invalid) {
-        alert("Some selected OT claims do not meet the 30+ minute checkout criteria and cannot be approved.");
+        alert("Some selected OT claims do not meet their staff checkout criteria and cannot be approved.");
         return;
       }
     }
@@ -484,6 +497,7 @@ export default function ApprovalsPage() {
   };
 
   const handleBulkFineAction = async (action: 'waived' | 'confirmed') => {
+    if (user?.role === 'partner_viewer') return;
     const selectedFines = fines.filter(f => selectedIds.includes(f.id));
     const selectedCount = selectedFines.length;
     if (selectedCount === 0) return;
@@ -571,6 +585,7 @@ export default function ApprovalsPage() {
 
   // Late fines actions handlers
   const handleFineAction = async (fine: LateFine, action: 'waived' | 'confirmed') => {
+    if (user?.role === 'partner_viewer') return;
     let waiverReason = '';
     if (action === 'waived') {
       const reason = window.prompt(`Please enter a reason for waiving this fine of ₹${fine.fine_amount} for ${fine.staff?.name}:`);
@@ -707,7 +722,7 @@ export default function ApprovalsPage() {
       ) : (
         <div className="space-y-3.5">
           {/* Bulk Selection and Action Header Bar */}
-          {((activeTab === 'ot' && otPending.length > 0) ||
+          {user?.role !== 'partner_viewer' && ((activeTab === 'ot' && otPending.length > 0) ||
             (activeTab === 'early_in' && earlyPending.length > 0) ||
             (activeTab === 'fines' && fines.length > 0)) && (
             <div className="flex items-center justify-between bg-white border border-[#E8E8E8] rounded-[12px] p-3 mb-2 shadow-sm">
@@ -748,14 +763,16 @@ export default function ApprovalsPage() {
               </div>
             ) : (
               <>
-                <button
-                  type="button"
-                  onClick={handleApproveAllOT}
-                  className="w-full min-h-[44px] bg-[#2D7A3A] hover:bg-[#256330] text-white text-xs font-bold rounded-xl active:scale-95 transition-all shadow flex items-center justify-center space-x-1.5 cursor-pointer mb-3 animate-pulse-subtle"
-                >
-                  <CheckSquare size={16} />
-                  <span>Approve all OT ({otPending.length} pending)</span>
-                </button>
+                {user?.role !== 'partner_viewer' && (
+                  <button
+                    type="button"
+                    onClick={handleApproveAllOT}
+                    className="w-full min-h-[44px] bg-[#2D7A3A] hover:bg-[#256330] text-white text-xs font-bold rounded-xl active:scale-95 transition-all shadow flex items-center justify-center space-x-1.5 cursor-pointer mb-3 animate-pulse-subtle"
+                  >
+                    <CheckSquare size={16} />
+                    <span>Approve all OT ({otPending.length} pending)</span>
+                  </button>
+                )}
                 {otPending.map((adj) => {
                   const att = attendanceMap[`${adj.staff_id}_${adj.date}`];
                   const shiftHours = Number(adj.staff?.shift?.hours || 8);
@@ -779,12 +796,14 @@ export default function ApprovalsPage() {
                     <div key={adj.id} className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col shadow-sm">
                       <div className="flex items-start justify-between mb-3">
                         <div className="flex items-start space-x-3">
-                          <input
-                            type="checkbox"
-                            checked={selectedIds.includes(adj.id)}
-                            onChange={() => toggleSelect(adj.id)}
-                            className="w-4.5 h-4.5 rounded border-gray-300 text-black focus:ring-black cursor-pointer mt-1"
-                          />
+                          {user?.role !== 'partner_viewer' && (
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.includes(adj.id)}
+                              onChange={() => toggleSelect(adj.id)}
+                              className="w-4.5 h-4.5 rounded border-gray-300 text-black focus:ring-black cursor-pointer mt-1"
+                            />
+                          )}
                           <div>
                             <h3 className="font-bold text-sm text-[#1A1A1A]">{adj.staff?.name}</h3>
                             <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-0.5">
@@ -828,22 +847,28 @@ export default function ApprovalsPage() {
                         </div>
                       </div>
 
-                      <div className="flex gap-3">
-                        <button
-                          onClick={() => handleAdjustmentAction(adj, 'rejected')}
-                          className="flex-1 min-h-[40px] bg-[var(--danger-bg)] border border-[var(--danger)]/20 text-[var(--danger)] hover:bg-[var(--danger-bg)]/80 text-xs font-bold rounded-[12px] active:scale-95 transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
-                        >
-                          <X size={14} strokeWidth={1.5} />
-                          <span>Reject</span>
-                        </button>
-                        <button
-                          onClick={() => handleAdjustmentAction(adj, 'approved')}
-                          className="flex-1 min-h-[40px] bg-[#1A1A1A] text-white hover:bg-[#333333] text-xs font-bold rounded-[12px] active:scale-[0.97] transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
-                        >
-                          <Check size={14} strokeWidth={1.5} />
-                          <span>Approve</span>
-                        </button>
-                      </div>
+                      {user?.role === 'partner_viewer' ? (
+                        <div className="text-center py-2.5 text-xs text-[#999] font-bold border border-[#E8E8E8] rounded-[12px] bg-[#F2F2F2] w-full">
+                          Pending Approval (Read Only)
+                        </div>
+                      ) : (
+                        <div className="flex gap-3">
+                          <button
+                            onClick={() => handleAdjustmentAction(adj, 'rejected')}
+                            className="flex-1 min-h-[40px] bg-[var(--danger-bg)] border border-[var(--danger)]/20 text-[var(--danger)] hover:bg-[var(--danger-bg)]/80 text-xs font-bold rounded-[12px] active:scale-95 transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
+                          >
+                            <X size={14} strokeWidth={1.5} />
+                            <span>Reject</span>
+                          </button>
+                          <button
+                            onClick={() => handleAdjustmentAction(adj, 'approved')}
+                            className="flex-1 min-h-[40px] bg-[#1A1A1A] text-white hover:bg-[#333333] text-xs font-bold rounded-[12px] active:scale-[0.97] transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
+                          >
+                            <Check size={14} strokeWidth={1.5} />
+                            <span>Approve</span>
+                          </button>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -875,12 +900,14 @@ export default function ApprovalsPage() {
                   <div key={adj.id} className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col shadow-sm">
                     <div className="flex items-start justify-between mb-3">
                       <div className="flex items-start space-x-3">
-                        <input
-                          type="checkbox"
-                          checked={selectedIds.includes(adj.id)}
-                          onChange={() => toggleSelect(adj.id)}
-                          className="w-4.5 h-4.5 rounded border-gray-300 text-black focus:ring-black cursor-pointer mt-1"
-                        />
+                        {user?.role !== 'partner_viewer' && (
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.includes(adj.id)}
+                            onChange={() => toggleSelect(adj.id)}
+                            className="w-4.5 h-4.5 rounded border-gray-300 text-black focus:ring-black cursor-pointer mt-1"
+                          />
+                        )}
                         <div>
                           <h3 className="font-bold text-sm text-[#1A1A1A]">{adj.staff?.name}</h3>
                           <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-0.5">
@@ -908,22 +935,28 @@ export default function ApprovalsPage() {
                       </div>
                     </div>
 
-                    <div className="flex gap-3">
-                      <button
-                        onClick={() => handleAdjustmentAction(adj, 'rejected')}
-                        className="flex-1 min-h-[40px] bg-[var(--danger-bg)] border border-[var(--danger)]/20 text-[var(--danger)] hover:bg-[var(--danger-bg)]/80 text-xs font-bold rounded-[12px] active:scale-95 transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
-                      >
-                        <X size={14} strokeWidth={1.5} />
-                        <span>Reject</span>
-                      </button>
-                      <button
-                        onClick={() => handleAdjustmentAction(adj, 'approved')}
-                        className="flex-1 min-h-[40px] bg-[#1A1A1A] text-white hover:bg-[#333333] text-xs font-bold rounded-[12px] active:scale-[0.97] transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
-                      >
-                        <Check size={14} strokeWidth={1.5} />
-                        <span>Approve</span>
-                      </button>
-                    </div>
+                    {user?.role === 'partner_viewer' ? (
+                      <div className="text-center py-2.5 text-xs text-[#999] font-bold border border-[#E8E8E8] rounded-[12px] bg-[#F2F2F2] w-full">
+                        Pending Approval (Read Only)
+                      </div>
+                    ) : (
+                      <div className="flex gap-3">
+                        <button
+                          onClick={() => handleAdjustmentAction(adj, 'rejected')}
+                          className="flex-1 min-h-[40px] bg-[var(--danger-bg)] border border-[var(--danger)]/20 text-[var(--danger)] hover:bg-[var(--danger-bg)]/80 text-xs font-bold rounded-[12px] active:scale-95 transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
+                        >
+                          <X size={14} strokeWidth={1.5} />
+                          <span>Reject</span>
+                        </button>
+                        <button
+                          onClick={() => handleAdjustmentAction(adj, 'approved')}
+                          className="flex-1 min-h-[40px] bg-[#1A1A1A] text-white hover:bg-[#333333] text-xs font-bold rounded-[12px] active:scale-[0.97] transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
+                        >
+                          <Check size={14} strokeWidth={1.5} />
+                          <span>Approve</span>
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               })
@@ -942,12 +975,14 @@ export default function ApprovalsPage() {
                 <div key={fine.id} className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col shadow-sm">
                   <div className="flex items-start justify-between mb-3.5">
                     <div className="flex items-start space-x-3">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.includes(fine.id)}
-                        onChange={() => toggleSelect(fine.id)}
-                        className="w-4.5 h-4.5 rounded border-gray-300 text-black focus:ring-black cursor-pointer mt-1"
-                      />
+                      {user?.role !== 'partner_viewer' && (
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.includes(fine.id)}
+                          onChange={() => toggleSelect(fine.id)}
+                          className="w-4.5 h-4.5 rounded border-gray-300 text-black focus:ring-black cursor-pointer mt-1"
+                        />
+                      )}
                       <div>
                         <h3 className="font-bold text-sm text-[#1A1A1A]">{fine.staff?.name}</h3>
                         <p className="text-[10px] text-[var(--text-muted)] font-semibold mt-0.5">
@@ -971,22 +1006,28 @@ export default function ApprovalsPage() {
                     </div>
                   </div>
 
-                  <div className="flex gap-3">
-                    <button
-                      onClick={() => handleFineAction(fine, 'waived')}
-                      className="flex-1 min-h-[40px] bg-white border border-[#E8E8E8] text-[#1A1A1A] hover:bg-[#F8F8F8] text-xs font-bold rounded-[12px] active:scale-95 transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
-                    >
-                      <X size={14} strokeWidth={1.5} />
-                      <span>Waive Fine</span>
-                    </button>
-                    <button
-                      onClick={() => handleFineAction(fine, 'confirmed')}
-                      className="flex-1 min-h-[40px] bg-[#1A1A1A] text-white hover:bg-[#333333] text-xs font-bold rounded-[12px] active:scale-[0.97] transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
-                    >
-                      <Check size={14} strokeWidth={1.5} />
-                      <span>Confirm Fine</span>
-                    </button>
-                  </div>
+                  {user?.role === 'partner_viewer' ? (
+                    <div className="text-center py-2.5 text-xs text-[#999] font-bold border border-[#E8E8E8] rounded-[12px] bg-[#F2F2F2] w-full">
+                      Pending Action (Read Only)
+                    </div>
+                  ) : (
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => handleFineAction(fine, 'waived')}
+                        className="flex-1 min-h-[40px] bg-white border border-[#E8E8E8] text-[#1A1A1A] hover:bg-[#F8F8F8] text-xs font-bold rounded-[12px] active:scale-95 transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
+                      >
+                        <X size={14} strokeWidth={1.5} />
+                        <span>Waive Fine</span>
+                      </button>
+                      <button
+                        onClick={() => handleFineAction(fine, 'confirmed')}
+                        className="flex-1 min-h-[40px] bg-[#1A1A1A] text-white hover:bg-[#333333] text-xs font-bold rounded-[12px] active:scale-[0.97] transition-transform flex items-center justify-center space-x-1.5 cursor-pointer"
+                      >
+                        <Check size={14} strokeWidth={1.5} />
+                        <span>Confirm Fine</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))
             )
@@ -995,7 +1036,7 @@ export default function ApprovalsPage() {
       )}
 
       {/* Bulk Action Bottom Bar */}
-      {selectedIds.length > 0 && (
+      {selectedIds.length > 0 && user?.role !== 'partner_viewer' && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[10000] bg-[#1A1A1A] text-white border border-white/10 rounded-full px-6 py-3.5 shadow-2xl flex items-center justify-between space-x-6 animate-in slide-in-from-bottom duration-300">
           <span className="text-xs font-extrabold tracking-wide whitespace-nowrap">
             {selectedIds.length} items selected

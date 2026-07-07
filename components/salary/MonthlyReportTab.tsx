@@ -7,6 +7,7 @@ import { formatCurrency, getPastMonths, formatMonthDisplay } from './utils';
 import { Download } from 'lucide-react';
 import { calculateSalary, calculateLateSalaryDeduction } from '@/lib/salary';
 import XLSX from 'xlsx-js-style';
+import { useAuth } from '@/lib/auth-context';
 
 export default function MonthlyReportTab({
   selectedMonth: propMonth,
@@ -15,6 +16,7 @@ export default function MonthlyReportTab({
   selectedMonth?: string;
   onGoToBulkConfirm?: () => void;
 }) {
+  const { user, userBranch } = useAuth();
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   const [exporting, setExporting] = useState(false);
@@ -46,10 +48,19 @@ export default function MonthlyReportTab({
       setLoading(true);
       setErrorMsg('');
       
-      const { data: staffData, error: staffError } = await supabase
+      let query = supabase
         .from('staff')
         .select('*, branch:branches(name), shift:shifts(*)')
-        .order('name');
+        .eq('active', true)
+        .eq('is_trial', false);
+
+      if (user?.role === 'nearbi_homes_supervisor') {
+        query = query.eq('branch_id', 'hypermarket').eq('department', 'Nearbi Homes');
+      } else if (userBranch) {
+        query = query.eq('branch_id', userBranch);
+      }
+
+      const { data: staffData, error: staffError } = await query.order('name');
       if (staffError) throw staffError;
 
       const { data: confData, error: confError } = await supabase
@@ -666,10 +677,19 @@ export default function MonthlyReportTab({
       };
 
       // 1. Fetch fresh active staff list
-      const { data: freshStaff, error: staffErr } = await supabase
+      let freshStaffQuery = supabase
         .from('staff')
         .select('*, branch:branches(name), shift:shifts(*)')
-        .order('name');
+        .eq('active', true)
+        .eq('is_trial', false);
+
+      if (user?.role === 'nearbi_homes_supervisor') {
+        freshStaffQuery = freshStaffQuery.eq('branch_id', 'hypermarket').eq('department', 'Nearbi Homes');
+      } else if (userBranch) {
+        freshStaffQuery = freshStaffQuery.eq('branch_id', userBranch);
+      }
+
+      const { data: freshStaff, error: staffErr } = await freshStaffQuery.order('name');
       if (staffErr) throw staffErr;
 
       // 2. Fetch fresh salary confirmations

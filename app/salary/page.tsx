@@ -318,6 +318,7 @@ export default function SalaryPage() {
         .from('staff')
         .select('*, branch:branches(name), shift:shifts(*)')
         .eq('active', true)
+        .eq('is_trial', false)
         .order('name');
       if (data) setStaffList(data);
     }

@@ -216,7 +216,8 @@ export function calculateMinutesWorked(
 export function calculateOTMinutes(
   shiftEnd: string,
   actualOut: string,
-  shiftStart: string
+  shiftStart: string,
+  thresholdMinutes: number = 30
 ): number {
   if (!shiftEnd || !actualOut || !shiftStart)
     return 0
@@ -235,7 +236,7 @@ export function calculateOTMinutes(
   }
 
   const extra = adjustedOut - adjustedShiftEnd
-  if (extra < 30) return 0
+  if (extra < thresholdMinutes) return 0
   return extra
 }
 

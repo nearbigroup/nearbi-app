@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { createAuditLog } from '@/lib/audit';
-import { Clock, RefreshCw, CircleCheck, CircleX, AlertTriangle, X, AlertCircle, Download, Upload, Check, List, LayoutGrid, MoreVertical, Plus, Camera, Flag } from 'lucide-react';
+import { Clock, RefreshCw, CircleCheck, CircleX, AlertTriangle, X, AlertCircle, Download, Upload, Check, List, LayoutGrid, MoreVertical, Plus, Camera, Flag, User } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import * as XLSX from 'xlsx';
 import { DEPARTMENTS } from '@/lib/data';
@@ -32,6 +32,9 @@ interface StaffMember {
   off_days_per_month?: number;
   pay_type?: string;
   standard_hours?: number;
+  ot_threshold_minutes?: number;
+  is_trial?: boolean;
+  candidate_id?: string | null;
 }
 
 interface AttendanceRecord {
@@ -308,7 +311,7 @@ export default function AttendancePage() {
     if (!editCheckOutTime) return 0;
     const shiftStart = overrideShift ? overrideStart : (detailRecord?.shift?.start_time || '09:00');
     const shiftEnd = overrideShift ? overrideEnd : (detailRecord?.shift?.end_time || '18:00');
-    return calculateOTMinutes(shiftEnd, editCheckOutTime, shiftStart);
+    return calculateOTMinutes(shiftEnd, editCheckOutTime, shiftStart, detailRecord?.ot_threshold_minutes);
   }, [editCheckOutTime, detailRecord, overrideShift, overrideStart, overrideEnd]);
 
   const liveEarlyLeaveMinutes = useMemo(() => {
@@ -344,7 +347,8 @@ export default function AttendancePage() {
     checkIn: string | null,
     checkOut: string | null,
     status: string,
-    shift: any
+    shift: any,
+    otThreshold: number = 30
   ) => {
     let minutes_late = 0;
     let actual_hours_worked = 0;
@@ -364,7 +368,7 @@ export default function AttendancePage() {
     }
 
     if (checkOut) {
-      ot_minutes = calculateOTMinutes(shift_end, checkOut, shift_start);
+      ot_minutes = calculateOTMinutes(shift_end, checkOut, shift_start, otThreshold);
     }
 
     const late_salary_deduction_minutes = checkIn ? calculateLateMinutes(checkIn, shift_start) : 0;
@@ -505,7 +509,7 @@ export default function AttendancePage() {
       const offDaysPerMonth = detailRecord.off_days_per_month !== undefined ? detailRecord.off_days_per_month : 4;
       const earned = offDaysPerMonth === 0 ? 0 : Math.min(Math.floor(daysWorked / 6), offDaysPerMonth);
 
-      if (usedWeeklyOffs >= earned) {
+      if (usedWeeklyOffs >= earned && !detailRecord.is_trial) {
         alert(`${detailRecord.name} has no weekly off balance remaining this month. Earned: ${earned} | Used: ${usedWeeklyOffs}`);
         return;
       }
@@ -750,7 +754,8 @@ export default function AttendancePage() {
         addCheckIn || null,
         addCheckOut || null,
         addStatus,
-        selectedStaff.shift
+        selectedStaff.shift,
+        selectedStaff.ot_threshold_minutes
       );
 
       let color_code = 'green';
@@ -791,7 +796,7 @@ export default function AttendancePage() {
         else if (color_code === 'orange') fineAmount = Number(fineSettings.orange_fine);
         else if (color_code === 'red') fineAmount = Number(fineSettings.red_fine);
 
-        if (fineAmount > 0) {
+        if (fineAmount > 0 && !selectedStaff.is_trial) {
           const [year, monthStr] = addDate.split('-');
           await supabase.from('late_fines').insert({
             staff_id: addStaffId,
@@ -806,7 +811,7 @@ export default function AttendancePage() {
         }
       }
 
-      if (ot_minutes > 0) {
+      if (ot_minutes > 0 && !selectedStaff.is_trial) {
         await supabase.from('attendance_adjustments').insert({
           staff_id: addStaffId,
           date: addDate,
@@ -939,7 +944,7 @@ export default function AttendancePage() {
 
       if (attErr) throw attErr;
 
-      if (!isHourly && editStatus === 'late' && editFineAmount > 0) {
+      if (!isHourly && editStatus === 'late' && editFineAmount > 0 && !detailRecord.is_trial) {
         const [year, monthStr] = date.split('-');
         const monthKey = `${year}-${monthStr}`;
 
@@ -968,7 +973,7 @@ export default function AttendancePage() {
           .eq('date', date);
       }
 
-      if (!isHourly && ot_minutes > 0) {
+      if (!isHourly && ot_minutes > 0 && !detailRecord.is_trial) {
         const { data: existingAdj } = await supabase
           .from('attendance_adjustments')
           .select('id')
@@ -1803,7 +1808,9 @@ export default function AttendancePage() {
       // 1. Fetch staff
       try {
         let staffQuery = supabase.from('staff').select('*, shift:shifts(*)').eq('active', true).order('name');
-        if (userBranch) {
+        if (user?.role === 'nearbi_homes_supervisor') {
+          staffQuery = staffQuery.eq('branch_id', 'hypermarket').eq('department', 'Nearbi Homes');
+        } else if (userBranch) {
           staffQuery = staffQuery.eq('branch_id', userBranch);
         }
         const { data: sData, error: sErr } = await staffQuery;
@@ -2604,13 +2611,15 @@ export default function AttendancePage() {
                 <span>Add Record</span>
               </button>
             )}
-            <button
-              onClick={() => setBottomSheetOpen(true)}
-              className="min-h-[40px] bg-white border border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-[0.98] text-[#1A1A1A] px-3.5 rounded-[12px] text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-sm cursor-pointer"
-            >
-              <Download size={16} strokeWidth={1.5} />
-              <span>Import/Export</span>
-            </button>
+            {(user?.role === 'admin' || user?.role === 'ops_manager' || user?.role === 'staff_executive') && (
+              <button
+                onClick={() => setBottomSheetOpen(true)}
+                className="min-h-[40px] bg-white border border-[#E8E8E8] hover:bg-[#F8F8F8] active:scale-[0.98] text-[#1A1A1A] px-3.5 rounded-[12px] text-xs font-bold flex items-center justify-center space-x-1.5 transition-all shadow-sm cursor-pointer"
+              >
+                <Download size={16} strokeWidth={1.5} />
+                <span>Import/Export</span>
+              </button>
+            )}
           </div>
 
           {/* Refresh button */}
@@ -2653,16 +2662,18 @@ export default function AttendancePage() {
                     <span>Add Record</span>
                   </button>
                 )}
-                <button
-                  onClick={() => {
-                    setMoreMenuOpen(false);
-                    setBottomSheetOpen(true);
-                  }}
-                  className="w-full text-left p-2.5 text-xs font-bold text-[#1A1A1A] hover:bg-[#F8F8F8] rounded-[8px] flex items-center space-x-2 min-h-0 h-auto cursor-pointer"
-                >
-                  <Download size={14} strokeWidth={1.5} />
-                  <span>Import/Export</span>
-                </button>
+                {(user?.role === 'admin' || user?.role === 'ops_manager' || user?.role === 'staff_executive') && (
+                  <button
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      setBottomSheetOpen(true);
+                    }}
+                    className="w-full text-left p-2.5 text-xs font-bold text-[#1A1A1A] hover:bg-[#F8F8F8] rounded-[8px] flex items-center space-x-2 min-h-0 h-auto cursor-pointer"
+                  >
+                    <Download size={14} strokeWidth={1.5} />
+                    <span>Import/Export</span>
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -2923,39 +2934,45 @@ export default function AttendancePage() {
                       }}
                     >
                       {item.record?.check_in_photo && (
-                        <div className="relative">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedPhoto({
-                                url: item.record!.check_in_photo!,
-                                name: item.name,
-                                label: 'Check In Photo',
-                                time: item.record!.check_in_time || '',
-                                date: item.record!.date,
-                                attendanceId: item.record!.id,
-                                photo_flagged: item.record!.photo_flagged,
-                                photo_flag_reason: item.record!.photo_flag_reason || undefined,
-                                photo_flagged_by: item.record!.photo_flagged_by || undefined
-                              });
-                            }}
-                            className={`w-9 h-9 rounded-full overflow-hidden border shadow-sm hover:scale-105 active:scale-95 transition-all cursor-pointer flex-shrink-0 ${
-                              item.record!.photo_flagged ? 'border-amber-500 ring-2 ring-amber-500/20' : 'border-[#E8E8E8]'
-                            }`}
-                          >
-                            <img
-                              src={item.record.check_in_photo}
-                              alt="Selfie"
-                              className="w-full h-full object-cover"
-                            />
-                          </button>
-                          {item.record!.photo_flagged && (
-                            <span className="absolute -top-1 -right-1 bg-amber-500 text-white rounded-full w-4 h-4 flex items-center justify-center border border-white shadow">
-                              <Flag size={8} fill="currentColor" />
-                            </span>
-                          )}
-                        </div>
+                        user?.role === 'nearbi_homes_supervisor' ? (
+                          <div className="w-9 h-9 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center border border-[#E8E8E8] flex-shrink-0">
+                            <User size={16} />
+                          </div>
+                        ) : (
+                          <div className="relative">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedPhoto({
+                                  url: item.record!.check_in_photo!,
+                                  name: item.name,
+                                  label: 'Check In Photo',
+                                  time: item.record!.check_in_time || '',
+                                  date: item.record!.date,
+                                  attendanceId: item.record!.id,
+                                  photo_flagged: item.record!.photo_flagged,
+                                  photo_flag_reason: item.record!.photo_flag_reason || undefined,
+                                  photo_flagged_by: item.record!.photo_flagged_by || undefined
+                                });
+                              }}
+                              className={`w-9 h-9 rounded-full overflow-hidden border shadow-sm hover:scale-105 active:scale-95 transition-all cursor-pointer flex-shrink-0 ${
+                                item.record!.photo_flagged ? 'border-amber-500 ring-2 ring-amber-500/20' : 'border-[#E8E8E8]'
+                              }`}
+                            >
+                              <img
+                                src={item.record.check_in_photo}
+                                alt="Selfie"
+                                className="w-full h-full object-cover"
+                              />
+                            </button>
+                            {item.record!.photo_flagged && (
+                              <span className="absolute -top-1 -right-1 bg-amber-500 text-white rounded-full w-4 h-4 flex items-center justify-center border border-white shadow">
+                                <Flag size={8} fill="currentColor" />
+                              </span>
+                            )}
+                          </div>
+                        )
                       )}
                       <div>
                         {getStatusBadge(item.record, item.pay_type)}
@@ -3007,38 +3024,44 @@ export default function AttendancePage() {
                       <div className="bg-[#EDF7EF] border border-[#2D7A3A]/20 text-[#2D7A3A] text-[10px] font-bold px-2.5 py-1 rounded-[20px] flex items-center space-x-1.5">
                         <span>IN: {formatTime12hr(item.record.check_in_time)}</span>
                         {item.record.check_in_photo && (
-                          <div className="relative">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSelectedPhoto({
-                                  url: item.record!.check_in_photo!,
-                                  name: item.name,
-                                  label: 'Check In Photo',
-                                  time: formatTime12hr(item.record!.check_in_time) || '',
-                                  date: item.record!.date,
-                                  attendanceId: item.record!.id,
-                                  photo_flagged: item.record!.photo_flagged,
-                                  photo_flag_reason: item.record!.photo_flag_reason || undefined,
-                                  photo_flagged_by: item.record!.photo_flagged_by || undefined
-                                });
-                              }}
-                              className={`w-4.5 h-4.5 rounded-full overflow-hidden border active:scale-90 ${
-                                item.record.photo_flagged ? 'border-amber-500 ring-1 ring-amber-500/35' : 'border-[#2D7A3A]/25'
-                              }`}
-                            >
-                              <img
-                                src={item.record.check_in_photo}
-                                alt="Selfie"
-                                className="w-full h-full object-cover"
-                              />
-                            </button>
-                            {item.record.photo_flagged && (
-                              <span className="absolute -top-0.5 -right-0.5 bg-amber-500 text-white rounded-full w-2 h-2 flex items-center justify-center border border-white shadow">
-                                <Flag size={5} fill="currentColor" />
-                              </span>
-                            )}
-                          </div>
+                          user?.role === 'nearbi_homes_supervisor' ? (
+                            <div className="w-4.5 h-4.5 rounded-full bg-[#2D7A3A]/10 text-[#2D7A3A] flex items-center justify-center border border-[#2D7A3A]/25 flex-shrink-0">
+                              <User size={10} />
+                            </div>
+                          ) : (
+                            <div className="relative">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedPhoto({
+                                    url: item.record!.check_in_photo!,
+                                    name: item.name,
+                                    label: 'Check In Photo',
+                                    time: formatTime12hr(item.record!.check_in_time) || '',
+                                    date: item.record!.date,
+                                    attendanceId: item.record!.id,
+                                    photo_flagged: item.record!.photo_flagged,
+                                    photo_flag_reason: item.record!.photo_flag_reason || undefined,
+                                    photo_flagged_by: item.record!.photo_flagged_by || undefined
+                                  });
+                                }}
+                                className={`w-4.5 h-4.5 rounded-full overflow-hidden border active:scale-90 ${
+                                  item.record.photo_flagged ? 'border-amber-500 ring-1 ring-amber-500/35' : 'border-[#2D7A3A]/25'
+                                }`}
+                              >
+                                <img
+                                  src={item.record.check_in_photo}
+                                  alt="Selfie"
+                                  className="w-full h-full object-cover"
+                                />
+                              </button>
+                              {item.record.photo_flagged && (
+                                <span className="absolute -top-0.5 -right-0.5 bg-amber-500 text-white rounded-full w-2 h-2 flex items-center justify-center border border-white shadow">
+                                  <Flag size={5} fill="currentColor" />
+                                </span>
+                              )}
+                            </div>
+                          )
                         )}
                       </div>
 
@@ -3054,38 +3077,44 @@ export default function AttendancePage() {
                         <div className="bg-[#EBF3FB] border border-[#1A5FA8]/20 text-[#1A5FA8] text-[10px] font-bold px-2.5 py-1 rounded-[20px] flex items-center space-x-1.5">
                           <span>OUT: {formatTime12hr(item.record.check_out_time)}</span>
                           {item.record.check_out_photo && (
-                            <div className="relative">
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSelectedPhoto({
-                                    url: item.record!.check_out_photo!,
-                                    name: item.name,
-                                    label: 'Check Out Photo',
-                                    time: formatTime12hr(item.record!.check_out_time) || '',
-                                    date: item.record!.date,
-                                    attendanceId: item.record!.id,
-                                    photo_flagged: item.record!.photo_flagged,
-                                    photo_flag_reason: item.record!.photo_flag_reason || undefined,
-                                    photo_flagged_by: item.record!.photo_flagged_by || undefined
-                                  });
-                                }}
-                                className={`w-4.5 h-4.5 rounded-full overflow-hidden border active:scale-90 ${
-                                  item.record.photo_flagged ? 'border-amber-500 ring-1 ring-amber-500/35' : 'border-[#1A5FA8]/25'
-                                }`}
-                              >
-                                <img
-                                  src={item.record.check_out_photo}
-                                  alt="Selfie"
-                                  className="w-full h-full object-cover"
-                                />
-                              </button>
-                              {item.record.photo_flagged && (
-                                <span className="absolute -top-0.5 -right-0.5 bg-amber-500 text-white rounded-full w-2 h-2 flex items-center justify-center border border-white shadow">
-                                  <Flag size={5} fill="currentColor" />
-                                </span>
-                              )}
-                            </div>
+                            user?.role === 'nearbi_homes_supervisor' ? (
+                              <div className="w-4.5 h-4.5 rounded-full bg-[#1A5FA8]/10 text-[#1A5FA8] flex items-center justify-center border border-[#1A5FA8]/25 flex-shrink-0">
+                                <User size={10} />
+                              </div>
+                            ) : (
+                              <div className="relative">
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedPhoto({
+                                      url: item.record!.check_out_photo!,
+                                      name: item.name,
+                                      label: 'Check Out Photo',
+                                      time: formatTime12hr(item.record!.check_out_time) || '',
+                                      date: item.record!.date,
+                                      attendanceId: item.record!.id,
+                                      photo_flagged: item.record!.photo_flagged,
+                                      photo_flag_reason: item.record!.photo_flag_reason || undefined,
+                                      photo_flagged_by: item.record!.photo_flagged_by || undefined
+                                    });
+                                  }}
+                                  className={`w-4.5 h-4.5 rounded-full overflow-hidden border active:scale-90 ${
+                                    item.record.photo_flagged ? 'border-amber-500 ring-1 ring-amber-500/35' : 'border-[#1A5FA8]/25'
+                                  }`}
+                                >
+                                  <img
+                                    src={item.record.check_out_photo}
+                                    alt="Selfie"
+                                    className="w-full h-full object-cover"
+                                  />
+                                </button>
+                                {item.record.photo_flagged && (
+                                  <span className="absolute -top-0.5 -right-0.5 bg-amber-500 text-white rounded-full w-2 h-2 flex items-center justify-center border border-white shadow">
+                                    <Flag size={5} fill="currentColor" />
+                                  </span>
+                                )}
+                              </div>
+                            )
                           )}
                         </div>
                       )}
@@ -3191,7 +3220,7 @@ export default function AttendancePage() {
       )}
 
       {/* Photo Modal */}
-      {selectedPhoto && (
+      {selectedPhoto && user?.role !== 'nearbi_homes_supervisor' && (
         <div
           className="fixed inset-0 z-[14000] bg-black/95 backdrop-blur-md flex flex-col justify-between p-6"
           onClick={() => setSelectedPhoto(null)}
@@ -3959,36 +3988,43 @@ export default function AttendancePage() {
                         <div className="flex flex-col items-center">
                           <span className="text-[11px] font-bold text-[#555555] mb-1.5">Check In</span>
                           {detailRecord.record.check_in_photo ? (
-                            <div className="relative">
-                              <button
-                                type="button"
-                                onClick={() => setSelectedPhoto({
-                                  url: detailRecord.record.check_in_photo,
-                                  name: detailRecord.name,
-                                  label: 'Check In Photo',
-                                  time: formatTime12hr(detailRecord.record.check_in_time) || '',
-                                  date: detailRecord.record.date,
-                                  attendanceId: detailRecord.record.id,
-                                  photo_flagged: detailRecord.record.photo_flagged,
-                                  photo_flag_reason: detailRecord.record.photo_flag_reason || undefined,
-                                  photo_flagged_by: detailRecord.record.photo_flagged_by || undefined
-                                })}
-                                className={`w-full aspect-square max-w-[120px] rounded-[12px] overflow-hidden border shadow-sm relative group hover:opacity-90 active:scale-95 transition-all cursor-pointer ${
-                                  detailRecord.record.photo_flagged ? 'border-red-500 ring-2 ring-red-500/20' : 'border-[#E8E8E8]'
-                                }`}
-                              >
-                                <img
-                                  src={detailRecord.record.check_in_photo}
-                                  alt="Check In Selfie"
-                                  className="w-full h-full object-cover"
-                                />
-                              </button>
-                              {detailRecord.record.photo_flagged && (
-                                <span className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-[10px] font-black border border-white shadow">
-                                  ⚠️
-                                </span>
-                              )}
-                            </div>
+                            user?.role === 'nearbi_homes_supervisor' ? (
+                              <div className="w-full aspect-square max-w-[120px] rounded-[12px] bg-[#F2F2F2] border border-[#E8E8E8] flex flex-col items-center justify-center text-[#999999]">
+                                <User size={24} className="mb-1" strokeWidth={1.5} />
+                                <span className="text-[9px] font-bold">Photo Hidden</span>
+                              </div>
+                            ) : (
+                              <div className="relative">
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedPhoto({
+                                    url: detailRecord.record.check_in_photo,
+                                    name: detailRecord.name,
+                                    label: 'Check In Photo',
+                                    time: formatTime12hr(detailRecord.record.check_in_time) || '',
+                                    date: detailRecord.record.date,
+                                    attendanceId: detailRecord.record.id,
+                                    photo_flagged: detailRecord.record.photo_flagged,
+                                    photo_flag_reason: detailRecord.record.photo_flag_reason || undefined,
+                                    photo_flagged_by: detailRecord.record.photo_flagged_by || undefined
+                                  })}
+                                  className={`w-full aspect-square max-w-[120px] rounded-[12px] overflow-hidden border shadow-sm relative group hover:opacity-90 active:scale-95 transition-all cursor-pointer ${
+                                    detailRecord.record.photo_flagged ? 'border-red-500 ring-2 ring-red-500/20' : 'border-[#E8E8E8]'
+                                  }`}
+                                >
+                                  <img
+                                    src={detailRecord.record.check_in_photo}
+                                    alt="Check In Selfie"
+                                    className="w-full h-full object-cover"
+                                  />
+                                </button>
+                                {detailRecord.record.photo_flagged && (
+                                  <span className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-[10px] font-black border border-white shadow">
+                                    ⚠️
+                                  </span>
+                                )}
+                              </div>
+                            )
                           ) : (
                             <div className="w-full aspect-square max-w-[120px] rounded-[12px] bg-[#F2F2F2] border border-[#E8E8E8] flex flex-col items-center justify-center text-[#999999]">
                               <Camera size={24} className="mb-1" strokeWidth={1.5} />
@@ -4001,36 +4037,43 @@ export default function AttendancePage() {
                         <div className="flex flex-col items-center">
                           <span className="text-[11px] font-bold text-[#555555] mb-1.5">Check Out</span>
                           {detailRecord.record.check_out_photo ? (
-                            <div className="relative">
-                              <button
-                                type="button"
-                                onClick={() => setSelectedPhoto({
-                                  url: detailRecord.record.check_out_photo,
-                                  name: detailRecord.name,
-                                  label: 'Check Out Photo',
-                                  time: formatTime12hr(detailRecord.record.check_out_time) || '',
-                                  date: detailRecord.record.date,
-                                  attendanceId: detailRecord.record.id,
-                                  photo_flagged: detailRecord.record.photo_flagged,
-                                  photo_flag_reason: detailRecord.record.photo_flag_reason || undefined,
-                                  photo_flagged_by: detailRecord.record.photo_flagged_by || undefined
-                                })}
-                                className={`w-full aspect-square max-w-[120px] rounded-[12px] overflow-hidden border shadow-sm relative group hover:opacity-90 active:scale-95 transition-all cursor-pointer ${
-                                  detailRecord.record.photo_flagged ? 'border-red-500 ring-2 ring-red-500/20' : 'border-[#E8E8E8]'
-                                }`}
-                              >
-                                <img
-                                  src={detailRecord.record.check_out_photo}
-                                  alt="Check Out Selfie"
-                                  className="w-full h-full object-cover"
-                                />
-                              </button>
-                              {detailRecord.record.photo_flagged && (
-                                <span className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-[10px] font-black border border-white shadow">
-                                  ⚠️
-                                </span>
-                              )}
-                            </div>
+                            user?.role === 'nearbi_homes_supervisor' ? (
+                              <div className="w-full aspect-square max-w-[120px] rounded-[12px] bg-[#F2F2F2] border border-[#E8E8E8] flex flex-col items-center justify-center text-[#999999]">
+                                <User size={24} className="mb-1" strokeWidth={1.5} />
+                                <span className="text-[9px] font-bold">Photo Hidden</span>
+                              </div>
+                            ) : (
+                              <div className="relative">
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedPhoto({
+                                    url: detailRecord.record.check_out_photo,
+                                    name: detailRecord.name,
+                                    label: 'Check Out Photo',
+                                    time: formatTime12hr(detailRecord.record.check_out_time) || '',
+                                    date: detailRecord.record.date,
+                                    attendanceId: detailRecord.record.id,
+                                    photo_flagged: detailRecord.record.photo_flagged,
+                                    photo_flag_reason: detailRecord.record.photo_flag_reason || undefined,
+                                    photo_flagged_by: detailRecord.record.photo_flagged_by || undefined
+                                  })}
+                                  className={`w-full aspect-square max-w-[120px] rounded-[12px] overflow-hidden border shadow-sm relative group hover:opacity-90 active:scale-95 transition-all cursor-pointer ${
+                                    detailRecord.record.photo_flagged ? 'border-red-500 ring-2 ring-red-500/20' : 'border-[#E8E8E8]'
+                                  }`}
+                                >
+                                  <img
+                                    src={detailRecord.record.check_out_photo}
+                                    alt="Check Out Selfie"
+                                    className="w-full h-full object-cover"
+                                  />
+                                </button>
+                                {detailRecord.record.photo_flagged && (
+                                  <span className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-[10px] font-black border border-white shadow">
+                                    ⚠️
+                                  </span>
+                                )}
+                              </div>
+                            )
                           ) : (
                             <div className="w-full aspect-square max-w-[120px] rounded-[12px] bg-[#F2F2F2] border border-[#E8E8E8] flex flex-col items-center justify-center text-[#999999]">
                               <Camera size={24} className="mb-1" strokeWidth={1.5} />
