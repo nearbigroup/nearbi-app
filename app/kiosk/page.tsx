@@ -5,8 +5,9 @@ import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { createNotification } from '@/lib/notifications';
 import { useRouter } from 'next/navigation';
-import { Check, LogOut, Camera, AlertCircle, UserCheck, Timer, AlertTriangle, Coffee, RotateCcw, CircleCheck } from 'lucide-react';
+import { Check, LogOut, Camera, AlertCircle, UserCheck, Timer, AlertTriangle, Coffee, RotateCcw, CircleCheck, Users } from 'lucide-react';
 import { calculateOTMinutes, calculateActualHours, calculateActualHoursWithBreaks, calculateEarlyLeaveMinutes, calculateLateMinutes, calculateMinutesWorked } from '@/lib/salary';
+import { DEPARTMENTS } from '@/lib/data';
 
 const getMinutes = (timeStr: string) => {
   if (!timeStr) return 0;
@@ -141,7 +142,7 @@ const autoCloseCheckouts = async (effectiveBranch: string | null) => {
 import { formatTime12hr } from '@/lib/utils';
 
 
-type KioskState = 'IDLE' | 'LOADING' | 'STAFF_FOUND' | 'CAMERA' | 'RESULT' | 'ERROR' | 'SHORT_ATTENDANCE_WARNING';
+type KioskState = 'IDLE' | 'LOADING' | 'STAFF_FOUND' | 'CAMERA' | 'RESULT' | 'ERROR' | 'SHORT_ATTENDANCE_WARNING' | 'CANDIDATE_FORM' | 'CANDIDATE_CAMERA' | 'CANDIDATE_CONFIRM' | 'PHOTO_WARNING';
 type FlowType = 'CHECK_IN' | 'CHECK_OUT' | null;
 
 export default function KioskPage() {
@@ -159,6 +160,12 @@ export default function KioskPage() {
   const [cameraError, setCameraError] = useState(false);
   const [stats, setStats] = useState({ checkedIn: 0, late: 0, checkedOut: 0, onBreak: 0 });
   const [effectiveBranch, setEffectiveBranch] = useState<string | null>(null);
+
+  // Candidate states
+  const [candidateName, setCandidateName] = useState('');
+  const [candidatePhone, setCandidatePhone] = useState('');
+  const [candidateDepts, setCandidateDepts] = useState<string[]>([]);
+  const [lastPhotoFlagged, setLastPhotoFlagged] = useState(false);
 
   const [pendingAnnouncements, setPendingAnnouncements] = useState<any[]>([]);
   const [activeAnnouncement, setActiveAnnouncement] = useState<any>(null);
@@ -361,6 +368,18 @@ export default function KioskPage() {
         evening_tea_enabled: true,
       });
 
+      // Check if their most recent attendance photo has been flagged
+      const { data: lastAtt } = await supabase
+        .from('attendance')
+        .select('photo_flagged')
+        .eq('staff_id', data.id)
+        .order('date', { ascending: false })
+        .order('check_in_time', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      setLastPhotoFlagged(!!lastAtt?.photo_flagged);
+
       setStaff(data);
       setKioskState('STAFF_FOUND');
     } catch (err: any) {
@@ -452,6 +471,144 @@ export default function KioskPage() {
     } catch (err) {
       console.error('Camera access denied:', err);
       setCameraError(true);
+    }
+  };
+
+  const handleStartCameraWithFlagCheck = (type: FlowType) => {
+    setFlow(type);
+    if (lastPhotoFlagged) {
+      setKioskState('PHOTO_WARNING');
+    } else {
+      startCamera(type);
+    }
+  };
+
+  const startCandidateCamera = async () => {
+    setCameraError(false);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 640 } },
+      });
+      streamRef.current = stream;
+      setKioskState('CANDIDATE_CAMERA');
+      setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      }, 100);
+    } catch (err) {
+      console.error('Camera access denied:', err);
+      setCameraError(true);
+      setKioskState('CANDIDATE_CAMERA');
+    }
+  };
+
+  const uploadCandidatePhoto = async (blob: Blob, filename: string): Promise<string> => {
+    try {
+      await supabase.storage.createBucket(
+        'candidate-photos',
+        { public: true }
+      );
+    } catch (e) {
+      // Bucket already exists
+    }
+
+    const { error: uploadError } = await supabase.storage
+      .from('candidate-photos')
+      .upload(filename, blob, {
+        contentType: 'image/jpeg',
+        upsert: true,
+      });
+
+    if (uploadError) throw uploadError;
+
+    const { data } = supabase.storage.from('candidate-photos').getPublicUrl(filename);
+    return data.publicUrl;
+  };
+
+  useEffect(() => {
+    if (kioskState === 'PHOTO_WARNING') {
+      const timer = setTimeout(() => {
+        setLastPhotoFlagged(false);
+        startCamera(flow);
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [kioskState, flow]);
+
+  const handleStartCandidateFlow = () => {
+    setCandidateName('');
+    setCandidatePhone('');
+    setCandidateDepts([]);
+    setKioskState('CANDIDATE_FORM');
+  };
+
+  const handleToggleDept = (dept: string) => {
+    if (candidateDepts.includes(dept)) {
+      setCandidateDepts(candidateDepts.filter((d) => d !== dept));
+    } else {
+      setCandidateDepts([...candidateDepts, dept]);
+    }
+  };
+
+  const handleProceedToCandidateCamera = () => {
+    if (!candidateName.trim()) {
+      alert('Please enter your full name.');
+      return;
+    }
+    if (!candidatePhone.trim()) {
+      alert('Please enter your phone number.');
+      return;
+    }
+    if (candidateDepts.length === 0) {
+      alert('Please select at least one department of interest.');
+      return;
+    }
+    startCandidateCamera();
+  };
+
+  const handleCandidateCapture = async () => {
+    setKioskState('LOADING');
+    try {
+      const blob = await takePhotoBlob();
+      stopCamera();
+
+      const candidateId = crypto.randomUUID();
+      const todayStr = new Date().toISOString().split('T')[0];
+      const fileName = `candidates/${candidateId}/${Date.now()}.jpg`;
+
+      const photoUrl = await uploadCandidatePhoto(blob, fileName);
+
+      const { error } = await supabase.from('job_candidates').insert({
+        id: candidateId,
+        full_name: candidateName.trim(),
+        phone_number: candidatePhone.trim() || null,
+        departments: candidateDepts,
+        status: 'new',
+        branch_id: effectiveBranch || 'daily',
+        photo_url: photoUrl,
+        walk_in_date: todayStr,
+        added_by: 'kiosk',
+        trial_kiosk_active: false
+      });
+
+      if (error) throw error;
+
+      // Show confirmation
+      setKioskState('CANDIDATE_CONFIRM');
+      setTimeout(() => {
+        setCandidateName('');
+        setCandidatePhone('');
+        setCandidateDepts([]);
+        setKioskState('IDLE');
+      }, 3000);
+    } catch (err: any) {
+      console.error(err);
+      setErrorMsg(err.message || 'Candidate registration failed.');
+      setKioskState('ERROR');
+      setTimeout(() => {
+        setKioskState('CANDIDATE_FORM');
+      }, 3000);
     }
   };
 
@@ -550,7 +707,10 @@ export default function KioskPage() {
         early_leave_minutes: earlyLeaveMins,
         check_out_photo: photoUrl || null,
         short_attendance: isHourly ? false : isShortAttendance,
-        total_hours_logged: isHourly ? actualHrs : 0
+        total_hours_logged: isHourly ? actualHrs : 0,
+        photo_flagged: false,
+        photo_flag_reason: null,
+        photo_flagged_by: null
       };
 
       if (!isHourly && otMins > 0) {
@@ -812,6 +972,9 @@ export default function KioskPage() {
           early_in_minutes: earlyInMinutes,
           check_in_photo: photoUrl || null,
           marked_by: 'kiosk',
+          photo_flagged: false,
+          photo_flag_reason: null,
+          photo_flagged_by: null
         }, { onConflict: 'staff_id,date' });
 
         if (upsertErr) throw upsertErr;
@@ -1499,6 +1662,16 @@ export default function KioskPage() {
                 <Check size={16} strokeWidth={2.5} />
               </button>
             </div>
+
+            {/* Walk-in candidate trigger tile */}
+            <button
+              type="button"
+              onClick={handleStartCandidateFlow}
+              className="mt-6 w-[calc(100%-32px)] py-3 bg-[#222222] border border-[#333333] hover:bg-[#2A2A2A] rounded-xl flex items-center justify-center space-x-2 text-xs font-bold text-[#999999] hover:text-white transition-all active:scale-[0.98] shadow-sm cursor-pointer"
+            >
+              <Users size={15} />
+              <span>New Walk-in Candidate?</span>
+            </button>
           </div>
         )}
 
@@ -1564,7 +1737,7 @@ export default function KioskPage() {
               <div className="w-full grid grid-cols-2 gap-3.5 px-4">
                 <button
                   type="button"
-                  onClick={() => startCamera('CHECK_IN')}
+                  onClick={() => handleStartCameraWithFlagCheck('CHECK_IN')}
                   className="bg-[rgba(45,122,58,0.15)] border border-[rgba(45,122,58,0.3)] hover:bg-[rgba(45,122,58,0.25)] text-[#2D7A3A] py-[18px] rounded-[12px] text-xs font-bold flex flex-col items-center justify-center space-y-2 active:scale-[0.98] transition-all min-h-[48px]"
                 >
                   <UserCheck size={22} strokeWidth={1.5} />
@@ -1573,7 +1746,7 @@ export default function KioskPage() {
 
                 <button
                   type="button"
-                  onClick={() => startCamera('CHECK_OUT')}
+                  onClick={() => handleStartCameraWithFlagCheck('CHECK_OUT')}
                   className="bg-[rgba(26,95,168,0.15)] border border-[rgba(26,95,168,0.3)] hover:bg-[rgba(26,95,168,0.25)] text-[#1A5FA8] py-[18px] rounded-[12px] text-xs font-bold flex flex-col items-center justify-center space-y-2 active:scale-[0.98] transition-all min-h-[48px]"
                 >
                   <LogOut size={22} strokeWidth={1.5} />
@@ -1617,12 +1790,135 @@ export default function KioskPage() {
           );
         })()}
 
-        {kioskState === 'CAMERA' && (
+        {kioskState === 'CANDIDATE_FORM' && (
+          <div className="w-full flex flex-col space-y-4 px-4 bg-[#1a1a1a] rounded-[18px] border border-[#333333] p-5 shadow-xl select-none">
+            <div className="text-center space-y-1">
+              <h2 className="text-white text-lg font-black tracking-wide">Walk-in Candidate</h2>
+              <p className="text-[11px] text-[#999999] font-bold">Please fill in your details to register</p>
+            </div>
+
+            <div className="space-y-4 pt-2 text-xs font-semibold text-[#BBBBBB]">
+              <div className="space-y-1">
+                <label className="block text-[10px] font-black uppercase text-[#999999] tracking-wider">Full Name</label>
+                <input
+                  type="text"
+                  value={candidateName}
+                  onChange={e => setCandidateName(e.target.value)}
+                  placeholder="Enter candidate full name"
+                  className="w-full bg-[#222222] border border-[#333333] rounded-[12px] p-3 text-xs text-white focus:outline-none focus:border-white/20 font-bold"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="block text-[10px] font-black uppercase text-[#999999] tracking-wider">Phone Number</label>
+                <input
+                  type="tel"
+                  value={candidatePhone}
+                  onChange={e => setCandidatePhone(e.target.value)}
+                  placeholder="Enter phone number"
+                  className="w-full bg-[#222222] border border-[#333333] rounded-[12px] p-3 text-xs text-white focus:outline-none focus:border-white/20 font-bold font-mono"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-[10px] font-black uppercase text-[#999999] tracking-wider">Departments of Interest (Select 1+)</label>
+                <div className="flex flex-wrap gap-2 max-h-36 overflow-y-auto border border-[#333333] rounded-[12px] p-3 bg-black/20">
+                  {DEPARTMENTS.map(dept => {
+                    const isSelected = candidateDepts.includes(dept);
+                    return (
+                      <button
+                        key={dept}
+                        type="button"
+                        onClick={() => handleToggleDept(dept)}
+                        className={`px-3 py-1.5 rounded-lg border text-[11px] font-black transition-all active:scale-95 ${
+                          isSelected 
+                            ? 'bg-white text-black border-white' 
+                            : 'bg-[#222222] text-[#999999] border-[#333333] hover:text-white'
+                        }`}
+                      >
+                        {dept}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setKioskState('IDLE');
+                  setCandidateName('');
+                  setCandidatePhone('');
+                  setCandidateDepts([]);
+                }}
+                className="flex-1 py-3 border border-[#333333] text-white font-bold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleProceedToCandidateCamera}
+                className="flex-1 py-3 bg-white text-black font-extrabold text-xs rounded-xl active:scale-95 transition-all cursor-pointer"
+              >
+                Capture Photo
+              </button>
+            </div>
+          </div>
+        )}
+
+        {kioskState === 'CANDIDATE_CONFIRM' && (
+          <div className="bg-[#222222] border border-[#333333] rounded-[20px] p-6 text-center max-w-sm w-[calc(100%-32px)] flex flex-col items-center justify-center shadow-2xl space-y-4">
+            <div className="w-14 h-14 rounded-full bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+              <CircleCheck size={32} />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-white text-base font-extrabold">Registration Successful!</h3>
+              <p className="text-xs text-[#999999] leading-relaxed font-semibold">
+                Thanks <span className="text-white font-extrabold">{candidateName}</span>! <br />Our team will reach out soon.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {kioskState === 'PHOTO_WARNING' && (
+          <div className="absolute inset-0 z-[12000] flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs select-none">
+            <div className="bg-[#222222] border border-[#333333] rounded-[20px] max-w-sm w-full p-6 flex flex-col space-y-4 shadow-2xl text-center">
+              <div className="flex flex-col items-center">
+                <AlertTriangle size={48} strokeWidth={1.5} className="text-amber-500 mb-2 animate-pulse" />
+                <h3 className="text-white text-base font-extrabold">⚠️ Unclear Photo Warning</h3>
+                <p className="text-[#999999] text-xs font-semibold mt-2.5 leading-relaxed">
+                  Your last photo was unclear. Please make sure your face is fully visible and well-lit this time.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setLastPhotoFlagged(false);
+                  startCamera(flow);
+                }}
+                className="w-full py-3 bg-white text-black font-extrabold text-xs rounded-xl active:scale-95 transition-all cursor-pointer shadow"
+              >
+                Got it, continue
+              </button>
+            </div>
+          </div>
+        )}
+
+        {(kioskState === 'CAMERA' || kioskState === 'CANDIDATE_CAMERA') && (
           <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4 md:p-8 backdrop-blur-sm">
             <div className="relative w-full max-w-xl h-full max-h-[85vh] bg-[#222222] rounded-[24px] border border-[#333333] overflow-hidden flex flex-col shadow-2xl">
               <button
                 type="button"
-                onClick={resetKiosk}
+                onClick={() => {
+                  if (kioskState === 'CANDIDATE_CAMERA') {
+                    stopCamera();
+                    setKioskState('CANDIDATE_FORM');
+                  } else {
+                    resetKiosk();
+                  }
+                }}
                 className="absolute top-4 left-4 text-white font-bold bg-[#333333]/80 hover:bg-[#444444] border border-[#444444] px-4 py-2 rounded-[20px] text-xs z-50 active:scale-95 transition-all"
               >
                 Cancel
@@ -1637,7 +1933,13 @@ export default function KioskPage() {
                   </p>
                   <button
                     type="button"
-                    onClick={() => startCamera(flow)}
+                    onClick={() => {
+                      if (kioskState === 'CANDIDATE_CAMERA') {
+                        startCandidateCamera();
+                      } else {
+                        startCamera(flow);
+                      }
+                    }}
                     className="bg-white text-[#1A1A1A] font-bold px-6 py-2.5 rounded-[12px] text-sm active:scale-95"
                   >
                     Retry Camera
@@ -1664,8 +1966,8 @@ export default function KioskPage() {
                   <div className="p-5 bg-[#222222] border-t border-[#333333] flex justify-center pb-8 w-full">
                     <button
                       type="button"
-                      onClick={handleCapture}
-                      className="bg-white hover:bg-gray-200 text-[#1A1A1A] font-bold text-base py-3.5 px-10 rounded-[28px] active:scale-95 transition-transform flex items-center space-x-2 shadow-lg"
+                      onClick={kioskState === 'CANDIDATE_CAMERA' ? handleCandidateCapture : handleCapture}
+                      className="bg-white hover:bg-gray-200 text-[#1A1A1A] font-bold text-base py-3.5 px-10 rounded-[28px] active:scale-95 transition-transform flex items-center space-x-2 shadow-lg cursor-pointer"
                     >
                       <Camera size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
                       <span>Take Photo</span>
