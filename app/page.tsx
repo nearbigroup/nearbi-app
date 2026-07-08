@@ -70,8 +70,10 @@ export default function HomePage() {
               await new Promise(r => setTimeout(r, 100));
               router.push('/kiosk');
               return;
-            } else if (parsed.role === 'admin' || parsed.role === 'ops_manager' || (parsed.role === 'staff_executive' && parsed.branch === null)) {
+            } else if (parsed.role === 'admin' || (parsed.role === 'staff_executive' && parsed.branch === null)) {
               setBranch(selectedBranch === 'staff' ? null : selectedBranch);
+            } else if (parsed.role === 'ops_manager') {
+              setBranch(null);
             }
           }
           router.push('/dashboard');

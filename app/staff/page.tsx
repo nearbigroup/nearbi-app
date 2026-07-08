@@ -39,6 +39,13 @@ interface StaffMember {
   ot_threshold_minutes?: number;
   is_trial?: boolean;
   candidate_id?: string | null;
+  resignation_id?: string | null;
+  is_resigned?: boolean;
+  resignation?: {
+    id: string;
+    last_working_day: string;
+    status: string;
+  } | null;
   shift?: Shift;
   staff_accounts?: {
     id: string;
@@ -613,6 +620,7 @@ export default function StaffPage() {
           .select('id')
           .eq('pin', pin)
           .eq('active', true)
+          .eq('is_resigned', false)
           .maybeSingle();
         if (existingPin) {
           setFormError('This PIN is already in use by another active staff member');
@@ -805,7 +813,8 @@ export default function StaffPage() {
         const { data: existingStaff, error: pinError } = await supabase
           .from('staff')
           .select('pin, name, mobile_number')
-          .eq('active', true);
+          .eq('active', true)
+          .eq('is_resigned', false);
         if (pinError) throw pinError;
         
         const existingPins = new Set(existingStaff?.map(s => s.pin) || []);
@@ -1154,8 +1163,13 @@ export default function StaffPage() {
       const wsStaff = XLSX.utils.json_to_sheet(rows, { header: headers });
       XLSX.utils.book_append_sheet(wb, wsStaff, 'Staff Register');
 
+      const roleDisplayName = user?.name || (user?.role === 'admin' ? 'Owner' : user?.role === 'ops_manager' ? 'Ops Manager' : user?.role === 'staff_executive' ? 'Head HR' : user?.role || 'System');
+      const timestampStr = `Generated on ${new Date().toLocaleDateString('en-IN')} at ${new Date().toLocaleTimeString('en-IN')} by ${roleDisplayName}`;
+
       const instructions = [
         ['HOW TO FILL THIS TEMPLATE'],
+        [timestampStr],
+        [],
         ['name - Full staff name (required)'],
         ['pin - Exactly 4 digits, must be unique (required)'],
         ['branch - Must be: Nearbi Daily OR Nearbi Hypermarket'],
@@ -1186,7 +1200,8 @@ export default function StaffPage() {
       let query = supabase
         .from('staff')
         .select('*, shift:shifts(*)')
-        .eq('active', true);
+        .eq('active', true)
+        .eq('is_resigned', false);
       
       if (userBranch) {
         query = query.eq('branch_id', userBranch);
@@ -1249,8 +1264,13 @@ export default function StaffPage() {
       const wsStaff = XLSX.utils.json_to_sheet(rows, { header: headers });
       XLSX.utils.book_append_sheet(wb, wsStaff, 'Staff Register');
       
+      const roleDisplayName = user?.name || (user?.role === 'admin' ? 'Owner' : user?.role === 'ops_manager' ? 'Ops Manager' : user?.role === 'staff_executive' ? 'Head HR' : user?.role || 'System');
+      const timestampStr = `Generated on ${new Date().toLocaleDateString('en-IN')} at ${new Date().toLocaleTimeString('en-IN')} by ${roleDisplayName}`;
+
       const instructions = [
         ['HOW TO FILL THIS TEMPLATE'],
+        [timestampStr],
+        [],
         ['name - Full staff name (required)'],
         ['pin - Exactly 4 digits, must be unique (required)'],
         ['branch - Must be: Nearbi Daily OR Nearbi Hypermarket'],
@@ -1322,7 +1342,7 @@ export default function StaffPage() {
   // Fetch staff list
   const fetchStaff = async () => {
     try {
-      let query = supabase.from('staff').select('*, shift:shifts(*), staff_accounts(*)').eq('active', true);
+      let query = supabase.from('staff').select('*, shift:shifts(*), staff_accounts(*), resignation:resignation_id(*)').eq('active', true).eq('is_resigned', false);
       
       // Branch isolation / Scoping
       if (user?.role === 'nearbi_homes_supervisor') {
@@ -2431,6 +2451,11 @@ export default function StaffPage() {
                       {s.profile_pending && (
                         <span className="bg-[#FFF0F0] border border-[#C0392B]/25 text-[#C0392B] text-[9.5px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider flex items-center">
                           DOB Missing
+                        </span>
+                      )}
+                      {s.resignation && s.is_resigned === false && (
+                        <span className="bg-[#FFF8E6] border border-[#D97706]/25 text-[#D97706] text-[9.5px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider flex items-center">
+                          Resigning — {new Date(s.resignation.last_working_day).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
                         </span>
                       )}
                       <span className="bg-[#F8F8F8] border border-[#E8E8E8] text-[#555555] text-[9.5px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider">

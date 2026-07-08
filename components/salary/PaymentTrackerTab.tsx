@@ -41,6 +41,7 @@ export default function PaymentTrackerTab({ selectedMonth }: { selectedMonth?: s
         .from('staff')
         .select('*, branch:branches(name)')
         .eq('active', true)
+        .eq('is_resigned', false)
         .eq('is_trial', false);
 
       if (user?.role === 'nearbi_homes_supervisor') {

@@ -51,6 +51,7 @@ export default function BulkConfirmTab({
         .from('staff')
         .select('*, branch:branches(name), shift:shifts(*)')
         .eq('active', true)
+        .eq('is_resigned', false)
         .eq('is_trial', false);
 
       if (user?.role === 'nearbi_homes_supervisor') {
@@ -305,6 +306,7 @@ export default function BulkConfirmTab({
             shiftHours,
             year,
             month: monthNum,
+            branchId: s.branch_id,
           },
           {
             daysActuallyWorked,
@@ -389,10 +391,6 @@ export default function BulkConfirmTab({
               confirmed_by: user.email || 'Admin',
               is_locked: true,
               late_salary_deduction: isHourly ? 0 : (bd.late_salary_deduction || 0),
-              is_hourly: isHourly,
-              total_hours_logged: isHourly ? (bd.total_hours_logged || 0) : 0,
-              standard_hours: isHourly ? (bd.standard_hours || 0) : 0,
-              hourly_rate: isHourly ? (bd.hourly_rate || 0) : 0,
             };
           });
 
@@ -402,7 +400,10 @@ export default function BulkConfirmTab({
 
             for (const item of payload) {
               const { error } = await supabase.from('salary_confirmations').insert(item);
-              if (error) throw error;
+              if (error) {
+                console.error('Failed to insert salary confirmation for staff ID:', item.staff_id, 'Error details:', error);
+                throw error;
+              }
               
               currentCount++;
               setBulkProgress({ current: currentCount, total: payload.length });

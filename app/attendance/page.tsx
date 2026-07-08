@@ -1144,7 +1144,7 @@ export default function AttendancePage() {
       
       const calendarDays = new Date(year, monthNum, 0).getDate();
       
-      let query = supabase.from('staff').select('*, branch:branches(name)').eq('active', true);
+      let query = supabase.from('staff').select('*, branch:branches(name)').eq('active', true).eq('is_resigned', false);
       if (userBranch) {
         query = query.eq('branch_id', userBranch);
       }
@@ -1202,7 +1202,7 @@ export default function AttendancePage() {
       const startDate = `${targetMonth}-01`;
       const endDate = `${targetMonth}-${String(daysInMonth).padStart(2, '0')}`;
       
-      let staffQuery = supabase.from('staff').select('*').eq('active', true);
+      let staffQuery = supabase.from('staff').select('*').eq('active', true).eq('is_resigned', false);
       if (userBranch) {
         staffQuery = staffQuery.eq('branch_id', userBranch);
       }
@@ -1245,8 +1245,30 @@ export default function AttendancePage() {
         };
       });
       
+      const roleDisplayName = user?.name || (user?.role === 'admin' ? 'Owner' : user?.role === 'ops_manager' ? 'Ops Manager' : user?.role === 'staff_executive' ? 'Head HR' : user?.role || 'System');
+      const timestampStr = `Generated on ${new Date().toLocaleDateString('en-IN')} at ${new Date().toLocaleTimeString('en-IN')} by ${roleDisplayName}`;
+
+      const headers = [
+        'Name', 'PIN', 'Branch', 'Department', 'Date', 'Check In Time', 
+        'Check Out Time', 'Status', 'Color Code', 'Minutes Late', 
+        'Early In Minutes', 'Hours Worked', 'OT Minutes', 'Marked By'
+      ];
+
+      const aoaRows = [
+        ['Nearbi Attendance Report'],
+        [timestampStr],
+        [],
+        headers,
+        ...rows.map(r => [
+          r['Name'], r['PIN'], r['Branch'], r['Department'], r['Date'], 
+          r['Check In Time'], r['Check Out Time'], r['Status'], r['Color Code'], 
+          r['Minutes Late'], r['Early In Minutes'], r['Hours Worked'], 
+          r['OT Minutes'], r['Marked By']
+        ])
+      ];
+
       const wb = XLSX.utils.book_new();
-      const wsData = XLSX.utils.json_to_sheet(rows);
+      const wsData = XLSX.utils.aoa_to_sheet(aoaRows);
       XLSX.utils.book_append_sheet(wb, wsData, 'Attendance Report');
       
       const filename = `Nearbi_Attendance_${monthStr}_${yearStr}.xlsx`;
@@ -1807,7 +1829,7 @@ export default function AttendancePage() {
 
       // 1. Fetch staff
       try {
-        let staffQuery = supabase.from('staff').select('*, shift:shifts(*)').eq('active', true).order('name');
+        let staffQuery = supabase.from('staff').select('*, shift:shifts(*)').eq('active', true).eq('is_resigned', false).order('name');
         if (user?.role === 'nearbi_homes_supervisor') {
           staffQuery = staffQuery.eq('branch_id', 'hypermarket').eq('department', 'Nearbi Homes');
         } else if (userBranch) {
@@ -2697,7 +2719,7 @@ export default function AttendancePage() {
       )}
 
       {/* Branch selector (Admin/Ops/Head HR only) */}
-      {canSeeAllBranches && !userBranch && (
+      {canSeeAllBranches && (
         <div className="flex border-b border-[#E8E8E8]">
           {[
             { id: 'All', label: 'All Branches' },

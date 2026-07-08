@@ -25,7 +25,8 @@ import {
   Cake,
   PartyPopper,
   X,
-  Megaphone
+  Megaphone,
+  UserMinus
 } from 'lucide-react';
 
 const getMinutes = (timeStr: string) => {
@@ -240,7 +241,8 @@ export default function DashboardPage() {
       let staffQuery = supabase
         .from('staff')
         .select('*, shift:shifts(*)')
-        .eq('active', true);
+        .eq('active', true)
+        .eq('is_resigned', false);
 
       if (user?.role === 'nearbi_homes_supervisor') {
         staffQuery = staffQuery.eq('branch_id', 'hypermarket').eq('department', 'Nearbi Homes');
@@ -1244,6 +1246,19 @@ export default function DashboardPage() {
                     <Activity size={16} strokeWidth={1.5} className="text-white" />
                   </div>
                   <span className="text-[13px] font-bold text-[#1A1A1A]">The Wall</span>
+                </Link>
+              )}
+
+              {/* Resignations Quick Action */}
+              {(user?.role === 'admin' || user?.role === 'ops_manager' || user?.role === 'staff_executive') && (
+                <Link
+                  href="/resignations"
+                  className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group col-span-2"
+                >
+                  <div className="w-9 h-9 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center mb-2 mx-auto">
+                    <UserMinus size={16} strokeWidth={1.5} className="text-white" />
+                  </div>
+                  <span className="text-[13px] font-bold text-[#1A1A1A]">Resignations</span>
                 </Link>
               )}
 

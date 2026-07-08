@@ -251,51 +251,56 @@ export default function SalaryPage() {
         const finesSoFar = lateFinesSum + specialFinesSum;
 
         const offDaysPerMonth = staff.off_days_per_month as 0 | 2 | 4;
-        
-        const paidDaysSoFar = calculatePaidDays(daysWorked, offDaysPerMonth, calendarDays);
-        const missingDays = Math.max(0, calendarDays - paidDaysSoFar);
-
-        const dailyRate = staff.monthly_salary / calendarDays;
         const shiftHours = staff.shift?.hours || staff.shifts?.hours || 9;
-        const hourlyRate = dailyRate / shiftHours;
 
-        const grossSoFar = paidDaysSoFar * dailyRate;
-        const otPay = (approvedOT / 60) * hourlyRate;
-        const earlyInPay = calculateEarlyInPay(approvedEarlyIn, hourlyRate);
-        const earlyLeaveDeduction = (earlyLeave / 60) * hourlyRate;
-        const lateSalaryDeduction = (totalLateDeductionMins / 60) * hourlyRate;
-        const leaveDeduction = missingDays * dailyRate;
-
-        const netSoFar = grossSoFar + otPay + earlyInPay - earlyLeaveDeduction - lateSalaryDeduction - finesSoFar;
+        const result = calculateSalary(
+          {
+            monthlySalary: staff.monthly_salary,
+            offDaysPerMonth,
+            shiftHours,
+            year: currentYear,
+            month: currentMonth,
+            branchId: staff.branch_id,
+          },
+          {
+            daysActuallyWorked: daysWorked,
+            confirmedLateFines: lateFinesSum,
+            confirmedSpecialFines: specialFinesSum,
+            approvedOTMinutes: approvedOT,
+            approvedEarlyInMinutes: approvedEarlyIn,
+            earlyLeaveMinutes: earlyLeave,
+            late_salary_deduction_minutes: totalLateDeductionMins,
+          }
+        );
 
         let nextMilestone = '';
         if (offDaysPerMonth === 4) {
           const daysToNext = 6 - (daysWorked % 6);
           if (daysToNext < 6) {
-            nextMilestone = `Work ${daysToNext} more days to earn +1 day bonus (₹${dailyRate.toFixed(0)})`;
+            nextMilestone = `Work ${daysToNext} more days to earn +1 day bonus (₹${result.dailyRate.toFixed(0)})`;
           }
         } else if (offDaysPerMonth === 2) {
           const daysToNext = 12 - (daysWorked % 12);
           if (daysToNext < 12) {
-            nextMilestone = `Work ${daysToNext} more days to earn +1 day bonus (₹${dailyRate.toFixed(0)})`;
+            nextMilestone = `Work ${daysToNext} more days to earn +1 day bonus (₹${result.dailyRate.toFixed(0)})`;
           }
         }
 
         setLiveSalary({
           daysWorked,
-          offBonusEarned: calculateBonusDays(daysWorked, offDaysPerMonth),
-          paidDays: paidDaysSoFar,
+          offBonusEarned: result.earnedQuota,
+          paidDays: result.paidDays,
           calendarDays,
-          dailyRate,
-          hourlyRate,
-          grossPay: Math.round(grossSoFar),
-          otEarned: Math.round(otPay),
-          earlyInEarned: Math.round(earlyInPay),
-          earlyLeaveDeduction: Math.round(earlyLeaveDeduction),
-          lateSalaryDeduction: Math.round(lateSalaryDeduction),
-          leaveDeduction: Math.round(leaveDeduction),
+          dailyRate: result.dailyRate,
+          hourlyRate: result.hourlyRate,
+          grossPay: Math.round(result.grossPay),
+          otEarned: Math.round(result.otPay),
+          earlyInEarned: Math.round(result.earlyInPay),
+          earlyLeaveDeduction: Math.round(result.earlyLeaveDeduction),
+          lateSalaryDeduction: Math.round(result.lateSalaryDeduction),
+          leaveDeduction: Math.round(result.leaveDeduction),
           finesSoFar: Math.round(finesSoFar),
-          netSalary: Math.round(netSoFar),
+          netSalary: Math.round(result.netSalary),
           nextMilestone
         });
       }
@@ -318,6 +323,7 @@ export default function SalaryPage() {
         .from('staff')
         .select('*, branch:branches(name), shift:shifts(*)')
         .eq('active', true)
+        .eq('is_resigned', false)
         .eq('is_trial', false)
         .order('name');
       if (data) setStaffList(data);
@@ -359,7 +365,8 @@ export default function SalaryPage() {
             early_in_minutes,
             early_in_approved,
             early_leave_minutes,
-            day_type
+            day_type,
+            late_salary_deduction_minutes
           `)
           .eq('staff_id', selectedStaffId)
           .gte('date', firstDay)
@@ -448,6 +455,7 @@ export default function SalaryPage() {
               shiftHours,
               year,
               month: monthNum,
+              branchId: staff.branch_id,
             },
             {
               daysActuallyWorked,
@@ -456,6 +464,7 @@ export default function SalaryPage() {
               approvedOTMinutes,
               approvedEarlyInMinutes,
               earlyLeaveMinutes,
+              late_salary_deduction_minutes: attRecords?.reduce((sum, r) => sum + (r.late_salary_deduction_minutes || 0), 0) || 0,
             }
           );
 

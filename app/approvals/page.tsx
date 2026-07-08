@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { createAuditLog } from '@/lib/audit';
-import { Check, X, RefreshCw, CheckSquare } from 'lucide-react';
+import { Check, X, RefreshCw, CheckSquare, Edit2 } from 'lucide-react';
 import { formatTime12hr } from '@/lib/utils';
 import { autoCloseCheckouts } from '@/lib/salary';
 
@@ -57,6 +57,10 @@ interface Adjustment {
   minutes: number;
   status: 'pending' | 'approved' | 'rejected';
   staff: Staff;
+  original_ot_minutes?: number;
+  approved_ot_minutes?: number;
+  edited_by?: string;
+  edited_at?: string;
 }
 
 interface LateFine {
@@ -92,6 +96,10 @@ export default function ApprovalsPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null);
   const [bulkConfirm, setBulkConfirm] = useState<{ message: string; onConfirm: () => void } | null>(null);
+  const [editingAdjId, setEditingAdjId] = useState<string | null>(null);
+  const [editMinutes, setEditMinutes] = useState<number>(0);
+
+  const isAuthorizedToEdit = user?.role === 'ops_manager' || user?.role === 'staff_executive' || user?.role === 'nearbi_homes_supervisor';
 
   useEffect(() => {
     setSelectedIds([]);
@@ -302,9 +310,11 @@ export default function ApprovalsPage() {
 
       if (adjErr) throw adjErr;
 
-      // 2. If approved, update attendance flag
+      // 2. If approved, update attendance flag and minutes
       if (action === 'approved') {
-        const updateField = adj.type === 'ot' ? { ot_approved: true } : { early_in_approved: true };
+        const updateField = adj.type === 'ot' 
+          ? { ot_approved: true, ot_minutes: adj.minutes } 
+          : { early_in_approved: true };
         await supabase
           .from('attendance')
           .update(updateField)
@@ -344,6 +354,52 @@ export default function ApprovalsPage() {
     }
   };
 
+  const handleEditMinutes = async (adjId: string, newMins: number) => {
+    if (newMins < 0) {
+      alert("Minutes cannot be negative.");
+      return;
+    }
+    const adj = adjustments.find(a => a.id === adjId);
+    if (!adj) return;
+    
+    try {
+      const originalMinutes = adj.original_ot_minutes ?? adj.minutes;
+      
+      const { error } = await supabase
+        .from('attendance_adjustments')
+        .update({
+          approved_ot_minutes: newMins,
+          original_ot_minutes: originalMinutes,
+          edited_by: user?.email || 'HR',
+          edited_at: new Date().toISOString(),
+          minutes: newMins,
+        })
+        .eq('id', adjId);
+        
+      if (error) throw error;
+      
+      setAdjustments(prev => prev.map(a => {
+        if (a.id === adjId) {
+          return {
+            ...a,
+            minutes: newMins,
+            approved_ot_minutes: newMins,
+            original_ot_minutes: originalMinutes,
+            edited_by: user?.email || 'HR',
+            edited_at: new Date().toISOString(),
+          };
+        }
+        return a;
+      }));
+      
+      showToast("Overtime minutes updated ✓");
+      setEditingAdjId(null);
+    } catch (err: any) {
+      console.error('Failed to edit OT minutes:', err);
+      alert('Failed to save edited minutes.');
+    }
+  };
+
   const handleApproveAllOT = async () => {
     const validOTToApprove = otPending.filter((adj) => {
       const att = attendanceMap[`${adj.staff_id}_${adj.date}`];
@@ -376,7 +432,7 @@ export default function ApprovalsPage() {
 
         await supabase
           .from('attendance')
-          .update({ ot_approved: true })
+          .update({ ot_approved: true, ot_minutes: adj.minutes })
           .eq('staff_id', adj.staff_id)
           .eq('date', adj.date);
 
@@ -451,7 +507,9 @@ export default function ApprovalsPage() {
           .eq('id', adj.id);
 
         if (action === 'approved') {
-          const updateField = adj.type === 'ot' ? { ot_approved: true } : { early_in_approved: true };
+          const updateField = adj.type === 'ot' 
+            ? { ot_approved: true, ot_minutes: adj.minutes } 
+            : { early_in_approved: true };
           await supabase
             .from('attendance')
             .update(updateField)
@@ -842,7 +900,51 @@ export default function ApprovalsPage() {
                           </div>
                           <div>
                             <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">OT Qualified</div>
-                            <div className="text-[var(--info)] font-bold mt-0.5">{att?.ot_minutes ?? adj.minutes} mins</div>
+                            {editingAdjId === adj.id ? (
+                              <div className="flex items-center justify-center space-x-1 mt-0.5">
+                                <input
+                                  type="number"
+                                  value={editMinutes}
+                                  onChange={(e) => setEditMinutes(Number(e.target.value))}
+                                  className="w-12 bg-white border border-[#E8E8E8] text-[#1A1A1A] rounded px-1 py-0.5 text-center font-bold font-mono text-xs focus:outline-none focus:border-[#1A1A1A]"
+                                  min="0"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleEditMinutes(adj.id, editMinutes)}
+                                  className="text-[#2D7A3A] hover:text-[#256330] p-0.5 cursor-pointer"
+                                >
+                                  <Check size={14} strokeWidth={2.5} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingAdjId(null)}
+                                  className="text-[var(--danger)] hover:text-red-700 p-0.5 cursor-pointer"
+                                >
+                                  <X size={14} strokeWidth={2.5} />
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="text-[var(--info)] font-bold mt-0.5 flex items-center justify-center space-x-1">
+                                <span>{adj.minutes} mins</span>
+                                {adj.original_ot_minutes !== undefined && adj.original_ot_minutes !== null && adj.original_ot_minutes !== adj.minutes && (
+                                  <span className="text-[9px] text-[var(--text-muted)] font-normal line-through">({adj.original_ot_minutes})</span>
+                                )}
+                                {isAuthorizedToEdit && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setEditingAdjId(adj.id);
+                                      setEditMinutes(adj.minutes);
+                                    }}
+                                    className="text-[var(--text-muted)] hover:text-[#1A1A1A] p-0.5 cursor-pointer transition-colors"
+                                    title="Edit minutes"
+                                  >
+                                    <Edit2 size={10} />
+                                  </button>
+                                )}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>

@@ -38,6 +38,7 @@ export default function PayslipTab({ selectedMonth: propMonth }: { selectedMonth
         .from('staff')
         .select('*, branch:branches(name), shift:shifts(*)')
         .eq('active', true)
+        .eq('is_resigned', false)
         .eq('is_trial', false);
 
       if (user?.role === 'nearbi_homes_supervisor') {

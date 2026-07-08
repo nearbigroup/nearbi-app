@@ -233,7 +233,8 @@ export default function KioskPage() {
         .from('staff')
         .select('id')
         .eq('branch_id', effectiveBranch)
-        .eq('active', true);
+        .eq('active', true)
+        .eq('is_resigned', false);
 
       if (staffErr) throw staffErr;
       const staffIds = branchStaffIds?.map(s => s.id) || [];
@@ -319,6 +320,7 @@ export default function KioskPage() {
         .eq('pin', enteredPin)
         .eq('branch_id', effectiveBranch)
         .eq('active', true)
+        .eq('is_resigned', false)
         .maybeSingle();
 
       if (error) throw error;

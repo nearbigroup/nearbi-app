@@ -31,7 +31,7 @@ import {
 } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import { formatTime12hr } from '@/lib/utils';
-import { calculateEarlyLeaveDeduction, calculateLateSalaryDeduction, calculateActualHours, calculateOTMinutes, calculateEarlyLeaveMinutes, calculateLateMinutes, calculateMinutesWorked, calculateHourlySalary } from '@/lib/salary';
+import { calculateEarlyLeaveDeduction, calculateLateSalaryDeduction, calculateActualHours, calculateOTMinutes, calculateEarlyLeaveMinutes, calculateLateMinutes, calculateMinutesWorked, calculateHourlySalary, getDaysInMonth, calculateSalary } from '@/lib/salary';
 import { createAuditLog } from '@/lib/audit';
 
 interface StaffMember {
@@ -49,6 +49,13 @@ interface StaffMember {
   ot_threshold_minutes?: number;
   is_trial?: boolean;
   candidate_id?: string | null;
+  resignation_id?: string | null;
+  is_resigned?: boolean;
+  resignation?: {
+    id: string;
+    last_working_day: string;
+    status: string;
+  } | null;
   shift?: {
     id: string;
     label: string;
@@ -256,6 +263,83 @@ export default function StaffProfilePage() {
   } | null>(null);
   const [waivedAmountInput, setWaivedAmountInput] = useState('');
   const [isSavingWaive, setIsSavingWaive] = useState(false);
+
+  // Resignation states
+  const [resignationModalOpen, setResignationModalOpen] = useState(false);
+  const [resignationLwd, setResignationLwd] = useState('');
+  const [resignationReason, setResignationReason] = useState('personal');
+  const [resignationReasonNote, setResignationReasonNote] = useState('');
+  const [resignationNotice, setResignationNotice] = useState('yes');
+  const [isSubmittingResignation, setIsSubmittingResignation] = useState(false);
+
+  const handleInitiateResignation = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!staff || !user) return;
+    if (!resignationLwd) {
+      alert('Please select the last working day.');
+      return;
+    }
+
+    setIsSubmittingResignation(true);
+    try {
+      // 1. Create a resignation record
+      const { data: newRes, error: resErr } = await supabase
+        .from('resignations')
+        .insert({
+          staff_id: staff.id,
+          initiated_by: user.name || user.email || 'Management',
+          reason: resignationReason,
+          reason_note: resignationReasonNote.trim() || null,
+          notice_served: resignationNotice,
+          last_working_day: resignationLwd,
+          status: 'in_progress'
+        })
+        .select()
+        .single();
+
+      if (resErr) throw resErr;
+
+      // 2. Link resignation_id to staff record
+      const { error: staffErr } = await supabase
+        .from('staff')
+        .update({
+          resignation_id: newRes.id,
+          is_resigned: false
+        })
+        .eq('id', staff.id);
+
+      if (staffErr) throw staffErr;
+
+      // 3. Create Audit Log
+      await createAuditLog({
+        action: 'initiate_resignation',
+        table_name: 'resignations',
+        record_id: newRes.id,
+        new_value: { last_working_day: resignationLwd, reason: resignationReason },
+        performed_by: user.email,
+        performed_by_role: user.role,
+        reason: `Initiated resignation for ${staff.name} with last working day ${resignationLwd}`
+      });
+
+      showToast('Resignation initiated successfully ✓');
+      setResignationModalOpen(false);
+      
+      // Refresh staff data
+      const { data: refreshedStaff } = await supabase
+        .from('staff')
+        .select('*, shift:shifts(*), resignation:resignation_id(*)')
+        .eq('id', id)
+        .maybeSingle();
+      if (refreshedStaff) {
+        setStaff(refreshedStaff as unknown as StaffMember);
+      }
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to initiate resignation: ' + err.message);
+    } finally {
+      setIsSubmittingResignation(false);
+    }
+  };
 
   const handleSaveWaive = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -990,7 +1074,7 @@ export default function StaffProfilePage() {
         setLoading(true);
         const { data, error } = await supabase
           .from('staff')
-          .select('*, shift:shifts(*)')
+          .select('*, shift:shifts(*), resignation:resignation_id(*)')
           .eq('id', id)
           .maybeSingle();
 
@@ -1230,6 +1314,104 @@ export default function StaffProfilePage() {
 
     return { present, late, absent, otHours };
   }, [attendance]);
+
+  const salaryBreakdown = useMemo(() => {
+    if (!staff) return null;
+    
+    const [yearStr, monthStr] = selectedMonth.split('-');
+    const year = Number(yearStr);
+    const month = Number(monthStr);
+
+    const isHourly = staff.pay_type === 'hourly';
+    
+    if (isHourly) {
+      const totalHoursLogged = attendance.reduce((sum, r) => {
+        if (r.total_hours_logged !== null && r.total_hours_logged !== undefined && Number(r.total_hours_logged) > 0) {
+          return sum + Number(r.total_hours_logged);
+        }
+        if (r.check_in_time && r.check_out_time) {
+          return sum + (calculateMinutesWorked(r.check_in_time, r.check_out_time) / 60);
+        }
+        return sum;
+      }, 0);
+
+      const standardHours = Number(staff.standard_hours || 234);
+      const hourlyRate = Number(staff.monthly_salary) / standardHours;
+      const netSalary = Math.round(totalHoursLogged * hourlyRate);
+
+      return {
+        is_hourly: true,
+        netSalary,
+        grossPay: netSalary,
+        dailyRate: 0,
+        hourlyRate,
+        paidDays: 0,
+        calendarDays: getDaysInMonth(year, month),
+        daysActuallyWorked: attendance.filter(r => r.check_in_time).length,
+        extraDaysWorked: 0,
+        missingDays: 0,
+        otPay: 0,
+        earlyInPay: 0,
+        earlyLeaveDeduction: 0,
+        lateSalaryDeduction: 0,
+        leaveDeduction: 0,
+        confirmedLateFines: 0,
+        confirmedSpecialFines: 0,
+        totalHoursLogged,
+        standardHours,
+      };
+    }
+
+    // For fixed shift:
+    const daysActuallyWorked = attendance.filter(
+      (r) => r.check_in_time !== null && r.check_in_time !== undefined && r.check_in_time !== ''
+    ).length;
+
+    const approvedOTMinutes = attendance
+      .filter((r) => r.ot_approved === true)
+      .reduce((sum, r) => sum + (r.ot_minutes || 0), 0) || 0;
+
+    const approvedEarlyInMinutes = attendance
+      .filter((r) => r.early_in_approved === true)
+      .reduce((sum, r) => sum + (r.early_in_minutes || 0), 0) || 0;
+
+    const earlyLeaveMinutes = attendance.reduce(
+      (sum, r) => sum + (r.early_leave_minutes || 0), 0
+    ) || 0;
+
+    const totalLateFinesAmt = lateFines.filter(f => f.confirmed).reduce((sum, f) => sum + (f.waived ? 0 : (Number(f.fine_amount) - Number(f.waived_amount || 0))), 0);
+    const totalSpecialFinesAmt = specialFines.filter(f => f.confirmed).reduce((sum, f) => sum + (f.waived ? 0 : (Number(f.amount) - Number(f.waived_amount || 0))), 0);
+
+    const shiftHours = staff.shift?.hours || 9;
+    const offDaysPerMonth = (staff.off_days_per_month ?? 4) as 0 | 2 | 4;
+
+    const result = calculateSalary(
+      {
+        monthlySalary: Number(staff.monthly_salary),
+        offDaysPerMonth,
+        shiftHours,
+        year,
+        month,
+        branchId: staff.branch_id,
+      },
+      {
+        daysActuallyWorked,
+        confirmedLateFines: totalLateFinesAmt,
+        confirmedSpecialFines: totalSpecialFinesAmt,
+        approvedOTMinutes,
+        approvedEarlyInMinutes,
+        earlyLeaveMinutes,
+        late_salary_deduction_minutes: attendance.reduce((sum, a) => sum + (a.late_salary_deduction_minutes || 0), 0),
+      }
+    );
+
+    return {
+      ...result,
+      is_hourly: false,
+      totalHoursLogged: 0,
+      standardHours: 0,
+    };
+  }, [attendance, staff, selectedMonth, lateFines, specialFines]);
 
   // Weekly off balance calculations
   const weeklyOffStats = useMemo(() => {
@@ -1514,6 +1696,16 @@ export default function StaffProfilePage() {
               <span className="bg-white/10 border border-white/20 text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 uppercase">
                 OT: {staff.ot_threshold_minutes || 30}m
               </span>
+              {staff.resignation && staff.is_resigned === false && (
+                <span className="bg-amber-500/10 border border-amber-500/20 text-amber-500 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 uppercase">
+                  Resigning — {new Date(staff.resignation.last_working_day).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
+                </span>
+              )}
+              {staff.is_resigned === true && (
+                <span className="bg-red-500/10 border border-red-500/20 text-red-500 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 uppercase">
+                  Resigned
+                </span>
+              )}
             </div>
             <p className="text-xs text-[var(--text-secondary)] font-semibold flex items-center gap-1">
               <Clock size={12} className="text-[var(--text-muted)]" />
@@ -1531,6 +1723,27 @@ export default function StaffProfilePage() {
             </p>
           </div>
         </div>
+
+        {/* Resignation Actions */}
+        {(user?.role === 'admin' || user?.role === 'ops_manager' || user?.role === 'staff_executive') && (
+          <div className="border-t border-[var(--border-strong)] pt-3.5 flex justify-end">
+            {!staff.resignation_id ? (
+              <button
+                onClick={() => setResignationModalOpen(true)}
+                className="bg-red-600 hover:bg-red-700 text-white font-bold px-4 py-2 rounded-xl text-xs active:scale-95 transition-all shadow cursor-pointer text-center"
+              >
+                Initiate Resignation
+              </button>
+            ) : (
+              <button
+                onClick={() => router.push(`/resignations/${staff.resignation_id}`)}
+                className="bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold px-4 py-2 rounded-xl text-xs active:scale-95 transition-all shadow cursor-pointer text-center"
+              >
+                View Resignation Clearance
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Quick Month Selector */}
         <div className="flex items-center justify-between border-t border-[var(--border-strong)] pt-3.5">
@@ -2086,78 +2299,73 @@ export default function StaffProfilePage() {
                         </div>
                         
                         <div className="space-y-2 text-xs font-semibold text-[var(--text-secondary)]">
-                          <div className="flex justify-between">
-                            <span>Base Salary:</span>
-                            <span className="text-white font-mono">₹{Number(staff.monthly_salary).toLocaleString('en-IN')}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>OT Payout (Estimated):</span>
-                            <span className="text-[#4ADE80] font-mono">+₹{Math.round(monthStats.otHours * (staff.monthly_salary / 240) * 1.5).toLocaleString('en-IN')}</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Late Fines Confirmed:</span>
-                            <span className="text-[#F87171] font-mono">-₹{lateFines.filter(f => f.confirmed).reduce((sum, f) => sum + (f.waived ? 0 : (Number(f.fine_amount) - Number(f.waived_amount || 0))), 0).toLocaleString('en-IN')}</span>
-                          </div>
-                          {(() => {
-                            const totalLateMins = attendance.reduce((sum, a) => sum + (a.late_salary_deduction_minutes || 0), 0);
-                            const [yearStr, monthStr] = selectedMonth.split('-');
-                            const daysInMonth = new Date(Number(yearStr), Number(monthStr), 0).getDate();
-                            const dailyRate = Number(staff.monthly_salary) / daysInMonth;
-                            const hourlyRate = dailyRate / (staff.shift?.hours || 9);
-                            const lateDedu = calculateLateSalaryDeduction(totalLateMins, hourlyRate);
-                            if (lateDedu <= 0) return null;
-                            return (
-                              <div className="flex justify-between text-[#F87171]">
-                                <span>Late Arrival Deductions (permanent):</span>
-                                <span className="font-mono">-₹{lateDedu.toLocaleString('en-IN')}</span>
+                          {salaryBreakdown?.is_hourly ? (
+                            <>
+                              <div className="flex justify-between">
+                                <span>Base Salary (monthly):</span>
+                                <span className="text-white font-mono">₹{Number(staff.monthly_salary).toLocaleString('en-IN')}</span>
                               </div>
-                            );
-                          })()}
-                          <div className="flex justify-between">
-                            <span>Special Fines Confirmed:</span>
-                            <span className="text-[#F87171] font-mono">-₹{specialFines.filter(f => f.confirmed).reduce((sum, f) => sum + (f.waived ? 0 : (Number(f.amount) - Number(f.waived_amount || 0))), 0).toLocaleString('en-IN')}</span>
-                          </div>
-                          {(() => {
-                            const [yearStr, monthStr] = selectedMonth.split('-');
-                            const daysInMonth = new Date(Number(yearStr), Number(monthStr), 0).getDate();
-                            const dailyRate = Number(staff.monthly_salary) / daysInMonth;
-                            const totalEarlyMins = attendance.reduce((sum, a) => sum + (a.early_leave_minutes || 0), 0);
-                            const earlyLeaveDeduction = calculateEarlyLeaveDeduction(totalEarlyMins, dailyRate, staff.shift?.hours || 9);
-                            if (earlyLeaveDeduction <= 0) return null;
-                            return (
-                              <div className="flex justify-between text-[#F87171]">
-                                <span>Early Leave Deductions:</span>
-                                <span className="font-mono">-₹{earlyLeaveDeduction.toLocaleString('en-IN')}</span>
+                              <div className="flex justify-between">
+                                <span>Standard hours:</span>
+                                <span className="text-white font-mono">{salaryBreakdown.standardHours} hrs</span>
                               </div>
-                            );
-                          })()}
-                          <div className="flex justify-between border-t border-[var(--border-strong)] pt-2.5 font-bold text-white">
-                            <span>Estimated Net Payout:</span>
-                            <span className="text-white font-mono text-sm font-black">
-                              ₹{(() => {
-                                const [yearStr, monthStr] = selectedMonth.split('-');
-                                const daysInMonth = new Date(Number(yearStr), Number(monthStr), 0).getDate();
-                                const dailyRate = Number(staff.monthly_salary) / daysInMonth;
-                                const totalEarlyMins = attendance.reduce((sum, a) => sum + (a.early_leave_minutes || 0), 0);
-                                const earlyLeaveDeduction = calculateEarlyLeaveDeduction(totalEarlyMins, dailyRate, staff.shift?.hours || 9);
-                                
-                                const totalLateMins = attendance.reduce((sum, a) => sum + (a.late_salary_deduction_minutes || 0), 0);
-                                const lateDeduction = calculateLateSalaryDeduction(totalLateMins, dailyRate / (staff.shift?.hours || 9));
-
-                                const lateFinesTotal = lateFines.filter(f => f.confirmed).reduce((sum, f) => sum + (f.waived ? 0 : (Number(f.fine_amount) - Number(f.waived_amount || 0))), 0);
-                                const specialFinesTotal = specialFines.filter(f => f.confirmed).reduce((sum, f) => sum + (f.waived ? 0 : (Number(f.amount) - Number(f.waived_amount || 0))), 0);
-                                
-                                return Math.max(0, 
-                                  Number(staff.monthly_salary) + 
-                                  Math.round(monthStats.otHours * (staff.monthly_salary / 240) * 1.5) - 
-                                  earlyLeaveDeduction -
-                                  lateDeduction -
-                                  lateFinesTotal -
-                                  specialFinesTotal
-                                );
-                              })().toLocaleString('en-IN')}
-                            </span>
-                          </div>
+                              <div className="flex justify-between">
+                                <span>Total hours logged:</span>
+                                <span className="text-white font-mono">{(salaryBreakdown.totalHoursLogged || 0).toFixed(2)} hrs</span>
+                              </div>
+                              <div className="flex justify-between border-t border-[var(--border-strong)] pt-2.5 font-bold text-white">
+                                <span>Estimated Net Payout:</span>
+                                <span className="text-white font-mono text-sm font-black">₹{(salaryBreakdown.netSalary || 0).toLocaleString('en-IN')}</span>
+                              </div>
+                            </>
+                          ) : salaryBreakdown ? (
+                            <>
+                              <div className="flex justify-between">
+                                <span>Base Salary:</span>
+                                <span className="text-white font-mono">₹{Number(staff.monthly_salary).toLocaleString('en-IN')}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span>OT Payout (Estimated):</span>
+                                <span className="text-[#4ADE80] font-mono">+₹{(salaryBreakdown.otPay || 0).toLocaleString('en-IN')}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span>Early-In Payout (Estimated):</span>
+                                <span className="text-[#4ADE80] font-mono">+₹{(salaryBreakdown.earlyInPay || 0).toLocaleString('en-IN')}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span>Late Fines Confirmed:</span>
+                                <span className="text-[#F87171] font-mono">-₹{(salaryBreakdown.confirmedLateFines || 0).toLocaleString('en-IN')}</span>
+                              </div>
+                              {salaryBreakdown.lateSalaryDeduction > 0 && (
+                                <div className="flex justify-between text-[#F87171]">
+                                  <span>Late Arrival Deductions (permanent):</span>
+                                  <span className="font-mono">-₹{salaryBreakdown.lateSalaryDeduction.toLocaleString('en-IN')}</span>
+                                </div>
+                              )}
+                              {salaryBreakdown.earlyLeaveDeduction > 0 && (
+                                <div className="flex justify-between text-[#F87171]">
+                                  <span>Early Leave Deductions:</span>
+                                  <span className="font-mono">-₹{salaryBreakdown.earlyLeaveDeduction.toLocaleString('en-IN')}</span>
+                                </div>
+                              )}
+                              {salaryBreakdown.leaveDeduction > 0 && (
+                                <div className="flex justify-between text-[#F87171]">
+                                  <span>Leave Deductions:</span>
+                                  <span className="font-mono">-₹{salaryBreakdown.leaveDeduction.toLocaleString('en-IN')}</span>
+                                </div>
+                              )}
+                              <div className="flex justify-between">
+                                <span>Special Fines Confirmed:</span>
+                                <span className="text-[#F87171] font-mono">-₹{(salaryBreakdown.confirmedSpecialFines || 0).toLocaleString('en-IN')}</span>
+                              </div>
+                              <div className="flex justify-between border-t border-[var(--border-strong)] pt-2.5 font-bold text-white">
+                                <span>Estimated Net Payout:</span>
+                                <span className="text-white font-mono text-sm font-black">
+                                  ₹{(salaryBreakdown.netSalary || 0).toLocaleString('en-IN')}
+                                </span>
+                              </div>
+                            </>
+                          ) : null}
                         </div>
                       </div>
                     )}
@@ -2918,6 +3126,91 @@ export default function StaffProfilePage() {
                 </button>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Initiate Resignation Modal */}
+      {resignationModalOpen && (
+        <div className="fixed inset-0 z-[12000] flex items-end justify-center">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setResignationModalOpen(false)} />
+          <div className="bg-white rounded-t-3xl shadow-2xl relative z-10 p-5 w-full max-w-md border-t border-[#E8E8E8] animate-slide-up flex flex-col space-y-4 text-[#1A1A1A]">
+            <div className="w-12 h-1 bg-[#E0E0E0] rounded-full mx-auto flex-shrink-0" />
+            <div className="flex justify-between items-center pb-1">
+              <h3 className="text-[#1A1A1A] text-base font-bold">Initiate Resignation</h3>
+              <button onClick={() => setResignationModalOpen(false)} className="text-[#999999] hover:text-[#1A1A1A] p-1">
+                <X size={18} />
+              </button>
+            </div>
+            
+            <form onSubmit={handleInitiateResignation} className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-black uppercase text-[#555555] tracking-wider mb-1.5">Last Working Day</label>
+                <input
+                  type="date"
+                  value={resignationLwd}
+                  onChange={(e) => setResignationLwd(e.target.value)}
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3 text-xs text-[#1A1A1A] focus:outline-none focus:border-[#1A1A1A]/30 font-bold"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase text-[#555555] tracking-wider mb-1.5">Reason</label>
+                <select
+                  value={resignationReason}
+                  onChange={(e) => setResignationReason(e.target.value)}
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3 text-xs text-[#1A1A1A] focus:outline-none focus:border-[#1A1A1A]/30 font-bold"
+                  required
+                >
+                  <option value="personal">Personal Reasons</option>
+                  <option value="better_opportunity">Better Opportunity</option>
+                  <option value="relocation">Relocation</option>
+                  <option value="performance">Performance Issue</option>
+                  <option value="misconduct">Misconduct</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase text-[#555555] tracking-wider mb-1.5">Notice Notes (Optional)</label>
+                <textarea
+                  value={resignationReasonNote}
+                  onChange={(e) => setResignationReasonNote(e.target.value)}
+                  placeholder="e.g. Health issues, joining a larger team..."
+                  rows={2}
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3 text-xs text-[#1A1A1A] focus:outline-none focus:border-[#1A1A1A]/30 font-semibold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-black uppercase text-[#555555] tracking-wider mb-1.5">Notice Period Served</label>
+                <div className="flex bg-[#F2F2F2] rounded-xl p-1 w-full gap-1">
+                  {['yes', 'no', 'waived'].map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => setResignationNotice(option)}
+                      className={`flex-1 text-center py-2 text-xs font-bold rounded-lg capitalize transition-all ${
+                        resignationNotice === option
+                          ? 'bg-[#1A1A1A] text-white shadow-sm'
+                          : 'text-[#555555] hover:text-[#1A1A1A]'
+                      }`}
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <button 
+                type="submit" 
+                disabled={isSubmittingResignation}
+                className="w-full min-h-[44px] bg-[#1A1A1A] text-white hover:bg-[#333333] font-bold text-xs rounded-xl active:scale-95 transition-all flex items-center justify-center cursor-pointer"
+              >
+                {isSubmittingResignation ? 'Initiating...' : 'Submit Resignation'}
+              </button>
+            </form>
           </div>
         </div>
       )}

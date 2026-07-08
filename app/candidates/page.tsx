@@ -24,7 +24,8 @@ import {
   ArrowRight,
   ExternalLink,
   ChevronRight,
-  AlertCircle
+  AlertCircle,
+  AlertTriangle
 } from 'lucide-react';
 import { DEPARTMENTS } from '@/lib/data';
 
@@ -97,11 +98,23 @@ export default function CandidatesPage() {
   const [idPhotoPreview, setIdPhotoPreview] = useState<string | null>(null);
 
   const inlineNotesRef = useRef<HTMLTextAreaElement>(null);
+  const [resignedStaffList, setResignedStaffList] = useState<any[]>([]);
 
   const fetchCandidates = async () => {
     try {
       setLoading(true);
       setErrorMsg('');
+      
+      // Fetch resigned staff records to check rehire status
+      const { data: resignedData, error: resignedErr } = await supabase
+        .from('staff')
+        .select('id, name, mobile_number, is_resigned, resignation:resignation_id(rehire_eligible, rehire_note)')
+        .eq('is_resigned', true);
+
+      if (!resignedErr && resignedData) {
+        setResignedStaffList(resignedData);
+      }
+
       const { data, error } = await supabase
         .from('job_candidates')
         .select('*')
@@ -122,6 +135,17 @@ export default function CandidatesPage() {
       fetchCandidates();
     }
   }, [user]);
+
+  const getResignedMatch = (name: string, phone: string | null) => {
+    if (!resignedStaffList || resignedStaffList.length === 0) return null;
+    const cleanPhone = phone ? phone.replace(/\D/g, '') : '';
+    return resignedStaffList.find(s => {
+      const nameMatch = s.name.trim().toLowerCase() === name.trim().toLowerCase();
+      const cleanStaffPhone = s.mobile_number ? s.mobile_number.replace(/\D/g, '') : '';
+      const phoneMatch = cleanPhone && cleanStaffPhone && (cleanPhone === cleanStaffPhone);
+      return nameMatch || phoneMatch;
+    });
+  };
 
   const showToast = (msg: string) => {
     setToastMsg(msg);
@@ -722,6 +746,16 @@ export default function CandidatesPage() {
                     <h3 className="font-extrabold text-sm text-[#1A1A1A] leading-tight">
                       {c.full_name}
                     </h3>
+                    {(() => {
+                      const match = getResignedMatch(c.full_name, c.phone_number);
+                      if (!match) return null;
+                      const eligible = match.resignation?.rehire_eligible;
+                      return (
+                        <div className="mt-1.5 bg-amber-500/10 border border-amber-500/20 text-amber-600 text-[9px] font-black px-2 py-0.5 rounded-full inline-block uppercase">
+                          ⚠️ Former Staff • Rehire: {eligible === true ? 'Yes' : eligible === false ? 'No' : 'Pending'}
+                        </div>
+                      );
+                    })()}
                     <div className="flex items-center space-x-2 text-[10px] text-[var(--text-muted)] font-semibold mt-1.5">
                       <span className="flex items-center gap-1">
                         <Building2 size={11} />
@@ -1092,6 +1126,30 @@ export default function CandidatesPage() {
                   </div>
                 </div>
               </div>
+
+              {/* Former Employee Warning Card */}
+              {(() => {
+                const match = getResignedMatch(selectedCandidate.full_name, selectedCandidate.phone_number);
+                if (!match) return null;
+                const eligible = match.resignation?.rehire_eligible;
+                const rehireNoteText = match.resignation?.rehire_note;
+                return (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 space-y-1.5">
+                    <div className="flex items-center space-x-2 text-amber-800 text-xs font-black uppercase tracking-wider">
+                      <AlertTriangle size={16} className="text-amber-600" />
+                      <span>Warning: Former Employee Detected</span>
+                    </div>
+                    <p className="text-xs text-amber-700 font-bold">
+                      Rehire Eligibility: <span className="font-extrabold text-amber-900 underline">{eligible === true ? 'Eligible for Rehire ✓' : eligible === false ? 'NOT Eligible for Rehire ✗' : 'Clearance Pending'}</span>
+                    </p>
+                    {rehireNoteText && (
+                      <p className="text-[11px] text-amber-700 bg-amber-100/50 p-2 rounded-lg italic font-medium">
+                        Note: "{rehireNoteText}"
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Status Picker Panel */}
               <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3.5 flex items-center justify-between">

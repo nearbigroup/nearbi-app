@@ -123,7 +123,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         const parsedUser = JSON.parse(storedUser) as AuthUser;
         setUser(parsedUser);
-        if (storedBranch) {
+        if (parsedUser.role === 'ops_manager') {
+          setUserBranchState(null);
+        } else if (storedBranch) {
           setUserBranchState(storedBranch);
         } else {
           setUserBranchState(parsedUser.branch);
@@ -255,10 +257,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
 
         setUser(userWithoutPassword);
-        setUserBranchState(mappedBranch);
+        setUserBranchState(mappedRole === 'ops_manager' ? null : mappedBranch);
         
         localStorage.setItem('nearbi_user', JSON.stringify(userWithoutPassword));
-        if (mappedBranch) {
+        if (mappedBranch && mappedRole !== 'ops_manager') {
           localStorage.setItem('nearbi_branch', mappedBranch);
         } else {
           localStorage.removeItem('nearbi_branch');

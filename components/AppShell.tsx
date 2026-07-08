@@ -14,7 +14,8 @@ import {
   CheckSquare,
   Bell,
   LogOut,
-  X
+  X,
+  UserMinus
 } from 'lucide-react';
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
@@ -133,6 +134,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   // Filter bottom nav tabs based on role
   const isStaffExec = user.role === 'staff_executive';
+  const showResignations = user.role === 'admin' || user.role === 'ops_manager' || user.role === 'staff_executive';
   const navItems = [
     { label: 'Dashboard', path: '/dashboard', icon: <LayoutDashboard size={22} strokeWidth={1.5} /> },
     { label: 'Attend', path: '/attendance', icon: <Clock size={22} strokeWidth={1.5} /> },
@@ -140,6 +142,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     { label: 'Leave', path: '/leave', icon: <ClipboardList size={22} strokeWidth={1.5} /> },
     ...(!isStaffExec ? [{ label: 'Salary', path: '/salary', icon: <Wallet size={22} strokeWidth={1.5} /> }] : []),
     { label: 'Approvals', path: '/approvals', icon: <CheckSquare size={22} strokeWidth={1.5} /> },
+    ...(showResignations ? [{ label: 'Resign', path: '/resignations', icon: <UserMinus size={22} strokeWidth={1.5} /> }] : []),
   ];
 
   const getBranchLabel = () => {

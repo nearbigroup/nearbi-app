@@ -94,6 +94,7 @@ export function calculateSalary(
     shiftHours: number;
     year: number;
     month: number; // 1-12
+    branchId?: string;
   },
   attendance: {
     daysActuallyWorked: number;
@@ -114,6 +115,7 @@ export function calculateSalary(
     shiftHours,
     year,
     month,
+    branchId,
   } = config;
 
   const {
@@ -139,8 +141,9 @@ export function calculateSalary(
   // Gross pay
   const grossPay = paidDays * dailyRate;
 
-  // OT pay
-  const otPay = (approvedOTMinutes / 60) * hourlyRate;
+  // OT pay (Hypermarket has divisor 240, others use normal hourlyRate. Multiplier is 1.5x)
+  const otHourlyRate = branchId === 'hypermarket' ? (monthlySalary / 240) : hourlyRate;
+  const otPay = (approvedOTMinutes / 60) * otHourlyRate * 1.5;
 
   // Early check-in pay (approved only)
   const earlyInPay = calculateEarlyInPay(approvedEarlyInMinutes, hourlyRate);
