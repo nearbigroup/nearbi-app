@@ -26,7 +26,8 @@ import {
   PartyPopper,
   X,
   Megaphone,
-  UserMinus
+  UserMinus,
+  FileText
 } from 'lucide-react';
 
 const getMinutes = (timeStr: string) => {
@@ -198,6 +199,7 @@ export default function DashboardPage() {
   const [errorMsg, setErrorMsg] = useState('');
   const [latestAnn, setLatestAnn] = useState<any>(null);
   const [newCandidatesCount, setNewCandidatesCount] = useState(0);
+  const [pendingVerificationCount, setPendingVerificationCount] = useState(0);
 
   // Month-end checklist counts
   const [checklistIssues, setChecklistIssues] = useState(0);
@@ -406,6 +408,47 @@ export default function DashboardPage() {
           .eq('walk_in_date', todayLocalStr);
 
         setNewCandidatesCount(cCount || 0);
+      }
+
+      // Fetch pending document verification count
+      try {
+        let profilesQuery = supabase
+          .from('staff_profiles')
+          .select('*, staff!inner(branch_id, active)')
+          .eq('staff.active', true);
+
+        if (userBranch) {
+          profilesQuery = profilesQuery.eq('staff.branch_id', userBranch);
+        }
+
+        const { data: profs } = await profilesQuery;
+        let pendingVerifs = 0;
+        if (profs) {
+          profs.forEach((p: any) => {
+            if (p.aadhaar_photo_url && p.aadhaar_verification_status === 'pending') pendingVerifs++;
+            if (p.pan_photo_url && p.pan_verification_status === 'pending') pendingVerifs++;
+            if (p.bank_proof_url && p.bank_verification_status === 'pending') pendingVerifs++;
+            if (p.passport_photo_url && p.passport_verification_status === 'pending') pendingVerifs++;
+            if (p.driving_licence_photo_url && p.driving_licence_verification_status === 'pending') pendingVerifs++;
+          });
+        }
+
+        let docsQuery = supabase
+          .from('staff_documents')
+          .select('id, staff!inner(branch_id, active)')
+          .eq('verification_status', 'pending')
+          .eq('staff.active', true);
+
+        if (userBranch) {
+          docsQuery = docsQuery.eq('staff.branch_id', userBranch);
+        }
+
+        const { count: docsCount } = await docsQuery;
+        pendingVerifs += (docsCount || 0);
+
+        setPendingVerificationCount(pendingVerifs);
+      } catch (verifErr) {
+        console.error('Error fetching verification stats:', verifErr);
       }
 
       // 6. Run automatic absent alerts check
@@ -1259,6 +1302,24 @@ export default function DashboardPage() {
                     <UserMinus size={16} strokeWidth={1.5} className="text-white" />
                   </div>
                   <span className="text-[13px] font-bold text-[#1A1A1A]">Resignations</span>
+                </Link>
+              )}
+
+              {/* Document Verification Quick Action */}
+              {(user?.role === 'admin' || user?.role === 'ops_manager' || user?.role === 'staff_executive') && (
+                <Link
+                  href="/verification"
+                  className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group col-span-2 relative"
+                >
+                  <div className="w-9 h-9 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center mb-2 mx-auto relative">
+                    <FileText size={16} strokeWidth={1.5} className="text-white" />
+                    {pendingVerificationCount > 0 && (
+                      <span className="absolute -top-1 -right-1 bg-amber-500 text-white rounded-full w-5 h-5 text-[10px] font-black flex items-center justify-center border border-white">
+                        {pendingVerificationCount}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[13px] font-bold text-[#1A1A1A]">Doc Verification</span>
                 </Link>
               )}
 

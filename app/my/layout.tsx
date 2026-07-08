@@ -51,6 +51,7 @@ export default function StaffLayout({ children }: { children: React.ReactNode })
     { label: 'Leave', path: '/my/leave', icon: <ClipboardList size={22} strokeWidth={1.5} /> },
     { label: 'OT', path: '/my/overtime', icon: <Timer size={22} strokeWidth={1.5} /> },
     { label: 'Fines', path: '/my/fines', icon: <AlertCircle size={22} strokeWidth={1.5} /> },
+    { label: 'Profile', path: '/my/profile', icon: <User size={22} strokeWidth={1.5} /> },
   ];
 
   return (

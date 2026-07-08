@@ -27,7 +27,10 @@ import {
   CheckCircle2,
   Trash2,
   Download,
-  Flag
+  Flag,
+  Smartphone,
+  Stethoscope,
+  ExternalLink
 } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import { formatTime12hr } from '@/lib/utils';
@@ -56,6 +59,9 @@ interface StaffMember {
     last_working_day: string;
     status: string;
   } | null;
+  staff_profiles?: any[] | any;
+  staff_emergency_contacts?: any[];
+  staff_documents?: any[];
   shift?: {
     id: string;
     label: string;
@@ -168,7 +174,7 @@ interface SalaryConfirmation {
   hourly_rate?: number;
 }
 
-type TabName = 'attendance' | 'fines' | 'leaves' | 'salary' | 'breaks' | 'notes';
+type TabName = 'attendance' | 'fines' | 'leaves' | 'salary' | 'breaks' | 'notes' | 'profile';
 
 export default function StaffProfilePage() {
   const params = useParams();
@@ -225,6 +231,65 @@ export default function StaffProfilePage() {
     photo_flagged_by?: string;
   } | null>(null);
   const [toastMsg, setToastMsg] = useState('');
+  const [profileUrls, setProfileUrls] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const loadProfileSignedUrls = async () => {
+      const p = Array.isArray(staff?.staff_profiles) ? staff.staff_profiles[0] : staff?.staff_profiles;
+      if (!p) return;
+      
+      const docsToSign = [
+        { key: 'profile_photo', path: p.profile_photo_url },
+        { key: 'aadhaar_photo', path: p.aadhaar_photo_url },
+        { key: 'pan_photo', path: p.pan_photo_url },
+        { key: 'bank_proof', path: p.bank_proof_url },
+        { key: 'passport_photo', path: p.passport_photo_url },
+        { key: 'driving_licence_photo', path: p.driving_licence_photo_url }
+      ];
+
+      const urls: Record<string, string> = {};
+      for (const doc of docsToSign) {
+        if (doc.path) {
+          if (doc.path.startsWith('http')) {
+            urls[doc.key] = doc.path;
+          } else {
+            try {
+              const { data } = await supabase.storage.from('staff-documents').createSignedUrl(doc.path, 3600);
+              if (data?.signedUrl) {
+                urls[doc.key] = data.signedUrl;
+              }
+            } catch (e) {
+              console.error(e);
+            }
+          }
+        }
+      }
+
+      const certs = staff?.staff_documents || [];
+      for (const cert of certs) {
+        if (cert.doc_url) {
+          if (cert.doc_url.startsWith('http')) {
+            urls[`cert_${cert.id}`] = cert.doc_url;
+          } else {
+            try {
+              const { data } = await supabase.storage.from('staff-documents').createSignedUrl(cert.doc_url, 3600);
+              if (data?.signedUrl) {
+                urls[`cert_${cert.id}`] = data.signedUrl;
+              }
+            } catch (e) {
+              console.error(e);
+            }
+          }
+        }
+      }
+
+      setProfileUrls(urls);
+    };
+
+    if (activeTab === 'profile' && staff) {
+      loadProfileSignedUrls();
+    }
+  }, [activeTab, staff]);
 
   // Editing past attendance states
   const [isEditingAttendance, setIsEditingAttendance] = useState(false);
@@ -327,7 +392,7 @@ export default function StaffProfilePage() {
       // Refresh staff data
       const { data: refreshedStaff } = await supabase
         .from('staff')
-        .select('*, shift:shifts(*), resignation:resignation_id(*)')
+        .select('*, shift:shifts(*), resignation:resignation_id(*), staff_profiles(*), staff_emergency_contacts(*), staff_documents(*)')
         .eq('id', id)
         .maybeSingle();
       if (refreshedStaff) {
@@ -1074,7 +1139,7 @@ export default function StaffProfilePage() {
         setLoading(true);
         const { data, error } = await supabase
           .from('staff')
-          .select('*, shift:shifts(*), resignation:resignation_id(*)')
+          .select('*, shift:shifts(*), resignation:resignation_id(*), staff_profiles(*), staff_emergency_contacts(*), staff_documents(*)')
           .eq('id', id)
           .maybeSingle();
 
@@ -1836,6 +1901,7 @@ export default function StaffProfilePage() {
           { id: 'leaves', label: 'Leaves' },
           { id: 'salary', label: 'Salary' },
           { id: 'breaks', label: 'Breaks' },
+          { id: 'profile', label: 'Profile' },
           ...(user?.role === 'ops_manager' ? [{ id: 'notes', label: 'Notes' }] : [])
         ].map((tab) => {
           const isSelected = activeTab === tab.id;
@@ -2550,6 +2616,303 @@ export default function StaffProfilePage() {
             </div>
           </div>
         )}
+
+        {/* Tab: Profile (available to all allowed roles) */}
+        {activeTab === 'profile' && (() => {
+          const profile = Array.isArray(staff?.staff_profiles) ? staff.staff_profiles[0] : staff?.staff_profiles;
+          const contacts = staff?.staff_emergency_contacts || [];
+          const certs = staff?.staff_documents || [];
+
+          // Compute completion percentage
+          let completedCount = 0;
+          if (profile) {
+            if (profile.dob) completedCount++;
+            if (profile.gender) completedCount++;
+            if (profile.blood_group) completedCount++;
+            if (profile.marital_status) completedCount++;
+            if (profile.profile_photo_url) completedCount++;
+            if (profile.personal_phone?.trim()) completedCount++;
+            if (profile.personal_email?.trim()) completedCount++;
+            if (profile.current_address?.trim()) completedCount++;
+            if (profile.permanent_address?.trim()) completedCount++;
+            if (contacts.filter((c: any) => c.name?.trim() && c.phone?.trim()).length >= 2) completedCount++;
+            if (profile.aadhaar_number?.trim() && profile.aadhaar_number.replace(/\s+/g, '').length === 12) completedCount++;
+            if (profile.aadhaar_photo_url) completedCount++;
+            if (profile.bank_account_number?.trim()) completedCount++;
+            if (profile.bank_ifsc?.trim()) completedCount++;
+            if (profile.bank_name?.trim()) completedCount++;
+            if (profile.bank_proof_url) completedCount++;
+          }
+          const completionPercent = Math.round((completedCount / 16) * 100);
+
+          const getStatusTextBadge = (status: string, reason?: string | null) => {
+            switch (status) {
+              case 'verified':
+                return <span className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider">Verified</span>;
+              case 'rejected':
+                return (
+                  <div className="flex flex-col items-end">
+                    <span className="bg-red-500/10 border border-red-500/20 text-red-400 text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider">Rejected</span>
+                    {reason && <span className="text-[8px] text-red-400 font-bold mt-0.5">Reason: {reason}</span>}
+                  </div>
+                );
+              case 'pending':
+              default:
+                return <span className="bg-amber-500/10 border border-amber-500/20 text-amber-400 text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider">Pending</span>;
+            }
+          };
+
+          return (
+            <div className="space-y-5 text-xs text-gray-300">
+              
+              {/* Profile Completion Card */}
+              <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-2xl p-4.5 space-y-3">
+                <div className="flex items-center space-x-3">
+                  {profileUrls.profile_photo ? (
+                    <img src={profileUrls.profile_photo} alt="Profile" className="w-12 h-12 rounded-xl object-cover border border-[var(--border)]" />
+                  ) : (
+                    <div className="w-12 h-12 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border)] flex items-center justify-center text-white font-extrabold text-lg">
+                      {staff?.name?.charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <h4 className="font-extrabold text-sm text-white leading-tight">Profile & Document Verification</h4>
+                    <p className="text-[10px] text-[var(--text-muted)] font-black uppercase mt-0.5 tracking-wider">
+                      Completion Score: {completionPercent}%
+                    </p>
+                  </div>
+                </div>
+
+                <div className="w-full bg-[var(--bg-elevated)] h-1.5 rounded-full overflow-hidden">
+                  <div 
+                    className={`h-full transition-all duration-500 rounded-full ${completionPercent === 100 ? 'bg-emerald-500' : 'bg-amber-500'}`}
+                    style={{ width: `${completionPercent}%` }}
+                  />
+                </div>
+              </div>
+
+              {!profile ? (
+                <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-2xl p-6 text-center text-[var(--text-muted)] italic font-semibold">
+                  Employee has not set up their profile details yet.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  
+                  {/* 1. Personal & Contact Details */}
+                  <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-2xl p-4.5 space-y-4">
+                    <h4 className="text-white text-xs font-black uppercase tracking-wider border-b border-[var(--border)] pb-2 flex items-center gap-1.5">
+                      <User size={13} />
+                      Personal & Contact Details
+                    </h4>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+                      <div>
+                        <span className="block text-[10px] text-[var(--text-muted)] font-bold uppercase mb-0.5">Date of Birth</span>
+                        <span className="text-white font-semibold">{profile.dob ? new Date(profile.dob).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Not set'}</span>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] text-[var(--text-muted)] font-bold uppercase mb-0.5">Gender</span>
+                        <span className="text-white font-semibold">{profile.gender || 'Not set'}</span>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] text-[var(--text-muted)] font-bold uppercase mb-0.5">Blood Group</span>
+                        <span className="text-white font-semibold">{profile.blood_group || 'Not set'}</span>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] text-[var(--text-muted)] font-bold uppercase mb-0.5">Marital Status</span>
+                        <span className="text-white font-semibold">{profile.marital_status || 'Not set'}</span>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] text-[var(--text-muted)] font-bold uppercase mb-0.5">Personal Phone</span>
+                        <span className="text-white font-semibold">{profile.personal_phone || 'Not set'}</span>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] text-[var(--text-muted)] font-bold uppercase mb-0.5">Personal Email</span>
+                        <span className="text-white font-semibold truncate block">{profile.personal_email || 'Not set'}</span>
+                      </div>
+                    </div>
+                    <div className="border-t border-[var(--border)] pt-3 space-y-2">
+                      <div>
+                        <span className="block text-[10px] text-[var(--text-muted)] font-bold uppercase mb-0.5">Current Address</span>
+                        <p className="text-white font-semibold leading-relaxed">{profile.current_address || 'Not set'}</p>
+                      </div>
+                      <div>
+                        <span className="block text-[10px] text-[var(--text-muted)] font-bold uppercase mb-0.5">Permanent Address</span>
+                        <p className="text-white font-semibold leading-relaxed">{profile.permanent_address || 'Not set'}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 2. Emergency Contacts */}
+                  <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-2xl p-4.5 space-y-3">
+                    <h4 className="text-white text-xs font-black uppercase tracking-wider border-b border-[var(--border)] pb-2 flex items-center gap-1.5">
+                      <Smartphone size={13} />
+                      Emergency Contacts
+                    </h4>
+                    {contacts.length === 0 ? (
+                      <p className="text-[var(--text-muted)] italic font-semibold">No emergency contacts provided.</p>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                        {contacts.map((c: any, index: number) => (
+                          <div key={index} className="bg-[var(--bg-elevated)] border border-[var(--border)] rounded-xl p-3 space-y-1 relative shadow-xs">
+                            <span className="absolute top-2.5 right-2.5 text-[8.5px] font-black uppercase tracking-wider text-[var(--text-muted)] bg-[var(--bg-surface)] border border-[var(--border)] px-1.5 py-0.5 rounded-md">
+                              {c.relation}
+                            </span>
+                            <h5 className="font-extrabold text-xs text-white">{c.name}</h5>
+                            <p className="text-[10px] font-bold text-gray-300 font-mono tracking-wider">{c.phone}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 3. Government IDs & Bank Details */}
+                  <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-2xl p-4.5 space-y-3">
+                    <h4 className="text-white text-xs font-black uppercase tracking-wider border-b border-[var(--border)] pb-2 flex items-center gap-1.5">
+                      <FileText size={13} />
+                      Government & Bank Verification
+                    </h4>
+                    
+                    <div className="space-y-3 pt-1">
+                      {/* Aadhaar */}
+                      <div className="flex justify-between items-start border-b border-[var(--border)] pb-2.5">
+                        <div className="space-y-0.5">
+                          <span className="text-[10px] text-[var(--text-muted)] font-black uppercase tracking-wider">Aadhaar Card</span>
+                          <p className="font-mono text-white font-extrabold">{profile.aadhaar_number || 'Not provided'}</p>
+                          {profileUrls.aadhaar_photo && (
+                            <a href={profileUrls.aadhaar_photo} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-extrabold hover:underline pt-1">
+                              View Attachment <ExternalLink size={11} />
+                            </a>
+                          )}
+                        </div>
+                        {getStatusTextBadge(profile.aadhaar_verification_status, profile.aadhaar_rejection_reason)}
+                      </div>
+
+                      {/* PAN */}
+                      <div className="flex justify-between items-start border-b border-[var(--border)] pb-2.5">
+                        <div className="space-y-0.5">
+                          <span className="text-[10px] text-[var(--text-muted)] font-black uppercase tracking-wider">PAN Card</span>
+                          <p className="font-mono text-white font-extrabold">{profile.pan_number || 'Not provided'}</p>
+                          {profileUrls.pan_photo && (
+                            <a href={profileUrls.pan_photo} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-extrabold hover:underline pt-1">
+                              View Attachment <ExternalLink size={11} />
+                            </a>
+                          )}
+                        </div>
+                        {getStatusTextBadge(profile.pan_verification_status, profile.pan_rejection_reason)}
+                      </div>
+
+                      {/* Bank Details */}
+                      <div className="flex justify-between items-start border-b border-[var(--border)] pb-2.5">
+                        <div className="space-y-0.5">
+                          <span className="text-[10px] text-[var(--text-muted)] font-black uppercase tracking-wider">Bank Account</span>
+                          <p className="text-white font-semibold leading-relaxed">
+                            {profile.bank_name || 'Bank'} <br />
+                            A/C: <span className="font-mono">{profile.bank_account_number || 'N/A'}</span> <br />
+                            IFSC: <span className="font-mono">{profile.bank_ifsc || 'N/A'}</span>
+                          </p>
+                          {profileUrls.bank_proof && (
+                            <a href={profileUrls.bank_proof} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-extrabold hover:underline pt-1">
+                              View Bank Proof <ExternalLink size={11} />
+                            </a>
+                          )}
+                        </div>
+                        {getStatusTextBadge(profile.bank_verification_status, profile.bank_rejection_reason)}
+                      </div>
+
+                      {/* Passport */}
+                      {profile.passport_number && (
+                        <div className="flex justify-between items-start border-b border-[var(--border)] pb-2.5">
+                          <div className="space-y-0.5">
+                            <span className="text-[10px] text-[var(--text-muted)] font-black uppercase tracking-wider">Passport</span>
+                            <p className="text-white font-semibold">
+                              No: <span className="font-mono font-extrabold">{profile.passport_number}</span> <br />
+                              Expires: {profile.passport_expiry ? new Date(profile.passport_expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'N/A'}
+                            </p>
+                            {profileUrls.passport_photo && (
+                              <a href={profileUrls.passport_photo} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-extrabold hover:underline pt-1">
+                                View Passport <ExternalLink size={11} />
+                              </a>
+                            )}
+                          </div>
+                          {getStatusTextBadge(profile.passport_verification_status, profile.passport_rejection_reason)}
+                        </div>
+                      )}
+
+                      {/* DL */}
+                      {profile.driving_licence_number && (
+                        <div className="flex justify-between items-start pb-1">
+                          <div className="space-y-0.5">
+                            <span className="text-[10px] text-[var(--text-muted)] font-black uppercase tracking-wider">Driving Licence</span>
+                            <p className="text-white font-semibold">
+                              No: <span className="font-mono font-extrabold">{profile.driving_licence_number}</span> <br />
+                              Expires: {profile.driving_licence_expiry ? new Date(profile.driving_licence_expiry).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'N/A'}
+                            </p>
+                            {profileUrls.driving_licence_photo && (
+                              <a href={profileUrls.driving_licence_photo} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-extrabold hover:underline pt-1">
+                                View Driving Licence <ExternalLink size={11} />
+                              </a>
+                            )}
+                          </div>
+                          {getStatusTextBadge(profile.driving_licence_verification_status, profile.driving_licence_rejection_reason)}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* 4. Certificates List */}
+                  {certs.length > 0 && (
+                    <div className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-2xl p-4.5 space-y-3">
+                      <h4 className="text-white text-xs font-black uppercase tracking-wider border-b border-[var(--border)] pb-2 flex items-center gap-1.5">
+                        <FileText size={13} />
+                        Academic & Experience Certificates
+                      </h4>
+                      <div className="space-y-2.5">
+                        {certs.map((doc: any) => (
+                          <div key={doc.id} className="border border-[var(--border)] rounded-xl p-3 flex justify-between items-center bg-[var(--bg-elevated)] shadow-xs">
+                            <div>
+                              <h5 className="font-extrabold text-xs text-white">{doc.doc_name}</h5>
+                              <span className="text-[9px] font-black text-[var(--text-secondary)] capitalize block mt-0.5">
+                                {doc.doc_type.replace(/_/g, ' ')}
+                              </span>
+                            </div>
+                            <div className="text-right flex items-center gap-3">
+                              {profileUrls[`cert_${doc.id}`] && (
+                                <a 
+                                  href={profileUrls[`cert_${doc.id}`]} 
+                                  target="_blank" 
+                                  rel="noreferrer"
+                                  className="w-7 h-7 bg-[var(--bg-surface)] border border-[var(--border)] hover:border-white rounded-lg flex items-center justify-center text-[var(--text-secondary)] hover:text-white transition-all"
+                                  title="View Attachment"
+                                >
+                                  <ExternalLink size={11} />
+                                </a>
+                              )}
+                              {getStatusTextBadge(doc.verification_status, doc.rejection_reason)}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 5. Confidentially Isolated Medical Notes */}
+                  {user?.role !== 'partner_viewer' && (
+                    <div className="bg-[#FFF8E6]/5 border border-amber-500/20 rounded-2xl p-4.5 space-y-2 shadow-xs">
+                      <div className="flex items-center gap-1.5 text-amber-500 font-extrabold text-xs uppercase tracking-wider">
+                        <Stethoscope size={14} />
+                        Medical Notes (CONFIDENTIAL)
+                      </div>
+                      <p className="text-xs text-gray-300 leading-relaxed bg-black/30 border border-white/5 p-3 rounded-xl whitespace-pre-wrap font-medium">
+                        {profile.medical_notes || 'No confidential medical information provided.'}
+                      </p>
+                    </div>
+                  )}
+
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
       </div>
 

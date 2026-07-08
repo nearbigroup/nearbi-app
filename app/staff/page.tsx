@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { createAuditLog } from '@/lib/audit';
-import { Search, Plus, Trash2, Edit2, Eye, EyeOff, Lock, X, AlertTriangle, Users, AlertCircle, RefreshCw, Cake, Download, Upload, Check, Phone } from 'lucide-react';
+import { Search, Plus, Trash2, Edit2, Eye, EyeOff, Lock, X, AlertTriangle, Users, AlertCircle, RefreshCw, Cake, Download, Upload, Check, Phone, FileText } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import * as XLSX from 'xlsx';
 import { DEPARTMENTS } from '@/lib/data';
@@ -1342,7 +1342,7 @@ export default function StaffPage() {
   // Fetch staff list
   const fetchStaff = async () => {
     try {
-      let query = supabase.from('staff').select('*, shift:shifts(*), staff_accounts(*), resignation:resignation_id(*)').eq('active', true).eq('is_resigned', false);
+      let query = supabase.from('staff').select('*, shift:shifts(*), staff_accounts(*), resignation:resignation_id(*), staff_profiles(*), staff_emergency_contacts(*), staff_documents(*)').eq('active', true).eq('is_resigned', false);
       
       // Branch isolation / Scoping
       if (user?.role === 'nearbi_homes_supervisor') {
@@ -2148,6 +2148,81 @@ export default function StaffPage() {
     return true;
   });
 
+  const getProfileStatusBadge = (s: any) => {
+    const profile = Array.isArray(s.staff_profiles) ? s.staff_profiles[0] : s.staff_profiles;
+    const contacts = s.staff_emergency_contacts || [];
+    const certs = s.staff_documents || [];
+
+    if (!profile) {
+      return (
+        <span className="w-5 h-5 rounded-full flex items-center justify-center bg-gray-100 border border-gray-300 text-gray-400" title="Profile Incomplete (0%)">
+          <FileText size={10} />
+        </span>
+      );
+    }
+
+    let completedCount = 0;
+    if (profile.dob) completedCount++;
+    if (profile.gender) completedCount++;
+    if (profile.blood_group) completedCount++;
+    if (profile.marital_status) completedCount++;
+    if (profile.profile_photo_url) completedCount++;
+    if (profile.personal_phone?.trim()) completedCount++;
+    if (profile.personal_email?.trim()) completedCount++;
+    if (profile.current_address?.trim()) completedCount++;
+    if (profile.permanent_address?.trim()) completedCount++;
+    if (contacts.filter((c: any) => c.name?.trim() && c.phone?.trim()).length >= 2) completedCount++;
+    if (profile.aadhaar_number?.trim() && profile.aadhaar_number.replace(/\s+/g, '').length === 12) completedCount++;
+    if (profile.aadhaar_photo_url) completedCount++;
+    if (profile.bank_account_number?.trim()) completedCount++;
+    if (profile.bank_ifsc?.trim()) completedCount++;
+    if (profile.bank_name?.trim()) completedCount++;
+    if (profile.bank_proof_url) completedCount++;
+
+    const percent = Math.round((completedCount / 16) * 100);
+
+    if (percent < 100) {
+      return (
+        <span className="w-5 h-5 rounded-full flex items-center justify-center bg-gray-100 border border-gray-300 text-gray-400" title={`Profile Incomplete (${percent}%)`}>
+          <FileText size={10} />
+        </span>
+      );
+    }
+
+    const uploads = [
+      profile.aadhaar_photo_url ? profile.aadhaar_verification_status : null,
+      profile.pan_photo_url ? profile.pan_verification_status : null,
+      profile.bank_proof_url ? profile.bank_verification_status : null,
+      profile.passport_photo_url ? profile.passport_verification_status : null,
+      profile.driving_licence_photo_url ? profile.driving_licence_verification_status : null,
+      ...certs.map((c: any) => c.verification_status)
+    ].filter(Boolean);
+
+    const hasPending = uploads.some(status => status === 'pending');
+    if (hasPending) {
+      return (
+        <span className="w-5 h-5 rounded-full flex items-center justify-center bg-amber-50 border border-amber-300 text-amber-500" title="100% Complete — Verification Pending">
+          <FileText size={10} />
+        </span>
+      );
+    }
+
+    const hasRejected = uploads.some(status => status === 'rejected');
+    if (hasRejected) {
+      return (
+        <span className="w-5 h-5 rounded-full flex items-center justify-center bg-red-50 border border-red-300 text-red-500" title="100% Complete — Rejections Exist">
+          <FileText size={10} />
+        </span>
+      );
+    }
+
+    return (
+      <span className="w-5 h-5 rounded-full flex items-center justify-center bg-emerald-50 border border-emerald-300 text-emerald-600" title="100% Complete — Fully Verified">
+        <FileText size={10} />
+      </span>
+    );
+  };
+
   const getBranchLabel = (branchId: string) => {
     return branchId === 'daily' ? 'Nearbi Daily' : 'Nearbi Hypermarket';
   };
@@ -2444,7 +2519,8 @@ export default function StaffPage() {
 
                   {/* Profile info details */}
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5">
+                      {getProfileStatusBadge(s)}
                       <h3 className="font-bold text-sm text-[#1A1A1A] leading-tight truncate">
                         {s.name}
                       </h3>
