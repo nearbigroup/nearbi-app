@@ -139,6 +139,10 @@ export default function SettingsPage() {
   const [showPasswordMap, setShowPasswordMap] = useState<Record<string, boolean>>({});
   const [savingLogin, setSavingLogin] = useState(false);
 
+  // Role Permissions states
+  const [rolePermissions, setRolePermissions] = useState<any[]>([]);
+  const [loadingRolePerms, setLoadingRolePerms] = useState(false);
+
   const showToast = (msg: string) => {
     setToastMsg(msg);
     setTimeout(() => setToastMsg(''), 3000);
@@ -289,8 +293,50 @@ export default function SettingsPage() {
       if (!loginsError && loginsData) {
         setAppLogins(loginsData);
       }
+
+      // Load role permissions
+      const { data: rpData, error: rpErr } = await supabase
+        .from('role_permissions')
+        .select('*')
+        .order('role');
+      if (!rpErr && rpData) {
+        setRolePermissions(rpData);
+      }
     } catch (err) {
       console.error(err);
+    }
+  };
+
+  const handleToggleRolePermission = async (roleName: string, currentVal: boolean) => {
+    if (roleName === 'admin') return;
+    setLoadingRolePerms(true);
+    try {
+      const newVal = !currentVal;
+      const { error } = await supabase
+        .from('role_permissions')
+        .update({ can_view_report_card: newVal })
+        .eq('role', roleName);
+
+      if (error) throw error;
+      
+      setRolePermissions(prev => prev.map(p => p.role === roleName ? { ...p, can_view_report_card: newVal } : p));
+      
+      await writeAuditLog({
+        action_type: 'permission_changed',
+        performed_by: user?.email || 'admin',
+        performed_by_role: user?.role || 'admin',
+        target_description: `Toggled can_view_report_card for role ${roleName} to ${newVal}`,
+        old_value: currentVal ? 'on' : 'off',
+        new_value: newVal ? 'on' : 'off',
+        notes: `Toggled can_view_report_card for role ${roleName} to ${newVal}`
+      });
+
+      showToast(`Permissions updated for role ${roleName.replace('_', ' ')} ✓`);
+    } catch (err) {
+      console.error(err);
+      alert('Failed to update role permission');
+    } finally {
+      setLoadingRolePerms(false);
     }
   };
 
@@ -1848,6 +1894,58 @@ export default function SettingsPage() {
                                   <Trash2 size={13} />
                                 </button>
                               )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Role Permission Manager Section (Admin Only) */}
+          {user?.role === 'admin' && (
+            <div className="space-y-4 pt-6">
+              <div>
+                <h2 className="text-[#1A1A1A] font-extrabold text-sm tracking-wider uppercase">
+                  🛡️ Role Permission Manager
+                </h2>
+                <div className="text-[#E8E8E8] text-xs font-semibold select-none leading-none my-1">
+                  ─────────────────────────────
+                </div>
+              </div>
+
+              <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-5 shadow-sm space-y-4">
+                <p className="text-[var(--text-muted)] text-[10px] font-semibold leading-normal">
+                  Configure role-based access permissions. Check a box to enable that permission for the corresponding role. Changes are saved immediately.
+                </p>
+
+                <div className="overflow-x-auto border border-[#E8E8E8] rounded-[12px]">
+                  <table className="w-full text-left text-xs whitespace-nowrap border-collapse">
+                    <thead>
+                      <tr className="text-[#999999] uppercase font-bold text-[9px] bg-[#F2F2F2] border-b border-[#E8E8E8]">
+                        <th className="p-3">User Role</th>
+                        <th className="p-3 text-center">Can View Staff Report Card</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#E8E8E8]">
+                      {rolePermissions.map((rp) => {
+                        const isToggleable = rp.role !== 'admin';
+                        return (
+                          <tr key={rp.role} className="hover:bg-[#F8F8F8] transition-colors">
+                            <td className="p-3 font-bold text-[#1A1A1A] capitalize">
+                              {rp.role.replace(/_/g, ' ')}
+                            </td>
+                            <td className="p-3 text-center">
+                              <input
+                                type="checkbox"
+                                checked={rp.can_view_report_card}
+                                disabled={!isToggleable || loadingRolePerms}
+                                onChange={() => handleToggleRolePermission(rp.role, rp.can_view_report_card)}
+                                className="w-4.5 h-4.5 rounded border-[#E8E8E8] text-[#1a1a1a] focus:ring-[#1a1a1a] cursor-pointer disabled:opacity-50"
+                              />
                             </td>
                           </tr>
                         );

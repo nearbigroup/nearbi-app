@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { createAuditLog, writeAuditLog } from '@/lib/audit';
-import { Search, Plus, Trash2, Edit2, Eye, EyeOff, Lock, X, AlertTriangle, Users, AlertCircle, RefreshCw, Cake, Download, Upload, Check, Phone, FileText } from 'lucide-react';
+import { Search, Plus, Trash2, Edit2, Eye, EyeOff, Lock, X, AlertTriangle, Users, AlertCircle, RefreshCw, Cake, Download, Upload, Check, Phone, FileText, Award, TrendingUp, TrendingDown, Calendar, Clock, DollarSign, Star, ChevronDown, ChevronUp, BarChart2 } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import * as XLSX from 'xlsx';
 import { DEPARTMENTS } from '@/lib/data';
@@ -63,6 +63,38 @@ export default function StaffPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [profileFilter, setProfileFilter] = useState<'all' | 'incomplete'>('all');
+
+  // Staff Report Card State Hooks
+  const [canViewReportCard, setCanViewReportCard] = useState(false);
+  const [reportCardModalOpen, setReportCardModalOpen] = useState(false);
+  const [reportCardStaff, setReportCardStaff] = useState<StaffMember | null>(null);
+  const [reportCardData, setReportCardData] = useState<any | null>(null);
+  const [loadingReportCard, setLoadingReportCard] = useState(false);
+  const [expandedMetric, setExpandedMetric] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchPerms = async () => {
+      if (!user) return;
+      let defaultPerm = user.role === 'admin' || user.role === 'ops_manager';
+      try {
+        const { data } = await supabase
+          .from('role_permissions')
+          .select('can_view_report_card')
+          .eq('role', user.role)
+          .maybeSingle();
+        
+        if (data) {
+          setCanViewReportCard(data.can_view_report_card);
+        } else {
+          setCanViewReportCard(defaultPerm);
+        }
+      } catch (err) {
+        console.error('Error fetching can_view_report_card:', err);
+        setCanViewReportCard(defaultPerm);
+      }
+    };
+    fetchPerms();
+  }, [user]);
   
   const [showAddPanel, setShowAddPanel] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
@@ -1413,6 +1445,246 @@ export default function StaffPage() {
     }
   };
 
+  const handleOpenReportCard = async (s: StaffMember) => {
+    if (user?.role === 'nearbi_homes_supervisor' && s.department !== 'Nearbi Homes') {
+      alert('Access Denied. You can only view report cards for Nearbi Homes staff.');
+      return;
+    }
+
+    setReportCardStaff(s);
+    setReportCardModalOpen(true);
+    setLoadingReportCard(true);
+    setExpandedMetric(null);
+    try {
+      // 1. Fetch data
+      const { data: attData } = await supabase
+        .from('attendance')
+        .select('*')
+        .eq('staff_id', s.id)
+        .order('date', { ascending: false });
+
+      const { data: lfData } = await supabase
+        .from('late_fines')
+        .select('*')
+        .eq('staff_id', s.id)
+        .eq('confirmed', true)
+        .eq('waived', false);
+
+      const { data: sfData } = await supabase
+        .from('special_fines')
+        .select('*')
+        .eq('staff_id', s.id)
+        .eq('confirmed', true)
+        .eq('waived', false);
+
+      const { data: alertsData } = await supabase
+        .from('staff_alerts')
+        .select('*')
+        .eq('staff_id', s.id)
+        .order('flagged_at', { ascending: false });
+
+      const att = attData || [];
+      const lFines = lfData || [];
+      const sFines = sfData || [];
+      const alerts = alertsData || [];
+
+      // Calculate clean streak (days since last absence/late)
+      let cleanStreak = 0;
+      let hasInfraction = false;
+      const sortedAtt = [...att].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      
+      for (const record of sortedAtt) {
+        if (record.status === 'late' || record.status === 'absent') {
+          hasInfraction = true;
+          const lastInfractionDate = new Date(record.date);
+          const timeDiff = new Date().getTime() - lastInfractionDate.getTime();
+          cleanStreak = Math.max(0, Math.floor(timeDiff / (24 * 60 * 60 * 1000)));
+          break;
+        }
+      }
+      if (!hasInfraction && sortedAtt.length > 0) {
+        const oldestRecord = sortedAtt[sortedAtt.length - 1];
+        const timeDiff = new Date().getTime() - new Date(oldestRecord.date).getTime();
+        cleanStreak = Math.max(0, Math.floor(timeDiff / (24 * 60 * 60 * 1000)));
+      }
+
+      // Check history
+      const joinDays = s.join_date ? Math.floor((new Date().getTime() - new Date(s.join_date).getTime()) / (24 * 60 * 60 * 1000)) : 0;
+      const notEnoughHistory = joinDays < 30 || att.length < 15;
+
+      // Group records into bins
+      const scoreBins = {
+        last30: { attTotal: 0, attPresent: 0, lates: 0, finesCount: 0, finesAmt: 0 },
+        days31_90: { attTotal: 0, attPresent: 0, lates: 0, finesCount: 0, finesAmt: 0 },
+        days90Plus: { attTotal: 0, attPresent: 0, lates: 0, finesCount: 0, finesAmt: 0 }
+      };
+
+      const getBin = (dateStr: string) => {
+        const daysAgo = Math.floor((new Date().getTime() - new Date(dateStr).getTime()) / (24 * 60 * 60 * 1000));
+        if (daysAgo <= 30) return scoreBins.last30;
+        if (daysAgo <= 90) return scoreBins.days31_90;
+        return scoreBins.days90Plus;
+      };
+
+      att.forEach(record => {
+        const bin = getBin(record.date);
+        const isExempt = record.day_type === 'weekly_off' || record.day_type === 'holiday' || record.day_type === 'leave';
+        if (!isExempt) {
+          bin.attTotal += 1;
+          if (record.status === 'present' || record.status === 'late') {
+            bin.attPresent += 1;
+          }
+          if (record.status === 'late') {
+            bin.lates += 1;
+          }
+        }
+      });
+
+      lFines.forEach(fine => {
+        const bin = getBin(fine.date);
+        bin.finesCount += 1;
+        bin.finesAmt += Number(fine.fine_amount || 0);
+      });
+
+      sFines.forEach(fine => {
+        const bin = getBin(fine.date);
+        bin.finesCount += 1;
+        bin.finesAmt += Number(fine.amount || 0);
+      });
+
+      const calcBinScores = (bin: typeof scoreBins.last30) => {
+        const attScore = bin.attTotal > 0 ? (bin.attPresent / bin.attTotal) * 100 : 100;
+        const punctScore = bin.attPresent > 0 ? ((bin.attPresent - bin.lates) / bin.attPresent) * 100 : 100;
+        const finePenalty = Math.min(50, (bin.finesAmt / 100) + (bin.finesCount * 10));
+        const fineScore = Math.max(0, 100 - finePenalty);
+        return { attScore, punctScore, fineScore };
+      };
+
+      const bin30Scores = calcBinScores(scoreBins.last30);
+      const bin31_90Scores = calcBinScores(scoreBins.days31_90);
+      const bin90PlusScores = calcBinScores(scoreBins.days90Plus);
+
+      const weightsSum = 1.0 + 0.6 + 0.3;
+      const weightedAtt = (bin30Scores.attScore * 1.0 + bin31_90Scores.attScore * 0.6 + bin90PlusScores.attScore * 0.3) / weightsSum;
+      const weightedPunct = (bin30Scores.punctScore * 1.0 + bin31_90Scores.punctScore * 0.6 + bin90PlusScores.punctScore * 0.3) / weightsSum;
+      const weightedFine = (bin30Scores.fineScore * 1.0 + bin31_90Scores.fineScore * 0.6 + bin90PlusScores.fineScore * 0.3) / weightsSum;
+
+      let alertsPenalty = 0;
+      let hasUnresolvedHabitual = false;
+      alerts.forEach(alert => {
+        if (!alert.resolved) {
+          if (alert.escalation_level === 'habitual') {
+            alertsPenalty += 40;
+            hasUnresolvedHabitual = true;
+          } else if (alert.escalation_level === 'repeat') {
+            alertsPenalty += 25;
+          } else {
+            alertsPenalty += 10;
+          }
+        }
+      });
+      const alertsScore = Math.max(0, 100 - alertsPenalty);
+
+      const score = Math.round(
+        (weightedAtt * 0.3) + 
+        (weightedPunct * 0.3) + 
+        (weightedFine * 0.2) + 
+        (alertsScore * 0.2)
+      );
+
+      // Lifetime values
+      const lifetimeTotalAtt = att.filter(r => r.day_type !== 'weekly_off' && r.day_type !== 'holiday' && r.day_type !== 'leave');
+      const lifetimePresentAtt = lifetimeTotalAtt.filter(r => r.status === 'present' || r.status === 'late');
+      const lifetimeLates = lifetimeTotalAtt.filter(r => r.status === 'late');
+      
+      const lifetimeAttScore = lifetimeTotalAtt.length > 0 ? (lifetimePresentAtt.length / lifetimeTotalAtt.length) * 100 : 100;
+      const lifetimePunctScore = lifetimePresentAtt.length > 0 ? ((lifetimePresentAtt.length - lifetimeLates.length) / lifetimePresentAtt.length) * 100 : 100;
+      
+      const totalFinesAmt = lFines.reduce((acc, f) => acc + Number(f.fine_amount || 0), 0) + sFines.reduce((acc, f) => acc + Number(f.amount || 0), 0);
+      const totalFinesCount = lFines.length + sFines.length;
+      const lifetimeFineScore = Math.max(0, 100 - Math.min(50, (totalFinesAmt / 100) + (totalFinesCount * 10)));
+      
+      const lifetimeScore = Math.round(
+        (lifetimeAttScore * 0.3) + 
+        (lifetimePunctScore * 0.3) + 
+        (lifetimeFineScore * 0.2) + 
+        (alertsScore * 0.2)
+      );
+
+      const last30Score = Math.round(
+        (bin30Scores.attScore * 0.3) + 
+        (bin30Scores.punctScore * 0.3) + 
+        (bin30Scores.fineScore * 0.2) + 
+        (alertsScore * 0.2)
+      );
+
+      let trend: 'improving' | 'stable' | 'declining' = 'stable';
+      if (last30Score > lifetimeScore + 3) trend = 'improving';
+      else if (last30Score < lifetimeScore - 3) trend = 'declining';
+
+      let verdict: 'reliable' | 'watch' | 'habitual' = 'reliable';
+      if (score < 50 || hasUnresolvedHabitual) verdict = 'habitual';
+      else if (score < 75 || trend === 'declining') verdict = 'watch';
+
+      let reason = 'Consistent performance';
+      if (hasUnresolvedHabitual) {
+        reason = 'Unresolved habitual alert flagged';
+      } else if (weightedAtt < 80) {
+        reason = `Attendance is low at ${Math.round(weightedAtt)}%`;
+      } else if (weightedPunct < 85) {
+        const last30Lates = scoreBins.last30.lates;
+        reason = last30Lates > 0 ? `${last30Lates} late arrivals in last 30 days` : 'Frequent late arrivals';
+      } else if (weightedFine < 85) {
+        reason = `Fines incurred (₹${totalFinesAmt} lifetime)`;
+      } else if (totalFinesCount === 0 && joinDays > 90) {
+        reason = `Consistent, no fines in ${Math.min(12, Math.floor(joinDays / 30))} months`;
+      } else if (weightedAtt >= 95 && weightedPunct >= 95) {
+        reason = 'Excellent attendance and punctuality';
+      }
+
+      setReportCardData({
+        score,
+        verdict,
+        trend,
+        reason,
+        notEnoughHistory,
+        metrics: {
+          attendance: {
+            overall: Math.round(lifetimeAttScore),
+            cleanStreak,
+            history: att.slice(0, 10) // compact list
+          },
+          punctuality: {
+            lifetimeLates: lifetimeLates.length,
+            daysSinceLastLate: (() => {
+              const lastLate = att.find(r => r.status === 'late');
+              if (!lastLate) return 'Lifetime on-time';
+              const diff = new Date().getTime() - new Date(lastLate.date).getTime();
+              return Math.max(0, Math.floor(diff / (24 * 60 * 60 * 1000)));
+            })()
+          },
+          fines: {
+            totalAmount: totalFinesAmt,
+            count: totalFinesCount,
+            history: [...lFines, ...sFines].slice(0, 5)
+          },
+          recognition: {
+            count: 0
+          },
+          alerts: {
+            thisYearCount: alerts.filter(a => new Date(a.flagged_at).getFullYear() === new Date().getFullYear()).length,
+            history: alerts
+          }
+        }
+      });
+    } catch (err) {
+      console.error(err);
+      alert('Failed to load report card data');
+    } finally {
+      setLoadingReportCard(false);
+    }
+  };
+
   // Fetch shifts list
   const fetchShifts = async () => {
     try {
@@ -2487,6 +2759,15 @@ export default function StaffPage() {
                   {/* Top Right Action Icons */}
                   {!selectionMode && (
                     <div className="absolute top-3 right-3 flex items-center space-x-1" onClick={(e) => e.stopPropagation()}>
+                      {canViewReportCard && (
+                        <button
+                          onClick={() => handleOpenReportCard(s)}
+                          className="p-1.5 text-[#555555] hover:text-[#1A1A1A] hover:bg-[#F2F2F2] rounded-lg transition-all cursor-pointer"
+                          title="View Report Card"
+                        >
+                          <Award size={14} strokeWidth={1.5} />
+                        </button>
+                      )}
                       {(user?.role === 'admin' || user?.role === 'ops_manager') && (
                         <button
                           onClick={() => handleOpenEditStaff(s)}
@@ -3875,6 +4156,282 @@ export default function StaffPage() {
                 className="bg-[#F5A800] text-white hover:bg-[#d99400] font-bold text-xs px-4 py-2.5 rounded-[10px] active:scale-95 transition-all flex items-center space-x-1.5"
               >
                 {isImporting ? 'Importing...' : 'Import valid rows only'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Staff Report Card Modal */}
+      {reportCardModalOpen && reportCardStaff && (
+        <div className="fixed inset-0 z-[12000] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setReportCardModalOpen(false)}
+          />
+          <div className="bg-[#1e293b] text-white rounded-[24px] shadow-2xl relative z-10 w-full max-w-md max-h-[85vh] flex flex-col overflow-hidden border border-slate-700/50">
+            {/* Header */}
+            <div className="p-5 border-b border-slate-800 flex justify-between items-center bg-[#0f172a]/40">
+              <div className="flex items-center space-x-2">
+                <Award className="text-amber-400" size={20} />
+                <div className="text-left">
+                  <h3 className="text-sm font-black uppercase tracking-wider text-slate-100">
+                    Staff Report Card
+                  </h3>
+                  <span className="text-[10px] text-slate-400 font-bold block mt-0.5">
+                    {reportCardStaff.name} ({reportCardStaff.department})
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReportCardModalOpen(false)}
+                className="p-1 text-slate-400 hover:text-white transition-colors cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            {loadingReportCard ? (
+              <div className="flex-1 py-20 flex flex-col items-center justify-center gap-3">
+                <RefreshCw className="animate-spin text-amber-400" size={32} />
+                <p className="text-xs text-slate-400 font-bold tracking-wider uppercase">Calculating Score...</p>
+              </div>
+            ) : reportCardData ? (
+              <div className="flex-1 overflow-y-auto p-5 space-y-4">
+                
+                {/* Score & Verdict Banner */}
+                {reportCardData.notEnoughHistory ? (
+                  <div className="bg-[#0f172a]/60 border border-slate-700 rounded-2xl p-5 text-center space-y-2">
+                    <BarChart2 className="mx-auto text-slate-400" size={32} />
+                    <span className="text-sm font-black text-slate-200 block uppercase">Not enough history yet</span>
+                    <p className="text-[10px] text-slate-400 font-semibold leading-relaxed">
+                      Staff has less than 30 days of record history or fewer than 15 attendance logs. A performance score cannot be generated.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="bg-[#0f172a]/60 border border-slate-700 rounded-2xl p-5 flex items-center justify-between gap-4">
+                    <div className="space-y-1.5 text-left flex-1">
+                      <div className="flex items-center space-x-2">
+                        {reportCardData.verdict === 'reliable' ? (
+                          <span className="text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded">🟢 Reliable</span>
+                        ) : reportCardData.verdict === 'watch' ? (
+                          <span className="text-amber-400 bg-amber-500/10 border border-amber-500/20 text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded">🟡 Watch</span>
+                        ) : (
+                          <span className="text-red-400 bg-red-500/10 border border-red-500/20 text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded">🔴 Habitual Concern</span>
+                        )}
+
+                        <span className="flex items-center text-[10px] font-black text-slate-400 uppercase tracking-wide">
+                          {reportCardData.trend === 'improving' ? (
+                            <span className="text-emerald-400 flex items-center gap-0.5"><TrendingUp size={12} /> Improving</span>
+                          ) : reportCardData.trend === 'declining' ? (
+                            <span className="text-red-400 flex items-center gap-0.5"><TrendingDown size={12} /> Declining</span>
+                          ) : (
+                            <span className="text-slate-450">→ Stable</span>
+                          )}
+                        </span>
+                      </div>
+                      <p className="text-xs font-bold text-slate-100">{reportCardData.reason}</p>
+                    </div>
+
+                    {/* Score Circle */}
+                    <div className="flex-shrink-0 w-16 h-16 rounded-full border-4 border-slate-700 bg-slate-900 flex flex-col items-center justify-center">
+                      <span className="text-lg font-black text-white leading-none">{reportCardData.score}</span>
+                      <span className="text-[8px] font-bold text-slate-400 uppercase tracking-wider mt-0.5">Score</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* 4 Metric Blocks */}
+                <div className="space-y-2">
+                  {/* Metric: Attendance */}
+                  <div className="border border-slate-700/60 rounded-xl overflow-hidden bg-slate-800/40">
+                    <button
+                      type="button"
+                      onClick={() => setExpandedMetric(expandedMetric === 'attendance' ? null : 'attendance')}
+                      className="w-full p-3.5 flex justify-between items-center text-xs font-bold hover:bg-slate-800/80 transition-colors text-left cursor-pointer"
+                    >
+                      <div className="flex items-center space-x-2">
+                        <Calendar className="text-blue-400" size={16} />
+                        <span className="text-slate-200">📅 Attendance</span>
+                      </div>
+                      <div className="flex items-center space-x-1.5 text-[10px] text-slate-400 font-extrabold uppercase">
+                        <span>{reportCardData.metrics.attendance.overall}% Overall</span>
+                        {expandedMetric === 'attendance' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                      </div>
+                    </button>
+                    {expandedMetric === 'attendance' && (
+                      <div className="px-4 pb-4 pt-1 border-t border-slate-700/50 space-y-2.5 text-left text-[11px] font-semibold text-slate-300">
+                        <div className="flex justify-between items-center py-1">
+                          <span>Current Clean Streak:</span>
+                          <span className="text-emerald-400 font-extrabold">{reportCardData.metrics.attendance.cleanStreak} Days</span>
+                        </div>
+                        <div className="space-y-1.5">
+                          <span className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Recent Logs</span>
+                          {reportCardData.metrics.attendance.history.length === 0 ? (
+                            <span className="text-[10px] text-slate-500 italic block">No attendance recorded.</span>
+                          ) : (
+                            <div className="grid grid-cols-5 gap-1 pt-1">
+                              {reportCardData.metrics.attendance.history.slice(0, 10).map((h: any, idx: number) => (
+                                <div key={idx} className={`p-1 text-[9px] font-black text-center rounded border ${
+                                  h.status === 'present' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' :
+                                  h.status === 'late' ? 'bg-amber-500/10 border-amber-500/20 text-amber-400' :
+                                  'bg-red-500/10 border-red-500/20 text-red-400'
+                                }`}>
+                                  {h.status.substring(0, 3).toUpperCase()}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Metric: Punctuality */}
+                  <div className="border border-slate-700/60 rounded-xl overflow-hidden bg-slate-800/40">
+                    <button
+                      type="button"
+                      onClick={() => setExpandedMetric(expandedMetric === 'punctuality' ? null : 'punctuality')}
+                      className="w-full p-3.5 flex justify-between items-center text-xs font-bold hover:bg-slate-800/80 transition-colors text-left cursor-pointer"
+                    >
+                      <div className="flex items-center space-x-2">
+                        <Clock className="text-amber-400" size={16} />
+                        <span className="text-slate-200">⏰ Punctuality</span>
+                      </div>
+                      <div className="flex items-center space-x-1.5 text-[10px] text-slate-400 font-extrabold uppercase">
+                        <span>{reportCardData.metrics.punctuality.lifetimeLates} Lates</span>
+                        {expandedMetric === 'punctuality' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                      </div>
+                    </button>
+                    {expandedMetric === 'punctuality' && (
+                      <div className="px-4 pb-4 pt-1 border-t border-slate-700/50 space-y-2 text-left text-[11px] font-semibold text-slate-300">
+                        <div className="flex justify-between items-center py-1">
+                          <span>Days since last late check-in:</span>
+                          <span className="text-amber-400 font-extrabold">
+                            {typeof reportCardData.metrics.punctuality.daysSinceLastLate === 'number'
+                              ? `${reportCardData.metrics.punctuality.daysSinceLastLate} Days`
+                              : reportCardData.metrics.punctuality.daysSinceLastLate}
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Metric: Fines */}
+                  <div className="border border-slate-700/60 rounded-xl overflow-hidden bg-slate-800/40">
+                    <button
+                      type="button"
+                      onClick={() => setExpandedMetric(expandedMetric === 'fines' ? null : 'fines')}
+                      className="w-full p-3.5 flex justify-between items-center text-xs font-bold hover:bg-slate-800/80 transition-colors text-left cursor-pointer"
+                    >
+                      <div className="flex items-center space-x-2">
+                        <DollarSign className="text-red-400" size={16} />
+                        <span className="text-slate-200">💰 Fines</span>
+                      </div>
+                      <div className="flex items-center space-x-1.5 text-[10px] text-slate-400 font-extrabold uppercase">
+                        <span>₹{reportCardData.metrics.fines.totalAmount} Lifetime</span>
+                        {expandedMetric === 'fines' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                      </div>
+                    </button>
+                    {expandedMetric === 'fines' && (
+                      <div className="px-4 pb-4 pt-1 border-t border-slate-700/50 space-y-2.5 text-left text-[11px] font-semibold text-slate-300">
+                        <div className="flex justify-between items-center py-1">
+                          <span>Total Fines Incurred:</span>
+                          <span className="font-extrabold text-red-400">{reportCardData.metrics.fines.count} Fines</span>
+                        </div>
+                        <div className="space-y-1.5">
+                          <span className="text-[9px] font-black uppercase text-slate-400 tracking-wider">Fines List</span>
+                          {reportCardData.metrics.fines.history.length === 0 ? (
+                            <span className="text-[10px] text-slate-500 italic block">No fines recorded.</span>
+                          ) : (
+                            <div className="space-y-1 max-h-[120px] overflow-y-auto pr-1">
+                              {reportCardData.metrics.fines.history.map((f: any, idx: number) => (
+                                <div key={idx} className="flex justify-between items-center text-[10px] bg-[#0f172a]/60 p-1.5 rounded border border-slate-700/40">
+                                  <span className="truncate max-w-[200px] text-slate-300">
+                                    {f.reason || 'Late check-in fine'}
+                                  </span>
+                                  <span className="text-red-400 font-extrabold">₹{f.fine_amount || f.amount}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Metric: Recognition */}
+                  <div className="border border-slate-700/60 rounded-xl overflow-hidden bg-slate-800/40">
+                    <button
+                      type="button"
+                      onClick={() => setExpandedMetric(expandedMetric === 'recognition' ? null : 'recognition')}
+                      className="w-full p-3.5 flex justify-between items-center text-xs font-bold hover:bg-slate-800/80 transition-colors text-left cursor-pointer"
+                    >
+                      <div className="flex items-center space-x-2">
+                        <Star className="text-yellow-400" size={16} />
+                        <span className="text-slate-200">⭐ Recognition</span>
+                      </div>
+                      <div className="flex items-center space-x-1.5 text-[10px] text-slate-400 font-extrabold uppercase">
+                        <span>0 Positive Markers</span>
+                        {expandedMetric === 'recognition' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                      </div>
+                    </button>
+                    {expandedMetric === 'recognition' && (
+                      <div className="px-4 pb-4 pt-1 border-t border-slate-700/50 text-left text-[11px] font-semibold text-slate-450 italic">
+                        No active recognition system markers configured yet.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Bottom Escalation History */}
+                {reportCardData.metrics.alerts.history.length > 0 && (
+                  <div className="pt-4 border-t border-slate-700/50 space-y-2">
+                    <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider block text-left">
+                      🚨 Escalation History ({reportCardData.metrics.alerts.thisYearCount} alerts this year)
+                    </span>
+                    <div className="space-y-1.5">
+                      {reportCardData.metrics.alerts.history.map((a: any) => {
+                        let badgeColor = 'text-slate-400 bg-slate-450/10 border-slate-400/20';
+                        if (a.escalation_level === 'habitual') badgeColor = 'text-red-400 bg-red-400/10 border-red-400/20';
+                        else if (a.escalation_level === 'repeat') badgeColor = 'text-amber-400 bg-amber-400/10 border-amber-400/20';
+
+                        return (
+                          <div key={a.id} className="flex justify-between items-center text-[10px] bg-[#0f172a]/60 p-2 rounded-xl border border-slate-700/50">
+                            <div className="text-left">
+                              <span className="font-bold text-slate-200 block">{a.trigger_summary}</span>
+                              <span className="text-[8px] text-slate-500 mt-0.5 block">{new Date(a.flagged_at).toLocaleDateString()}</span>
+                            </div>
+                            <div className="flex gap-1">
+                              <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded border ${badgeColor}`}>
+                                {a.escalation_level}
+                              </span>
+                              <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded border ${
+                                a.resolved ? 'text-emerald-400 bg-emerald-450/10 border-emerald-400/20' : 'text-rose-400 bg-rose-450/10 border-rose-400/20'
+                              }`}>
+                                {a.resolved ? 'Resolved' : 'Active'}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+              </div>
+            ) : null}
+
+            {/* Sticky Footer */}
+            <div className="p-4 border-t border-slate-800 bg-[#0f172a]/40 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setReportCardModalOpen(false)}
+                className="bg-slate-700 hover:bg-slate-650 text-white font-extrabold text-xs uppercase px-5 py-2.5 rounded-xl cursor-pointer transition-all shadow-sm active:scale-95"
+              >
+                Close
               </button>
             </div>
           </div>
