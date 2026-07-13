@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
-import { createAuditLog } from '@/lib/audit';
+import { createAuditLog, writeAuditLog } from '@/lib/audit';
 import { Search, Plus, Trash2, Edit2, Eye, EyeOff, Lock, X, AlertTriangle, Users, AlertCircle, RefreshCw, Cake, Download, Upload, Check, Phone, FileText } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import * as XLSX from 'xlsx';
@@ -655,6 +655,42 @@ export default function StaffPage() {
       if (updateErr) throw updateErr;
 
       if (oldStaff) {
+        const salaryChanged = Number(oldStaff.monthly_salary) !== Number(monthly_salary);
+        const shiftChanged = oldStaff.shift_id !== (pay_type === 'hourly' ? null : (shift_id || null));
+        const branchChanged = oldStaff.branch_id !== branch_id;
+        const otThresholdChanged = Number(oldStaff.ot_threshold_minutes) !== (Number(ot_threshold_minutes) || 30);
+
+        if (salaryChanged || shiftChanged || branchChanged || otThresholdChanged) {
+          const oldVals: string[] = [];
+          const newVals: string[] = [];
+          
+          if (salaryChanged) {
+            oldVals.push(`Salary: ₹${oldStaff.monthly_salary}`);
+            newVals.push(`Salary: ₹${monthly_salary}`);
+          }
+          if (shiftChanged) {
+            oldVals.push(`Shift ID: ${oldStaff.shift_id || 'none'}`);
+            newVals.push(`Shift ID: ${pay_type === 'hourly' ? 'none' : (shift_id || 'none')}`);
+          }
+          if (branchChanged) {
+            oldVals.push(`Branch ID: ${oldStaff.branch_id}`);
+            newVals.push(`Branch ID: ${branch_id}`);
+          }
+          if (otThresholdChanged) {
+            oldVals.push(`OT Threshold: ${oldStaff.ot_threshold_minutes || 30}m`);
+            newVals.push(`OT Threshold: ${ot_threshold_minutes || 30}m`);
+          }
+
+          await writeAuditLog({
+            action_type: 'staff_profile_edited',
+            performed_by: user?.email || 'admin',
+            performed_by_role: user?.role || 'admin',
+            staff_id: id,
+            old_value: oldVals.join(', '),
+            new_value: newVals.join(', '),
+            notes: `Staff profile edited for ${oldStaff.name}`
+          });
+        }
         if (oldStaff.shift_id !== shift_id) {
           await createAuditLog({
             action: 'shift_change',

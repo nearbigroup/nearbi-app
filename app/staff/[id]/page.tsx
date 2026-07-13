@@ -35,7 +35,7 @@ import {
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import { formatTime12hr } from '@/lib/utils';
 import { calculateEarlyLeaveDeduction, calculateLateSalaryDeduction, calculateActualHours, calculateOTMinutes, calculateEarlyLeaveMinutes, calculateLateMinutes, calculateMinutesWorked, calculateHourlySalary, getDaysInMonth, calculateSalary } from '@/lib/salary';
-import { createAuditLog } from '@/lib/audit';
+import { createAuditLog, writeAuditLog } from '@/lib/audit';
 
 interface StaffMember {
   id: string;
@@ -384,6 +384,16 @@ export default function StaffProfilePage() {
         performed_by: user.email,
         performed_by_role: user.role,
         reason: `Initiated resignation for ${staff.name} with last working day ${resignationLwd}`
+      });
+
+      // Write to audit_log (singular)
+      await writeAuditLog({
+        action_type: 'resignation_initiated',
+        performed_by: user.email,
+        performed_by_role: user.role,
+        staff_id: staff.id,
+        new_value: `LWD: ${resignationLwd}, Reason: ${resignationReason}`,
+        notes: `Initiated resignation for ${staff.name} with last working day ${resignationLwd}`
       });
 
       showToast('Resignation initiated successfully ✓');
@@ -767,6 +777,17 @@ export default function StaffProfilePage() {
         performed_by: user?.name || user?.email || 'admin',
         performed_by_role: user?.role || 'admin',
         reason: 'Manual attendance edit via staff profile calendar'
+      });
+
+      // Write to audit_log (singular)
+      await writeAuditLog({
+        action_type: 'attendance_edited',
+        performed_by: user?.email || 'admin',
+        performed_by_role: user?.role || 'admin',
+        staff_id: staff.id,
+        old_value: `Check-in: ${oldRecord?.check_in_time || 'none'}, Check-out: ${oldRecord?.check_out_time || 'none'}`,
+        new_value: `Check-in: ${finalCheckIn || 'none'}, Check-out: ${finalCheckOut || 'none'}`,
+        notes: `Attendance edited on staff profile page. Day type: ${finalDayType}`
       });
 
       showToast('Attendance saved ✓');

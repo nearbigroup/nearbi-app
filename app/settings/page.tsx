@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase';
 import bcrypt from 'bcryptjs';
 import { useRouter } from 'next/navigation';
 import { Lock, Plus, Trash2, CheckCircle2, Circle, Search, X } from 'lucide-react';
+import { writeAuditLog } from '@/lib/audit';
 import { calculateLateMinutes } from '@/lib/salary';
 
 interface FineSettings {
@@ -324,6 +325,18 @@ export default function SettingsPage() {
 
       if (error) throw error;
 
+      let details = `Changed email for role ${editingLogin.display_name}`;
+      if (editPassword.trim()) {
+        details += ` and updated password`;
+      }
+      await writeAuditLog({
+        action_type: 'login_credentials_changed',
+        performed_by: user?.email || 'admin',
+        performed_by_role: user?.role || 'admin',
+        target_description: editingLogin.display_name,
+        notes: details
+      });
+
       showToast(`Login updated for ${editingLogin.display_name} ✓`);
       setShowEditLoginModal(false);
       loadCredentials();
@@ -390,8 +403,8 @@ export default function SettingsPage() {
 
   const handleToggleBlockUser = async (email: string, role: string) => {
     const targetEmail = email.toLowerCase().trim();
-    if (targetEmail === 'adminnearbi@gmail.com') {
-      alert("Cannot block the primary owner account.");
+    if (targetEmail === 'adminnearbi@gmail.com' || role === 'admin') {
+      alert("Cannot block the primary owner or admin account.");
       return;
     }
     if (user?.email?.toLowerCase().trim() === targetEmail) {
@@ -415,6 +428,16 @@ export default function SettingsPage() {
         .upsert(payload, { onConflict: 'user_email' });
 
       if (error) throw error;
+
+      await writeAuditLog({
+        action_type: 'permission_changed',
+        performed_by: user?.email || 'admin',
+        performed_by_role: user?.role || 'admin',
+        target_description: `Toggle login access for ${targetEmail} (${role})`,
+        old_value: isCurrentlyBlocked ? 'off' : 'on',
+        new_value: !isCurrentlyBlocked ? 'off' : 'on',
+        notes: `${isCurrentlyBlocked ? 'Unblocked' : 'Blocked'} user login access`
+      });
 
       // Update local storage backup
       const blockedJson = localStorage.getItem('nearbi_blocked_users');
@@ -1729,8 +1752,8 @@ export default function SettingsPage() {
             </div>
           )}
 
-          {/* Credentials & Access Manager Section (Admin Only) */}
-          {user?.role === 'admin' && (
+          {/* Credentials & Access Manager Section (Admin/Ops Manager) */}
+          {(user?.role === 'admin' || user?.role === 'ops_manager') && (
             <div className="space-y-4 pt-6">
               <div>
                 <h2 className="text-[#1A1A1A] font-extrabold text-sm tracking-wider uppercase">

@@ -7,7 +7,7 @@ import { calculateSalary, calculateHourlySalary, calculateMinutesWorked } from '
 import { Staff, SalaryConfirmation } from './types';
 import { formatCurrency, getCurrentMonthStr, formatMonthDisplay } from './utils';
 import { Check, Search, AlertCircle, RefreshCw } from 'lucide-react';
-import { createAuditLog } from '@/lib/audit';
+import { createAuditLog, writeAuditLog } from '@/lib/audit';
 import SpecialFinesSection from './SpecialFinesSection';
 
 export default function BulkConfirmTab({ 
@@ -404,6 +404,19 @@ export default function BulkConfirmTab({
                 console.error('Failed to insert salary confirmation for staff ID:', item.staff_id, 'Error details:', error);
                 throw error;
               }
+
+              // Log salary confirmation to audit_log (singular)
+              const s = staffList.find(x => x.id === item.staff_id);
+              const bd = salaryData[item.staff_id];
+              await writeAuditLog({
+                action_type: 'salary_confirmed',
+                performed_by: user.email,
+                performed_by_role: user.role || 'admin',
+                staff_id: item.staff_id,
+                old_value: bd ? bd.net_salary.toString() : '0',
+                new_value: item.net_salary.toString(),
+                notes: `Salary confirmed for ${s?.name || 'Staff'} for ${formatMonthDisplay(month)}: Net ₹${item.net_salary.toLocaleString()}`
+              });
               
               currentCount++;
               setBulkProgress({ current: currentCount, total: payload.length });
@@ -489,6 +502,18 @@ export default function BulkConfirmTab({
         .eq('waived', false);
         
       if (error) throw error;
+      
+      for (const fine of pendingFines) {
+        await writeAuditLog({
+          action_type: 'fine_approved',
+          performed_by: user.email,
+          performed_by_role: user.role || 'admin',
+          staff_id: fine.staff_id,
+          old_value: 'pending',
+          new_value: 'confirmed',
+          notes: `Late fine ₹${fine.fine_amount} confirmed via bulk confirmation`
+        });
+      }
       
       await createAuditLog({
         action: 'bulk_confirm_fines',

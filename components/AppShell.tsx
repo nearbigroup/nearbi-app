@@ -15,7 +15,8 @@ import {
   Bell,
   LogOut,
   X,
-  UserMinus
+  UserMinus,
+  History
 } from 'lucide-react';
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
@@ -143,6 +144,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     ...(!isStaffExec ? [{ label: 'Salary', path: '/salary', icon: <Wallet size={22} strokeWidth={1.5} /> }] : []),
     { label: 'Approvals', path: '/approvals', icon: <CheckSquare size={22} strokeWidth={1.5} /> },
     ...(showResignations ? [{ label: 'Resign', path: '/resignations', icon: <UserMinus size={22} strokeWidth={1.5} /> }] : []),
+    ...(user.role === 'admin' ? [{ label: 'History', path: '/audit-history', icon: <History size={22} strokeWidth={1.5} /> }] : []),
   ];
 
   const getBranchLabel = () => {

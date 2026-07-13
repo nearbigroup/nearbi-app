@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
-import { createAuditLog } from '@/lib/audit';
+import { createAuditLog, writeAuditLog } from '@/lib/audit';
 import { Check, X, RefreshCw, CheckSquare, Edit2 } from 'lucide-react';
 import { formatTime12hr } from '@/lib/utils';
 import { autoCloseCheckouts } from '@/lib/salary';
@@ -336,6 +336,19 @@ export default function ApprovalsPage() {
         }
       }
 
+      if (adj.type === 'ot') {
+        const hasBeenEdited = adj.original_ot_minutes !== undefined && adj.original_ot_minutes !== null && adj.original_ot_minutes !== adj.minutes;
+        await writeAuditLog({
+          action_type: action === 'approved' ? 'ot_approved' : 'ot_rejected',
+          performed_by: user?.email || 'admin',
+          performed_by_role: user?.role || 'admin',
+          staff_id: adj.staff_id,
+          old_value: hasBeenEdited ? adj.original_ot_minutes?.toString() : null,
+          new_value: hasBeenEdited ? adj.minutes.toString() : null,
+          notes: `OT adjustment of ${adj.minutes} minutes was ${action}. Date: ${adj.date}`
+        });
+      }
+
       await createAuditLog({
         action: action === 'approved' ? 'approve_adjustment' : 'reject_adjustment',
         table_name: 'attendance_adjustments',
@@ -529,6 +542,19 @@ export default function ApprovalsPage() {
           console.error(e);
         }
 
+        if (adj.type === 'ot') {
+          const hasBeenEdited = adj.original_ot_minutes !== undefined && adj.original_ot_minutes !== null && adj.original_ot_minutes !== adj.minutes;
+          await writeAuditLog({
+            action_type: action === 'approved' ? 'ot_approved' : 'ot_rejected',
+            performed_by: user?.email || 'admin',
+            performed_by_role: user?.role || 'admin',
+            staff_id: adj.staff_id,
+            old_value: hasBeenEdited ? adj.original_ot_minutes?.toString() : null,
+            new_value: hasBeenEdited ? adj.minutes.toString() : null,
+            notes: `Bulk: OT adjustment of ${adj.minutes} minutes was ${action}. Date: ${adj.date}`
+          });
+        }
+
         currentCount++;
         setBulkProgress({ current: currentCount, total: selectedCount });
       }
@@ -595,6 +621,16 @@ export default function ApprovalsPage() {
         } catch (e) {
           console.error(e);
         }
+
+        await writeAuditLog({
+          action_type: action === 'confirmed' ? 'fine_approved' : 'fine_rejected',
+          performed_by: user?.email || 'admin',
+          performed_by_role: user?.role || 'admin',
+          staff_id: fine.staff_id,
+          old_value: 'pending',
+          new_value: action === 'confirmed' ? 'confirmed' : 'waived',
+          notes: action === 'waived' ? `Bulk: Late fine ₹${fine.fine_amount} waived. Reason: ${waiverReason}` : `Bulk: Late fine ₹${fine.fine_amount} confirmed`
+        });
 
         currentCount++;
         setBulkProgress({ current: currentCount, total: selectedCount });
@@ -675,6 +711,16 @@ export default function ApprovalsPage() {
       } catch (e) {
         console.error('Silent insert wall event failed:', e);
       }
+
+      await writeAuditLog({
+        action_type: action === 'confirmed' ? 'fine_approved' : 'fine_rejected',
+        performed_by: user?.email || 'admin',
+        performed_by_role: user?.role || 'admin',
+        staff_id: fine.staff_id,
+        old_value: 'pending',
+        new_value: action === 'confirmed' ? 'confirmed' : 'waived',
+        notes: action === 'waived' ? `Late fine ₹${fine.fine_amount} waived. Reason: ${waiverReason}` : `Late fine ₹${fine.fine_amount} confirmed`
+      });
 
       await createAuditLog({
         action: action === 'waived' ? 'waive_fine' : 'confirm_fine',

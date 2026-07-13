@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { calculateSalary } from '@/lib/salary';
 import { jsPDF } from 'jspdf';
-import { createAuditLog } from '@/lib/audit';
+import { createAuditLog, writeAuditLog } from '@/lib/audit';
 
 interface ResignationDetail {
   id: string;
@@ -340,6 +340,15 @@ export default function ResignationDetailPage() {
 
       if (error) throw error;
 
+      await writeAuditLog({
+        action_type: 'resignation_settled',
+        performed_by: user.email,
+        performed_by_role: user.role,
+        staff_id: data.staff_id,
+        new_value: `Settlement Amount: ₹${settlementResult.netSalary}`,
+        notes: `Financial clearance completed & settlement amount set`
+      });
+
       showToast('Financial clearance completed ✓');
       loadResignationDetail();
     } catch (err: any) {
@@ -388,6 +397,15 @@ export default function ResignationDetailPage() {
           reason: `Approved resignation clearance for ${data.staff.name}`
         });
       }
+
+      await writeAuditLog({
+        action_type: 'resignation_approved',
+        performed_by: user.email,
+        performed_by_role: user.role,
+        staff_id: data.staff_id,
+        new_value: 'approved',
+        notes: isOverride ? `Cleared resignation via override: "${overrideReason.trim()}"` : `Approved resignation clearance for ${data.staff.name}`
+      });
 
       const { error } = await supabase
         .from('resignations')

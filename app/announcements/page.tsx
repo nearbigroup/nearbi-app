@@ -367,8 +367,8 @@ export default function AnnouncementsPage() {
     return ann.target === 'daily' ? 'Daily branch' : 'Hypermarket branch';
   };
 
-  // Security check: Owner/Ops Manager only
-  const isAuthorized = user?.role === 'admin' || user?.role === 'ops_manager';
+  // Security check: Owner/Ops Manager/HR only
+  const isAuthorized = user?.role === 'admin' || user?.role === 'ops_manager' || user?.role === 'staff_executive';
 
   if (!isAuthorized) {
     return (
@@ -561,7 +561,8 @@ export default function AnnouncementsPage() {
                           <span>Read Receipts</span>
                         </button>
                         {(() => {
-                          const canEditDelete = user?.role === 'ops_manager' && (ann.created_by === user.name || ann.created_by === user.email);
+                          const isCreator = ann.created_by === user?.name || ann.created_by === user?.email;
+                          const canEditDelete = user?.role === 'admin' || user?.role === 'ops_manager' || (user?.role === 'staff_executive' && isCreator);
                           return canEditDelete && (
                             <>
                               <button

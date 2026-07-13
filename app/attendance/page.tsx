@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
-import { createAuditLog } from '@/lib/audit';
+import { createAuditLog, writeAuditLog } from '@/lib/audit';
 import { Clock, RefreshCw, CircleCheck, CircleX, AlertTriangle, X, AlertCircle, Download, Upload, Check, List, LayoutGrid, MoreVertical, Plus, Camera, Flag, User } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import * as XLSX from 'xlsx';
@@ -1029,6 +1029,17 @@ export default function AttendancePage() {
         performed_by: user?.email || 'admin',
         performed_by_role: user?.role || 'admin',
         reason: editReason || (isAddingRecord ? 'Manual attendance addition' : 'Manual attendance update')
+      });
+
+      // Write to audit_log (singular)
+      await writeAuditLog({
+        action_type: 'attendance_edited',
+        performed_by: user?.email || 'admin',
+        performed_by_role: user?.role || 'admin',
+        staff_id: staffId,
+        old_value: `Check-in: ${detailRecord.record?.check_in_time || 'none'}, Check-out: ${detailRecord.record?.check_out_time || 'none'}`,
+        new_value: `Check-in: ${attendanceData.check_in_time || 'none'}, Check-out: ${attendanceData.check_out_time || 'none'}`,
+        notes: `Attendance edited on page /attendance. Reason: ${editReason || 'Manual attendance update'}`
       });
 
       showToast(`Attendance record ${isAddingRecord ? 'added' : 'updated'} successfully.`);
@@ -3278,7 +3289,7 @@ export default function AttendancePage() {
 
           {/* Bottom actions bar */}
           <div className="flex flex-col items-center space-y-4 pb-4 z-10 w-full max-w-md mx-auto" onClick={(e) => e.stopPropagation()}>
-            {selectedPhoto.attendanceId && user?.role === 'ops_manager' && (
+            {selectedPhoto.attendanceId && (user?.role === 'admin' || user?.role === 'ops_manager') && (
               <div className="w-full bg-white/10 backdrop-blur border border-white/20 rounded-[14px] p-4 text-white text-xs space-y-3">
                 {selectedPhoto.photo_flagged ? (
                   <div className="space-y-2 text-left">
@@ -3331,7 +3342,7 @@ export default function AttendancePage() {
             )}
 
             <div className="flex justify-center gap-3 w-full">
-              {user?.role === 'ops_manager' && (
+              {(user?.role === 'admin' || user?.role === 'ops_manager') && (
                 <button
                   type="button"
                   onClick={async () => {
