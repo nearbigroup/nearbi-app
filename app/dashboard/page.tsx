@@ -805,12 +805,22 @@ export default function DashboardPage() {
           <h1 className="text-[#1A1A1A] text-2xl font-bold">{getGreeting()} 👋</h1>
         </div>
         {(user?.role === 'admin' || user?.role === 'ops_manager' || user?.role === 'staff_executive') && (
-          <Link
-            href="/announcements"
-            className="bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold px-4 py-2 rounded-xl text-xs active:scale-95 transition-all shadow cursor-pointer text-center flex items-center justify-center"
-          >
-            Announcements Center
-          </Link>
+          <div className="flex gap-2">
+            <Link
+              href="/announcements"
+              className="bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold px-4 py-2 rounded-xl text-xs active:scale-95 transition-all shadow cursor-pointer text-center flex items-center justify-center"
+            >
+              Announcements
+            </Link>
+            {(user.role === 'admin' || user.role === 'ops_manager') && (
+              <Link
+                href="/sop-tasks"
+                className="bg-slate-700 hover:bg-slate-600 text-white font-bold px-4 py-2 rounded-xl text-xs active:scale-95 transition-all shadow cursor-pointer text-center flex items-center justify-center"
+              >
+                SOP Tasks & Roster
+              </Link>
+            )}
+          </div>
         )}
       </div>
 

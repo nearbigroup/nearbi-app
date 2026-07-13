@@ -11,13 +11,14 @@ interface CreateNotificationParams {
     | 'ot_rejected'
     | 'salary_confirmed'
     | 'absent_alert'
-    | 'birthday';
+    | 'birthday'
+    | 'duty_promotion';
   title: string;
   message: string;
   branchId: string | null;
   staffId: string | null;
   relatedId?: string | null;
-  targetRole: 'admin' | 'ops_manager' | 'staff_executive' | 'all';
+  targetRole: 'admin' | 'ops_manager' | 'staff_executive' | 'all' | 'staff';
 }
 
 export async function createNotification(params: CreateNotificationParams) {

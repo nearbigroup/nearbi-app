@@ -16,7 +16,8 @@ import {
   LogOut,
   X,
   UserMinus,
-  History
+  History,
+  ClipboardCheck
 } from 'lucide-react';
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
@@ -145,6 +146,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     { label: 'Approvals', path: '/approvals', icon: <CheckSquare size={22} strokeWidth={1.5} /> },
     ...(showResignations ? [{ label: 'Resign', path: '/resignations', icon: <UserMinus size={22} strokeWidth={1.5} /> }] : []),
     ...(user.role === 'admin' ? [{ label: 'History', path: '/audit-history', icon: <History size={22} strokeWidth={1.5} /> }] : []),
+    ...(user.role === 'admin' || user.role === 'ops_manager' ? [{ label: 'SOP', path: '/sop-tasks', icon: <ClipboardCheck size={22} strokeWidth={1.5} /> }] : []),
   ];
 
   const getBranchLabel = () => {

@@ -738,6 +738,74 @@ export default function KioskPage() {
         console.error('Silent insert wall event failed:', e);
       }
 
+      // SOP cascade check: Primary checked out early
+      try {
+        const dayOfWeek = new Date().getDay();
+        
+        // Find if this staff was Primary for any shift today
+        const { data: rosterEntries } = await supabase
+          .from('duty_roster')
+          .select('*, staff:staff_id(*)')
+          .eq('branch_id', staff.branch_id)
+          .eq('day_of_week', dayOfWeek)
+          .eq('role_type', 'primary')
+          .eq('staff_id', staff.id);
+
+        if (rosterEntries && rosterEntries.length > 0) {
+          // Yes! They were the Primary. Check if they checked out early
+          const shiftEnd = staff.shift?.end_time || staff.shifts?.end_time || '18:00';
+          const [seH, seM] = shiftEnd.split(':').map(Number);
+          const [coH, coM] = actualOut.split(':').map(Number);
+          
+          if ((coH * 60 + coM) < (seH * 60 + seM)) {
+            // Checked out early! Find the Backup for this shift
+            for (const primaryEntry of rosterEntries) {
+              const { data: backupEntries } = await supabase
+                .from('duty_roster')
+                .select('*')
+                .eq('branch_id', staff.branch_id)
+                .eq('day_of_week', dayOfWeek)
+                .eq('shift_window', primaryEntry.shift_window)
+                .eq('role_type', 'backup')
+                .eq('active', true);
+
+              if (backupEntries && backupEntries.length > 0) {
+                const backupStaffId = backupEntries[0].staff_id;
+                
+                // Create a notification for the Backup staff member
+                await createNotification({
+                  type: 'duty_promotion',
+                  title: '🛡️ Store Guardian Promotion',
+                  message: `Primary Guardian (${staff.name}) checked out early. You are now promoted to Active Store Guardian for ${primaryEntry.shift_window} shift.`,
+                  branchId: staff.branch_id,
+                  staffId: backupStaffId,
+                  relatedId: todayStr,
+                  targetRole: 'staff'
+                });
+
+                // Write audit log of handoff/promotion
+                await supabase.from('audit_log').insert({
+                  action_type: 'duty_handoff',
+                  performed_by: 'System (Kiosk)',
+                  performed_by_role: 'system',
+                  staff_id: staff.id,
+                  notes: JSON.stringify({
+                    branch_id: staff.branch_id,
+                    shift_window: primaryEntry.shift_window,
+                    from_staff_id: staff.id,
+                    to_staff_id: backupStaffId,
+                    reason: 'Early checkout auto-cascade',
+                    timestamp: new Date().toISOString()
+                  })
+                });
+              }
+            }
+          }
+        }
+      } catch (sopErr) {
+        console.error('Kiosk SOP cascade checkout hook failed:', sopErr);
+      }
+
       // Create OT adjustments and notifications if OT is > 0
       if (otMins > 0 && !staff.is_trial) {
         await supabase.from('attendance_adjustments').insert({

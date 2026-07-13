@@ -3,9 +3,31 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
-import { Calendar, User, Clock, AlertTriangle, CheckCircle, ChevronRight, Award, Megaphone, Bell, Sparkles, X, Info, Coins } from 'lucide-react';
+import { 
+  Calendar, 
+  User, 
+  Clock, 
+  AlertTriangle, 
+  CheckCircle, 
+  ChevronRight, 
+  Award, 
+  Megaphone, 
+  Bell, 
+  Sparkles, 
+  X, 
+  Info, 
+  Coins,
+  Shield,
+  Camera,
+  Check,
+  FileText,
+  AlertCircle,
+  Lock,
+  RefreshCw
+} from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { formatTime12hr } from '@/lib/utils';
+import { getActiveDutyInfo, handOffDuty, checkAndMarkMissedTasks } from '@/lib/sop-logic';
 
 interface Announcement {
   id: string;
@@ -34,12 +56,42 @@ export default function StaffHomePage() {
   const [dobInput, setDobInput] = useState('');
   const [savingProfile, setSavingProfile] = useState(false);
 
+  // SOP State variables
+  const [dutyStatus, setDutyStatus] = useState<any>(null);
+  const [activeShiftWindow, setActiveShiftWindow] = useState<'opening' | 'closing' | null>(null);
+  const [isActiveGuardian, setIsActiveGuardian] = useState(false);
+  const [isDeputyGuardian, setIsDeputyGuardian] = useState(false);
+  const [sopTasks, setSopTasks] = useState<any[]>([]);
+  const [completions, setCompletions] = useState<Record<string, any>>({});
+  const [missedTasks, setMissedTasks] = useState<any[]>([]);
+  const [handoverNotes, setHandoverNotes] = useState<any[]>([]);
+  const [overrideBanner, setOverrideBanner] = useState<string | null>(null);
+  const [uploadingTaskId, setUploadingTaskId] = useState<string | null>(null);
+  
+  // Close store modal states
+  const [showCloseStoreModal, setShowCloseStoreModal] = useState(false);
+  const [isOverrideTime, setIsOverrideTime] = useState(false);
+  const [overrideTime, setOverrideTime] = useState('');
+  const [overrideReason, setOverrideReason] = useState('');
+  const [handoverCategory, setHandoverCategory] = useState<'maintenance' | 'stock' | 'customer_staff' | 'summary'>('summary');
+  const [handoverText, setHandoverText] = useState('');
+  const [handoverPhoto, setHandoverPhoto] = useState<File | null>(null);
+  const [submittingClose, setSubmittingClose] = useState(false);
+
+  // Toast
+  const [toastMsg, setToastMsg] = useState('');
+  const showToast = (msg: string) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(''), 3000);
+  };
+
   useEffect(() => {
     if (!user || !user.staffId) return;
 
     const fetchData = async () => {
       try {
         const now = new Date();
+        const todayStr = now.toISOString().split('T')[0];
         const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
         const year = parseInt(currentMonth.split('-')[0]);
         const monthNum = parseInt(currentMonth.split('-')[1]);
@@ -91,7 +143,6 @@ export default function StaffHomePage() {
         ).length || 0;
         const daysPresent = daysWorked;
         const daysLate = attData?.filter(a => a.status === 'late').length || 0;
-        const todayStr = new Date().toISOString().split('T')[0];
 
         const trueAbsentDays = attData?.filter(
           r => r.date <= todayStr &&
@@ -185,6 +236,12 @@ export default function StaffHomePage() {
           setTomorrowShift('No shift scheduled');
         }
 
+        // SOP Initialization
+        if (sData.branch_id) {
+          await checkAndMarkMissedTasks(sData.branch_id, todayStr);
+          await loadTodayDuty(sData.branch_id, user.staffId!);
+        }
+
       } catch (err) {
         console.error('Error fetching staff home data:', err);
       } finally {
@@ -194,6 +251,332 @@ export default function StaffHomePage() {
 
     fetchData();
   }, [user]);
+
+  const loadTodayDuty = async (branchId: string, staffId: string) => {
+    try {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const dutyInfo = await getActiveDutyInfo(branchId, todayStr);
+      setDutyStatus(dutyInfo);
+      
+      let activeShift: 'opening' | 'closing' | null = null;
+      let activeG = false;
+      let backupG = false;
+      
+      if (dutyInfo.opening.active?.id === staffId) {
+        activeShift = 'opening';
+        activeG = true;
+      } else if (dutyInfo.opening.backup?.id === staffId && dutyInfo.opening.status !== 'backup_promoted') {
+        backupG = true;
+      }
+      
+      if (dutyInfo.closing.active?.id === staffId) {
+        activeShift = 'closing';
+        activeG = true;
+      } else if (dutyInfo.closing.backup?.id === staffId && dutyInfo.closing.status !== 'backup_promoted') {
+        backupG = true;
+      }
+      
+      setIsActiveGuardian(activeG);
+      setIsDeputyGuardian(backupG);
+      setActiveShiftWindow(activeShift);
+      
+      if (activeG && activeShift) {
+        // Fetch tasks
+        const { data: tasksData } = await supabase
+          .from('sop_tasks')
+          .select('*')
+          .eq('branch_id', branchId)
+          .eq('active', true)
+          .order('display_order', { ascending: true });
+          
+        setSopTasks(tasksData || []);
+        
+        // Fetch completions
+        const { data: compData } = await supabase
+          .from('daily_task_completion')
+          .select('*')
+          .eq('branch_id', branchId)
+          .eq('task_date', todayStr);
+          
+        const compMap: Record<string, any> = {};
+        compData?.forEach(c => {
+          compMap[c.task_id] = c;
+        });
+        setCompletions(compMap);
+        
+        // Fetch missed tasks
+        const { data: missedData } = await supabase
+          .from('daily_task_completion')
+          .select('*, task:task_id(*)')
+          .eq('branch_id', branchId)
+          .eq('status', 'missed')
+          .order('task_date', { ascending: false });
+        
+        setMissedTasks(missedData || []);
+        
+        // Fetch handover notes
+        if (activeShift === 'opening') {
+          const { data: notesData } = await supabase
+            .from('handover_notes')
+            .select('*, staff:written_by(name)')
+            .eq('branch_id', branchId)
+            .is('acknowledged_at', null);
+            
+          setHandoverNotes(notesData || []);
+        }
+        
+        // Check for override banner
+        const { data: statusData } = await supabase
+          .from('store_status')
+          .select('*')
+          .eq('branch_id', branchId)
+          .eq('status_date', todayStr)
+          .maybeSingle();
+          
+        if (statusData?.closing_time_override) {
+          setOverrideBanner(`Closing time override today: ${statusData.closing_time_override.slice(0, 5)} - Reason: ${statusData.override_reason || 'N/A'}`);
+        } else {
+          setOverrideBanner(null);
+        }
+      }
+    } catch (err) {
+      console.error('Error loading duty info:', err);
+    }
+  };
+
+  const uploadPhotoFile = async (file: File, path: string): Promise<string | null> => {
+    try {
+      const { data, error } = await supabase.storage
+        .from('attendance-selfies')
+        .upload(path, file, { cacheControl: '3600', upsert: true });
+      if (error) throw error;
+      const { data: { publicUrl } } = supabase.storage
+        .from('attendance-selfies')
+        .getPublicUrl(path);
+      return publicUrl;
+    } catch (e) {
+      console.error('Storage photo upload failed:', e);
+      return null;
+    }
+  };
+
+  const handlePhotoUpload = async (taskId: string, file: File) => {
+    if (!staffInfo) return;
+    try {
+      setUploadingTaskId(taskId);
+      const todayStr = new Date().toISOString().split('T')[0];
+      const fileName = `sop/${staffInfo.id}/${todayStr}_task_${taskId}_${Date.now()}.jpg`;
+      
+      const publicUrl = await uploadPhotoFile(file, fileName);
+      if (!publicUrl) throw new Error('Photo upload failed');
+      
+      const { error: compError } = await supabase
+        .from('daily_task_completion')
+        .upsert({
+          task_id: taskId,
+          branch_id: staffInfo.branch_id,
+          task_date: todayStr,
+          completed_by: staffInfo.id,
+          completed_at: new Date().toISOString(),
+          photo_proof_url: publicUrl,
+          status: 'completed',
+          duty_role: activeShiftWindow
+        }, { onConflict: 'task_id,task_date' });
+        
+      if (compError) throw compError;
+      
+      showToast('Task completed successfully ✓');
+      loadTodayDuty(staffInfo.branch_id, staffInfo.id);
+    } catch (err: any) {
+      console.error(err);
+      alert('Photo upload failed: ' + err.message);
+    } finally {
+      setUploadingTaskId(null);
+    }
+  };
+
+  const handleMarkDoneDirect = async (taskId: string) => {
+    if (!staffInfo) return;
+    try {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const { error } = await supabase
+        .from('daily_task_completion')
+        .upsert({
+          task_id: taskId,
+          branch_id: staffInfo.branch_id,
+          task_date: todayStr,
+          completed_by: staffInfo.id,
+          completed_at: new Date().toISOString(),
+          status: 'completed',
+          duty_role: activeShiftWindow
+        }, { onConflict: 'task_id,task_date' });
+        
+      if (error) throw error;
+      
+      showToast('Task completed ✓');
+      loadTodayDuty(staffInfo.branch_id, staffInfo.id);
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to complete task');
+    }
+  };
+
+  const handleConfirmStoreOpened = async () => {
+    if (!staffInfo) return;
+    try {
+      const todayStr = new Date().toISOString().split('T')[0];
+      const { error } = await supabase
+        .from('store_status')
+        .upsert({
+          branch_id: staffInfo.branch_id,
+          status_date: todayStr,
+          opened_at: new Date().toISOString(),
+          opened_by: staffInfo.id
+        }, { onConflict: 'branch_id,status_date' });
+        
+      if (error) throw error;
+      
+      showToast('Store Opening Confirmed ✓');
+      loadTodayDuty(staffInfo.branch_id, staffInfo.id);
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to open store');
+    }
+  };
+
+  const handleCloseStoreSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!staffInfo) return;
+    setSubmittingClose(true);
+    try {
+      const todayStr = new Date().toISOString().split('T')[0];
+      
+      let photoUrl: string | null = null;
+      if (handoverPhoto) {
+        const pathName = `handover/${staffInfo.id}/${todayStr}_handover_${Date.now()}.jpg`;
+        photoUrl = await uploadPhotoFile(handoverPhoto, pathName);
+      }
+
+      // 1. Save Handover Note if present
+      if (handoverText.trim()) {
+        const { error: noteErr } = await supabase
+          .from('handover_notes')
+          .insert({
+            branch_id: staffInfo.branch_id,
+            note_date: todayStr,
+            category: handoverCategory,
+            note_text: handoverText.trim(),
+            photo_url: photoUrl,
+            written_by: staffInfo.id,
+            resolution_status: 'pending'
+          });
+        if (noteErr) throw noteErr;
+      }
+
+      // 2. Update store status closing fields
+      const { error: statusErr } = await supabase
+        .from('store_status')
+        .upsert({
+          branch_id: staffInfo.branch_id,
+          status_date: todayStr,
+          closed_at: new Date().toISOString(),
+          closed_by: staffInfo.id,
+          closing_time_override: isOverrideTime ? overrideTime : null,
+          override_reason: isOverrideTime ? overrideReason : null
+        }, { onConflict: 'branch_id,status_date' });
+
+      if (statusErr) throw statusErr;
+
+      showToast('Store Closing Confirmed ✓');
+      setShowCloseStoreModal(false);
+      
+      // Reset close form
+      setIsOverrideTime(false);
+      setOverrideTime('');
+      setOverrideReason('');
+      setHandoverText('');
+      setHandoverPhoto(null);
+
+      loadTodayDuty(staffInfo.branch_id, staffInfo.id);
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to close store: ' + err.message);
+    } finally {
+      setSubmittingClose(false);
+    }
+  };
+
+  const handleHandoffDuty = async () => {
+    if (!staffInfo || !dutyStatus || !activeShiftWindow) return;
+    const backupStaff = dutyStatus[activeShiftWindow].backup;
+    if (!backupStaff) {
+      alert('No backup assigned to handoff to.');
+      return;
+    }
+
+    if (!window.confirm(`Are you sure you want to hand off Active Guardian duty to ${backupStaff.name}?`)) {
+      return;
+    }
+
+    try {
+      await handOffDuty(
+        staffInfo.branch_id,
+        activeShiftWindow,
+        staffInfo.id,
+        backupStaff.id,
+        user?.email || 'staff',
+        'staff'
+      );
+      
+      showToast('Duty handed off successfully ✓');
+      loadTodayDuty(staffInfo.branch_id, staffInfo.id);
+    } catch (err) {
+      console.error(err);
+      alert('Failed to hand off duty');
+    }
+  };
+
+  const handleAcknowledgeHandoverNote = async (note: any, action: 'done' | 'still_pending') => {
+    if (!staffInfo) return;
+    try {
+      const todayStr = new Date().toISOString().split('T')[0];
+      
+      // Update original note status
+      const { error } = await supabase
+        .from('handover_notes')
+        .update({
+          acknowledged_by: staffInfo.id,
+          acknowledged_at: new Date().toISOString(),
+          resolution_status: action
+        })
+        .eq('id', note.id);
+        
+      if (error) throw error;
+
+      // If still pending, auto-carry forward by creating a new note
+      if (action === 'still_pending') {
+        const { error: carryError } = await supabase
+          .from('handover_notes')
+          .insert({
+            branch_id: staffInfo.branch_id,
+            note_date: todayStr,
+            category: note.category,
+            note_text: `[CARRIED FORWARD] ${note.note_text}`,
+            photo_url: note.photo_url,
+            written_by: note.written_by,
+            resolution_status: 'still_pending',
+            carried_from: note.id
+          });
+        if (carryError) throw carryError;
+      }
+
+      showToast('Handover note acknowledged ✓');
+      loadTodayDuty(staffInfo.branch_id, staffInfo.id);
+    } catch (err) {
+      console.error(err);
+      alert('Failed to acknowledge note');
+    }
+  };
 
   const handleDismissAnnouncement = async (annId: string) => {
     if (!user?.staffId) return;
@@ -309,7 +692,285 @@ export default function StaffHomePage() {
 
   return (
     <div className="space-y-5 pb-6">
-      
+
+      {/* --- SOP TODAY'S DUTY CARDS --- */}
+      {isDeputyGuardian && activeShiftWindow && (
+        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex items-center justify-between shadow-sm">
+          <div className="flex items-center gap-2">
+            <Shield className="text-slate-400" size={20} />
+            <div>
+              <h4 className="text-xs font-black uppercase tracking-wider text-slate-700">🛡️ Deputy Guardian Today</h4>
+              <p className="text-[10px] text-slate-500 font-bold mt-0.5">
+                {staffInfo?.branch_id === 'daily' ? 'Daily' : 'Hypermarket'} — {activeShiftWindow === 'opening' ? 'Opening Shift' : 'Closing Shift'}
+              </p>
+            </div>
+          </div>
+          <span className="bg-slate-100 text-slate-600 text-[9px] font-black uppercase px-2 py-0.5 rounded border border-slate-200">
+            Backup
+          </span>
+        </div>
+      )}
+
+      {isActiveGuardian && activeShiftWindow && (
+        <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 border border-slate-700 rounded-3xl p-5 text-white shadow-xl space-y-4 relative overflow-hidden animate-in zoom-in-95 duration-200">
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_70%_20%,rgba(255,255,255,0.04),transparent)] pointer-events-none" />
+          
+          {/* Card Header */}
+          <div className="flex justify-between items-start gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-amber-400">
+                <Shield size={18} className="animate-pulse" />
+                <span className="text-[9px] font-black uppercase tracking-widest text-amber-300">Active Store Guardian</span>
+              </div>
+              <h3 className="text-base font-black uppercase tracking-wider">
+                {staffInfo?.branch_id === 'daily' ? 'Daily' : 'Hypermarket'} — {activeShiftWindow === 'opening' ? 'Opening Lock' : 'Closing Lock'}
+              </h3>
+            </div>
+            
+            {/* Hand off button */}
+            {dutyStatus && dutyStatus[activeShiftWindow]?.backup && (
+              <button
+                onClick={handleHandoffDuty}
+                className="bg-white/10 hover:bg-white/20 active:scale-95 text-slate-200 hover:text-white text-[10px] font-black uppercase tracking-wider px-3 py-1.5 rounded-xl border border-white/10 transition-all cursor-pointer"
+              >
+                Hand off Duty
+              </button>
+            )}
+          </div>
+
+          {/* Override caution banner */}
+          {overrideBanner && (
+            <div className="bg-amber-500/20 border border-amber-500/40 text-amber-300 rounded-xl p-3 text-[11px] font-bold leading-normal">
+              {overrideBanner}
+            </div>
+          )}
+
+          {/* Handover notes from last night */}
+          {activeShiftWindow === 'opening' && handoverNotes.length > 0 && (
+            <div className="space-y-2.5">
+              <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                Handover from Last Night ({handoverNotes.length})
+              </h4>
+              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                {handoverNotes.map(note => (
+                  <div key={note.id} className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-2">
+                    <div className="flex justify-between items-start text-[10px]">
+                      <span className="bg-blue-500/20 text-blue-300 border border-blue-500/30 px-2 py-0.5 rounded font-black uppercase tracking-wider">
+                        {note.category?.replace('_', ' ')}
+                      </span>
+                      <span className="text-slate-400 font-semibold">Written by: {note.staff?.name || 'Staff'}</span>
+                    </div>
+                    <p className="text-xs text-slate-200 font-semibold leading-relaxed">{note.note_text}</p>
+                    {note.photo_url && (
+                      <a href={note.photo_url} target="_blank" rel="noreferrer" className="block text-[10px] text-blue-400 font-bold underline">
+                        View Photo Proof
+                      </a>
+                    )}
+                    
+                    {/* Acknowledge actions */}
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        onClick={() => handleAcknowledgeHandoverNote(note, 'done')}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[9px] uppercase tracking-wider px-2.5 py-1 rounded"
+                      >
+                        Acknowledge & Resolve
+                      </button>
+                      <button
+                        onClick={() => handleAcknowledgeHandoverNote(note, 'still_pending')}
+                        className="bg-amber-600 hover:bg-amber-700 text-white font-black text-[9px] uppercase tracking-wider px-2.5 py-1 rounded"
+                      >
+                        Acknowledge & Keep Pending
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Missed tasks carried forward */}
+          {missedTasks.length > 0 && (
+            <div className="space-y-2.5">
+              <h4 className="text-[10px] font-black uppercase tracking-widest text-red-400">
+                Pending from Last Shift ({missedTasks.length})
+              </h4>
+              <div className="space-y-2">
+                {missedTasks.map(item => {
+                  const task = item.task;
+                  if (!task) return null;
+                  return (
+                    <div key={item.id} className="bg-red-500/10 border border-red-500/25 rounded-xl p-3 flex items-center justify-between">
+                      <div className="space-y-0.5">
+                        <span className="text-xs font-bold text-slate-200">{task.task_name}</span>
+                        <span className="block text-[9px] text-red-300 font-bold uppercase">Missed on {item.task_date}</span>
+                      </div>
+                      
+                      {/* Mark completed trigger */}
+                      {task.requires_photo ? (
+                        <div className="relative">
+                          <label className="bg-red-600 hover:bg-red-700 p-2 rounded-xl text-white block cursor-pointer transition-colors">
+                            {uploadingTaskId === task.id ? (
+                              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            ) : (
+                              <Camera size={16} />
+                            )}
+                            <input
+                              type="file"
+                              accept="image/*"
+                              capture="environment"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) handlePhotoUpload(task.id, file);
+                              }}
+                              className="hidden"
+                              disabled={uploadingTaskId !== null}
+                            />
+                          </label>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => handleMarkDoneDirect(task.id)}
+                          className="bg-red-600 hover:bg-red-700 text-white p-2 rounded-xl"
+                        >
+                          <Check size={16} />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Regular Tasks List */}
+          <div className="space-y-2.5">
+            <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+              Shift Checklists Tasks
+            </h4>
+            
+            <div className="space-y-2">
+              {sopTasks
+                .filter(t => t.shift_window === activeShiftWindow || t.shift_window === 'mid_shift')
+                .map(task => {
+                  const comp = completions[task.id];
+                  const isCompleted = comp?.status === 'completed';
+                  
+                  // Check if task window is active/flexible
+                  let isWindowPassed = false;
+                  let isWindowNotStarted = false;
+                  
+                  if (task.time_start || task.time_end) {
+                    const now = new Date();
+                    const currentMins = now.getHours() * 60 + now.getMinutes();
+                    if (task.time_start) {
+                      const [h, m] = task.time_start.split(':').map(Number);
+                      if (currentMins < h * 60 + m) isWindowNotStarted = true;
+                    }
+                    if (task.time_end) {
+                      const [h, m] = task.time_end.split(':').map(Number);
+                      if (currentMins > h * 60 + m) isWindowPassed = true;
+                    }
+                  }
+
+                  const isDisabled = (isWindowPassed || isWindowNotStarted) && !isCompleted;
+                  
+                  return (
+                    <div 
+                      key={task.id} 
+                      className={`bg-white/5 border border-white/10 rounded-xl p-3 flex items-center justify-between transition-all ${
+                        isDisabled ? 'opacity-40 grayscale pointer-events-none' : ''
+                      } ${isCompleted ? 'bg-emerald-500/10 border-emerald-500/20' : ''}`}
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-1.5">
+                          <span className={`text-xs font-bold ${isCompleted ? 'text-emerald-400 line-through' : 'text-slate-100'}`}>
+                            {task.task_name}
+                          </span>
+                          {task.is_critical && (
+                            <span className="bg-red-500/20 text-red-400 border border-red-500/30 text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded">
+                              CRITICAL
+                            </span>
+                          )}
+                        </div>
+                        <span className="block text-[9px] text-slate-400 font-semibold">
+                          Window: {task.time_start ? `${task.time_start.slice(0, 5)} - ${task.time_end?.slice(0, 5)}` : 'Flexible'}
+                        </span>
+                      </div>
+
+                      {/* Completion status or triggers */}
+                      {isCompleted ? (
+                        <div className="flex items-center gap-1 text-emerald-400 text-xs font-bold">
+                          <CheckCircle size={16} />
+                          <span>Done</span>
+                        </div>
+                      ) : task.requires_photo ? (
+                        <div className="relative">
+                          <label className="bg-slate-700 hover:bg-slate-600 active:scale-95 p-2 rounded-xl text-slate-200 block cursor-pointer transition-colors">
+                            {uploadingTaskId === task.id ? (
+                              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            ) : (
+                              <Camera size={16} />
+                            )}
+                            <input
+                              type="file"
+                              accept="image/*"
+                              capture="environment"
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) handlePhotoUpload(task.id, file);
+                              }}
+                              className="hidden"
+                              disabled={uploadingTaskId !== null}
+                            />
+                          </label>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => handleMarkDoneDirect(task.id)}
+                          className="bg-slate-700 hover:bg-slate-600 active:scale-95 text-slate-200 p-2 rounded-xl cursor-pointer"
+                        >
+                          <Check size={16} />
+                        </button>
+                      )}
+
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+
+          {/* Confirm Open / Close Buttons */}
+          <div className="pt-3 border-t border-white/10">
+            {activeShiftWindow === 'opening' ? (
+              <button
+                onClick={handleConfirmStoreOpened}
+                disabled={(() => {
+                  const criticalTasks = sopTasks.filter(t => t.shift_window === 'opening' && t.is_critical);
+                  return !criticalTasks.every(t => completions[t.id]?.status === 'completed');
+                })()}
+                className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-800 disabled:text-slate-500 disabled:opacity-50 text-white font-extrabold text-xs uppercase tracking-wider rounded-xl transition-all shadow-md active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <Check size={16} />
+                <span>Confirm Store Opened</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => setShowCloseStoreModal(true)}
+                disabled={(() => {
+                  const criticalTasks = sopTasks.filter(t => t.shift_window === 'closing' && t.is_critical);
+                  return !criticalTasks.every(t => completions[t.id]?.status === 'completed');
+                })()}
+                className="w-full py-3 bg-red-600 hover:bg-red-700 disabled:bg-slate-800 disabled:text-slate-500 disabled:opacity-50 text-white font-extrabold text-xs uppercase tracking-wider rounded-xl transition-all shadow-md active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
+              >
+                <Lock size={16} />
+                <span>Confirm Store Closed</span>
+              </button>
+            )}
+          </div>
+
+        </div>
+      )}
+
       {/* 1. Announcement Banner at Top (if unread exists) */}
       {featuredAnnouncement && (
         <div className="bg-gradient-to-r from-amber-50 to-amber-100/80 border border-amber-200/60 rounded-2xl p-4 shadow-sm flex items-start justify-between relative overflow-hidden transition-all duration-300 animate-in slide-in-from-top-4">
@@ -596,6 +1257,134 @@ export default function StaffHomePage() {
               </div>
             </form>
           </div>
+        </div>
+      )}
+
+      {/* --- CLOSE STORE MODAL --- */}
+      {showCloseStoreModal && (
+        <div className="fixed inset-0 bg-[#1A1A1A]/60 backdrop-blur-sm z-[20000] flex items-center justify-center p-4">
+          <div className="bg-white border border-[#E8E8E8] rounded-[20px] max-w-sm w-full p-6 shadow-xl space-y-4 animate-in fade-in zoom-in-95 duration-150 text-xs font-semibold text-[#1A1A1A]">
+            <div className="flex justify-between items-center border-b border-[#F0F0F0] pb-3">
+              <h3 className="text-sm font-black uppercase tracking-wider">
+                Store Closing Handover
+              </h3>
+              <button
+                onClick={() => setShowCloseStoreModal(false)}
+                className="text-slate-400 hover:text-[#1A1A1A] text-xs font-bold"
+              >
+                Close
+              </button>
+            </div>
+
+            <form onSubmit={handleCloseStoreSubmit} className="space-y-4">
+              
+              {/* Closing Time Override toggle */}
+              <div className="space-y-2">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input 
+                    type="checkbox"
+                    checked={isOverrideTime}
+                    onChange={e => setIsOverrideTime(e.target.checked)}
+                    className="w-4 h-4 rounded border-gray-300 text-red-600 focus:ring-red-600"
+                  />
+                  <div className="flex flex-col">
+                    <span className="font-bold">Override closing time?</span>
+                    <span className="text-[9px] text-slate-400">Check if actual closing differs from regular shift</span>
+                  </div>
+                </label>
+
+                {isOverrideTime && (
+                  <div className="space-y-3 pt-1 border-l-2 border-red-500 pl-3">
+                    <div>
+                      <label className="block text-[9px] font-black uppercase text-[#999999] tracking-wider mb-1">New Closing Time</label>
+                      <input
+                        type="time"
+                        value={overrideTime}
+                        onChange={e => setOverrideTime(e.target.value)}
+                        className="w-full bg-[#F8F8F8] border border-[#EAEAEA] rounded-xl p-3 focus:outline-none focus:border-slate-500"
+                        required={isOverrideTime}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[9px] font-black uppercase text-[#999999] tracking-wider mb-1">Reason for Override</label>
+                      <textarea
+                        rows={2}
+                        placeholder="e.g. Extended footfalls, inventory audit"
+                        value={overrideReason}
+                        onChange={e => setOverrideReason(e.target.value)}
+                        className="w-full bg-[#F8F8F8] border border-[#EAEAEA] rounded-xl p-3 focus:outline-none focus:border-slate-500 font-semibold"
+                        required={isOverrideTime}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Handover Note category */}
+              <div>
+                <label className="block text-[9px] font-black uppercase text-[#999999] tracking-wider mb-1.5">Handover Category</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {(['maintenance', 'stock', 'customer_staff', 'summary'] as const).map(cat => (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => setHandoverCategory(cat)}
+                      className={`px-2.5 py-1.5 rounded-lg text-[9px] font-black uppercase border transition-all cursor-pointer ${
+                        handoverCategory === cat 
+                          ? 'bg-[#1a1a1a] text-white border-[#1a1a1a]' 
+                          : 'bg-[#f5f5f5] text-slate-500 border-slate-200'
+                      }`}
+                    >
+                      {cat.replace('_', ' ')}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Handover Notes text */}
+              <div>
+                <label className="block text-[9px] font-black uppercase text-[#999999] tracking-wider mb-1">Anything for morning staff?</label>
+                <textarea
+                  rows={3}
+                  placeholder="Include notes about maintenance, supplies or stock issues..."
+                  value={handoverText}
+                  onChange={e => setHandoverText(e.target.value)}
+                  className="w-full bg-[#F8F8F8] border border-[#EAEAEA] rounded-xl p-3 focus:outline-none focus:border-slate-500 font-semibold"
+                />
+              </div>
+
+              {/* Optional Photo Attachment */}
+              <div>
+                <label className="block text-[9px] font-black uppercase text-[#999999] tracking-wider mb-1">Handover Photo (Optional)</label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={e => setHandoverPhoto(e.target.files?.[0] || null)}
+                  className="w-full text-[10px] file:mr-2.5 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-[10px] file:font-black file:uppercase file:bg-slate-100 file:text-slate-700 hover:file:bg-slate-200 cursor-pointer"
+                />
+              </div>
+
+              {/* Submit */}
+              <button
+                type="submit"
+                disabled={submittingClose}
+                className="w-full py-3 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-extrabold rounded-xl transition-all shadow-md active:scale-95 cursor-pointer mt-4 flex items-center justify-center gap-1.5"
+              >
+                {submittingClose ? <RefreshCw size={14} className="animate-spin" /> : <Lock size={14} />}
+                <span>Submit & Close Store</span>
+              </button>
+
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Toast alert display */}
+      {toastMsg && (
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[25000] bg-[#EDF7EF] border border-[#2D7A3A] text-[#2D7A3A] font-bold text-xs px-4 py-2.5 rounded-full shadow-lg flex items-center space-x-1">
+          <CheckCircle size={14} className="text-[#2D7A3A]" />
+          <span>{toastMsg}</span>
         </div>
       )}
 
