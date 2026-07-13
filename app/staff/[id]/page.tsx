@@ -174,7 +174,7 @@ interface SalaryConfirmation {
   hourly_rate?: number;
 }
 
-type TabName = 'attendance' | 'fines' | 'leaves' | 'salary' | 'breaks' | 'notes' | 'profile' | 'swaps';
+type TabName = 'attendance' | 'fines' | 'leaves' | 'salary' | 'breaks' | 'notes' | 'profile' | 'swaps' | 'alerts';
 
 export default function StaffProfilePage() {
   const params = useParams();
@@ -204,6 +204,7 @@ export default function StaffProfilePage() {
   const [breaks, setBreaks] = useState<BreakLog[]>([]);
   const [notes, setNotes] = useState<StaffNote[]>([]);
   const [swapsHistory, setSwapsHistory] = useState<any[]>([]);
+  const [alertsHistory, setAlertsHistory] = useState<any[]>([]);
   const [salaryConfirmations, setSalaryConfirmations] = useState<SalaryConfirmation[]>([]);
   const [perfScore, setPerfScore] = useState<any | null>(null);
 
@@ -1282,6 +1283,14 @@ export default function StaffProfilePage() {
         .or(`requested_by.eq.${id},requested_with.eq.${id}`)
         .order('swap_date', { ascending: false });
       setSwapsHistory(swapsData || []);
+
+      // 5. Staff Alerts History
+      const { data: alertsData } = await supabase
+        .from('staff_alerts')
+        .select('*')
+        .eq('staff_id', id)
+        .order('flagged_at', { ascending: false });
+      setAlertsHistory(alertsData || []);
     } catch (err) {
       console.error('Error fetching logs:', err);
     }
@@ -1932,6 +1941,7 @@ export default function StaffProfilePage() {
           { id: 'salary', label: 'Salary' },
           { id: 'breaks', label: 'Breaks' },
           { id: 'swaps', label: 'Swaps' },
+          { id: 'alerts', label: 'Alerts' },
           { id: 'profile', label: 'Profile' },
           ...(user?.role === 'ops_manager' ? [{ id: 'notes', label: 'Notes' }] : [])
         ].map((tab) => {
@@ -2695,6 +2705,72 @@ export default function StaffProfilePage() {
                         <div className="text-[10px] text-red-300 bg-red-500/5 p-2 rounded-lg border border-red-500/10 mt-1">
                           <span className="font-black uppercase text-[8px] block text-red-400">Rejection Reason:</span>
                           {swap.rejection_reason}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Tab: Critical Staff Alerts History */}
+        {activeTab === 'alerts' && (
+          <div className="space-y-4">
+            <h3 className="text-xs font-extrabold text-[var(--text-secondary)] uppercase tracking-wider">Critical Staff Alerts History</h3>
+            {alertsHistory.length === 0 ? (
+              <p className="text-xs text-[var(--text-muted)] italic p-3 bg-[var(--bg-surface)] rounded-xl border border-[var(--border)] text-center">No pattern alerts generated yet.</p>
+            ) : (
+              <div className="space-y-2.5">
+                {alertsHistory.map(alert => {
+                  let alertTypeLabel = 'Late Arrival Pattern';
+                  if (alert.alert_type === 'fine_pattern') alertTypeLabel = 'Fines Accumulation';
+                  if (alert.alert_type === 'absent_pattern') alertTypeLabel = 'Unapproved Absence Pattern';
+
+                  let statusText = 'Not Sent';
+                  let statusColor = 'text-slate-400 bg-slate-400/10 border-slate-400/20';
+                  if (alert.message_status === 'sent') {
+                    statusText = 'Sent ✓';
+                    statusColor = 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20';
+                  }
+
+                  let levelColor = 'text-amber-500 bg-amber-500/10 border-amber-500/20';
+                  if (alert.escalation_level === 'habitual') {
+                    levelColor = 'text-red-500 bg-red-500/10 border-red-500/20';
+                  } else if (alert.escalation_level === 'normal') {
+                    levelColor = 'text-slate-400 bg-slate-400/10 border-slate-400/20';
+                  }
+
+                  return (
+                    <div key={alert.id} className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-xl p-3.5 space-y-2 relative shadow-sm text-xs font-semibold">
+                      <div className="flex justify-between items-start">
+                        <span className="font-extrabold text-white">{alertTypeLabel}</span>
+                        <span className="text-[9px] font-bold text-[var(--text-muted)] font-mono">
+                          {new Date(alert.flagged_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                        </span>
+                      </div>
+
+                      <p className="text-[10px] text-[var(--text-muted)] font-bold">{alert.trigger_summary}</p>
+
+                      <div className="flex gap-2 pt-1">
+                        <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded border ${levelColor}`}>
+                          {alert.escalation_level}
+                        </span>
+                        <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded border ${statusColor}`}>
+                          {statusText}
+                        </span>
+                        {alert.resolved && (
+                          <span className="text-[8px] font-black uppercase px-2 py-0.5 rounded border text-emerald-500 bg-emerald-500/10 border-emerald-500/20">
+                            Resolved
+                          </span>
+                        )}
+                      </div>
+
+                      {alert.ops_note && (
+                        <div className="text-[10px] text-[var(--text-muted)] bg-white/5 p-2 rounded-lg border border-white/5 mt-1">
+                          <span className="font-black uppercase text-[8px] block text-white/55">Manager Note:</span>
+                          {alert.ops_note}
                         </div>
                       )}
                     </div>

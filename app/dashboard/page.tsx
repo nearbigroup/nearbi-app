@@ -227,6 +227,17 @@ export default function DashboardPage() {
   const [urgentHandovers, setUrgentHandovers] = useState<any[]>([]);
   const [overdueTasks, setOverdueTasks] = useState<any[]>([]);
 
+  // Staff Alerts States
+  const [alerts, setAlerts] = useState<any[]>([]);
+  const [historyAlerts, setHistoryAlerts] = useState<any[]>([]);
+  const [updatingAlertId, setUpdatingAlertId] = useState<string | null>(null);
+  
+  // WhatsApp prefill dialog
+  const [whatsappModalOpen, setWhatsappModalOpen] = useState(false);
+  const [selectedAlert, setSelectedAlert] = useState<any | null>(null);
+  const [selectedTemplate, setSelectedTemplate] = useState('late');
+  const [customMsgText, setCustomMsgText] = useState('');
+
   // Enforce branch HR to only see their branch
   useEffect(() => {
     if (userBranch) {
@@ -418,6 +429,39 @@ export default function DashboardPage() {
 
       const { data: missedTasksData } = await missedQuery;
       setOverdueTasks(missedTasksData || []);
+
+      // 7. Scan/Generate Staff Alerts and Fetch them
+      try {
+        await supabase.rpc('check_and_generate_staff_alerts');
+      } catch (err) {
+        console.error('RPC call check_and_generate_staff_alerts failed:', err);
+      }
+
+      // Fetch unresolved alerts
+      const { data: alertsData } = await supabase
+        .from('staff_alerts')
+        .select('*, staff:staff_id(*, shift:shifts(label, start_time, end_time))')
+        .eq('resolved', false)
+        .order('flagged_at', { ascending: false });
+
+      let filteredAlerts = alertsData || [];
+      if (userBranch) {
+        filteredAlerts = filteredAlerts.filter(a => (a.staff as any)?.branch_id === userBranch);
+      }
+
+      if (user?.role === 'admin') {
+        // Limit admin view to habitual alerts only
+        filteredAlerts = filteredAlerts.filter(a => a.escalation_level === 'habitual');
+      }
+      setAlerts(filteredAlerts);
+
+      // Fetch sent history alerts
+      const { data: historyData } = await supabase
+        .from('staff_alerts')
+        .select('id, staff_id, alert_type, sent_at')
+        .eq('message_status', 'sent')
+        .order('sent_at', { ascending: false });
+      setHistoryAlerts(historyData || []);
 
     } catch (e) {
       console.error('Error fetching dashboard exceptions:', e);
@@ -972,6 +1016,280 @@ export default function DashboardPage() {
     }
   };
 
+  const handleUpdateAlertNote = async (alertId: string, noteText: string) => {
+    setUpdatingAlertId(alertId);
+    try {
+      const { error } = await supabase
+        .from('staff_alerts')
+        .update({ ops_note: noteText })
+        .eq('id', alertId);
+
+      if (error) throw error;
+      setAlerts(prev => prev.map(a => a.id === alertId ? { ...a, ops_note: noteText } : a));
+      setToastMsg('Ops note saved ✓');
+      setTimeout(() => setToastMsg(''), 3000);
+    } catch (e) {
+      console.error(e);
+      alert('Failed to save note');
+    } finally {
+      setUpdatingAlertId(null);
+    }
+  };
+
+  const handleToggleMessageStatus = async (alertId: string, currentStatus: string) => {
+    setUpdatingAlertId(alertId);
+    try {
+      const newStatus = currentStatus === 'sent' ? 'not_sent' : 'sent';
+      const sentAt = newStatus === 'sent' ? new Date().toISOString() : null;
+      const sentBy = newStatus === 'sent' ? user?.email || 'Ops Manager' : null;
+
+      const { error } = await supabase
+        .from('staff_alerts')
+        .update({
+          message_status: newStatus,
+          sent_at: sentAt,
+          sent_by: sentBy
+        })
+        .eq('id', alertId);
+
+      if (error) throw error;
+
+      setAlerts(prev => prev.map(a => a.id === alertId ? { ...a, message_status: newStatus, sent_at: sentAt, sent_by: sentBy } : a));
+      setToastMsg(`Alert marked as ${newStatus === 'sent' ? 'Sent' : 'Not Sent'} ✓`);
+      setTimeout(() => setToastMsg(''), 3000);
+    } catch (e) {
+      console.error(e);
+      alert('Failed to update status');
+    } finally {
+      setUpdatingAlertId(null);
+    }
+  };
+
+  const handleResolveAlert = async (alertId: string) => {
+    setUpdatingAlertId(alertId);
+    try {
+      const { error } = await supabase
+        .from('staff_alerts')
+        .update({
+          resolved: true,
+          resolved_at: new Date().toISOString()
+        })
+        .eq('id', alertId);
+
+      if (error) throw error;
+
+      setAlerts(prev => prev.filter(a => a.id !== alertId));
+      setToastMsg('Alert marked resolved ✓');
+      setTimeout(() => setToastMsg(''), 3000);
+    } catch (e) {
+      console.error(e);
+      alert('Failed to resolve alert');
+    } finally {
+      setUpdatingAlertId(null);
+    }
+  };
+
+  const handleWhatsAppRedirect = async () => {
+    if (!selectedAlert) return;
+    
+    const phone = (selectedAlert.staff as any)?.phone_number || '';
+    if (!phone) {
+      alert('Staff phone number not found.');
+      return;
+    }
+
+    let formattedPhone = phone.replace(/[^0-9+]/g, '');
+    if (!formattedPhone.startsWith('+') && !formattedPhone.startsWith('91')) {
+      formattedPhone = '91' + formattedPhone;
+    }
+    if (formattedPhone.startsWith('+')) {
+      formattedPhone = formattedPhone.substring(1);
+    }
+
+    let text = '';
+    const staffName = (selectedAlert.staff as any)?.name || 'Staff';
+    if (selectedTemplate === 'late') {
+      text = `Hi ${staffName}, you've been late ${selectedAlert.trigger_summary.replace(/[^0-9]/g, '')} times this month — please be on time going forward.`;
+    } else if (selectedTemplate === 'app') {
+      text = `Hi ${staffName}, please check the app — something needs your attention.`;
+    } else {
+      text = customMsgText.trim();
+    }
+
+    if (!text) {
+      alert('Please write a custom message or pick a template.');
+      return;
+    }
+
+    setUpdatingAlertId(selectedAlert.id);
+    try {
+      const { error } = await supabase
+        .from('staff_alerts')
+        .update({
+          message_status: 'sent',
+          sent_at: new Date().toISOString(),
+          sent_by: user?.email || 'Ops Manager'
+        })
+        .eq('id', selectedAlert.id);
+
+      if (error) throw error;
+      
+      setAlerts(prev => prev.map(a => a.id === selectedAlert.id ? { 
+        ...a, 
+        message_status: 'sent', 
+        sent_at: new Date().toISOString(), 
+        sent_by: user?.email || 'Ops Manager' 
+      } : a));
+    } catch (e) {
+      console.error('Failed to update status on redirect:', e);
+    } finally {
+      setUpdatingAlertId(null);
+      setWhatsappModalOpen(false);
+    }
+
+    const waUrl = `https://wa.me/${formattedPhone}?text=${encodeURIComponent(text)}`;
+    window.open(waUrl, '_blank');
+  };
+
+  const handleDownloadSummaryCard = async (alertObj: any) => {
+    try {
+      const staffName = (alertObj.staff as any)?.name || 'Staff';
+      const branchName = alertObj.staff?.branch_id === 'daily' ? 'Daily' : 'Hypermarket';
+      const roleName = alertObj.staff?.department || 'Staff';
+
+      let detailsList: string[] = [];
+      const today = new Date();
+      const currentMonth = today.toISOString().substring(0, 7);
+
+      if (alertObj.alert_type === 'late_pattern') {
+        const { data } = await supabase
+          .from('attendance')
+          .select('date, minutes_late')
+          .eq('staff_id', alertObj.staff_id)
+          .eq('status', 'late')
+          .gte('date', `${currentMonth}-01`)
+          .order('date', { ascending: true });
+        
+        detailsList = (data || []).map(r => `• ${new Date(r.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} — Late by ${r.minutes_late} min(s)`);
+      } else if (alertObj.alert_type === 'fine_pattern') {
+        const sevenDaysAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        
+        const { data: lf } = await supabase
+          .from('late_fines')
+          .select('date, fine_amount')
+          .eq('staff_id', alertObj.staff_id)
+          .eq('confirmed', true)
+          .eq('waived', false)
+          .gte('date', sevenDaysAgo);
+
+        const { data: sf } = await supabase
+          .from('special_fines')
+          .select('date, amount, reason')
+          .eq('staff_id', alertObj.staff_id)
+          .eq('confirmed', true)
+          .eq('waived', false)
+          .gte('date', sevenDaysAgo);
+
+        const lfList = (lf || []).map(r => `• ${new Date(r.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} — Late Fine: ₹${r.fine_amount}`);
+        const sfList = (sf || []).map(r => `• ${new Date(r.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} — Special Fine: ₹${r.amount} (${r.reason})`);
+        detailsList = [...lfList, ...sfList];
+      } else if (alertObj.alert_type === 'absent_pattern') {
+        const { data } = await supabase
+          .from('attendance')
+          .select('date')
+          .eq('staff_id', alertObj.staff_id)
+          .eq('status', 'absent')
+          .not('day_type', 'in', '("weekly_off","holiday","leave")')
+          .gte('date', `${currentMonth}-01`)
+          .order('date', { ascending: true });
+
+        detailsList = (data || []).map(r => `• ${new Date(r.date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} — Unapproved Absence`);
+      }
+
+      const canvas = document.createElement('canvas');
+      canvas.width = 600;
+      canvas.height = 450;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      const grad = ctx.createLinearGradient(0, 0, 0, 450);
+      grad.addColorStop(0, '#1E293B');
+      grad.addColorStop(1, '#0F172A');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 600, 450);
+
+      ctx.fillStyle = '#C0392B';
+      ctx.fillRect(0, 0, 600, 70);
+
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = 'bold 20px system-ui, -apple-system, sans-serif';
+      ctx.fillText('🛡️ NEARBI STAFF ALERT SUMMARY', 30, 42);
+
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
+      ctx.fillRect(30, 95, 540, 95);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(30, 95, 540, 95);
+
+      ctx.fillStyle = '#F8FAFC';
+      ctx.font = 'bold 15px system-ui, -apple-system, sans-serif';
+      ctx.fillText(staffName, 50, 125);
+
+      ctx.fillStyle = '#94A3B8';
+      ctx.font = '500 12px system-ui, -apple-system, sans-serif';
+      ctx.fillText(`Branch: ${branchName}   |   Role: ${roleName}`, 50, 148);
+      ctx.fillText(`Alert Trigger: ${alertObj.trigger_summary}`, 50, 168);
+
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = 'bold 14px system-ui, -apple-system, sans-serif';
+      ctx.fillText('INCIDENT LOG DETAILS', 30, 225);
+
+      ctx.fillStyle = '#94A3B8';
+      ctx.font = '600 11px system-ui, -apple-system, sans-serif';
+      ctx.fillText(`Escalation Level: ${alertObj.escalation_level.toUpperCase()}`, 400, 225);
+
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+      ctx.beginPath();
+      ctx.moveTo(30, 235);
+      ctx.lineTo(570, 235);
+      ctx.stroke();
+
+      ctx.fillStyle = '#E2E8F0';
+      ctx.font = '500 13px system-ui, -apple-system, sans-serif';
+      let yOffset = 265;
+
+      if (detailsList.length === 0) {
+        ctx.fillStyle = '#94A3B8';
+        ctx.font = 'italic 13px system-ui, -apple-system, sans-serif';
+        ctx.fillText('No matching incidents found in system records.', 50, yOffset);
+      } else {
+        detailsList.slice(0, 6).forEach(item => {
+          ctx.fillText(item, 50, yOffset);
+          yOffset += 28;
+        });
+      }
+
+      ctx.fillStyle = '#64748B';
+      ctx.font = 'bold 10px system-ui, -apple-system, sans-serif';
+      ctx.fillText(`Flagged At: ${new Date(alertObj.flagged_at).toLocaleString()}`, 30, 420);
+      ctx.fillText('Generated from Nearbi Staff System', 400, 420);
+
+      const dataUrl = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = dataUrl;
+      link.download = `Alert_Summary_${staffName.replace(/\s+/g, '_')}_${alertObj.alert_type}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      
+      setToastMsg('Summary Card downloaded ✓');
+      setTimeout(() => setToastMsg(''), 3000);
+    } catch (e) {
+      console.error(e);
+      alert('Failed to generate summary card image.');
+    }
+  };
+
   if (errorMsg) {
     return (
       <div className="bg-white border border-[#E8E8E8] rounded-[14px] p-6 text-center max-w-sm mx-auto my-8 flex flex-col items-center justify-center shadow-sm">
@@ -1047,6 +1365,7 @@ export default function DashboardPage() {
               const branchEquipment = equipmentIssues.filter(t => t.branch_id === branchId);
               const branchUrgentHandovers = urgentHandovers.filter(h => h.branch_id === branchId);
               const branchOverdue = overdueTasks.filter(o => o.branch_id === branchId);
+              const branchAlerts = alerts.filter(a => (a.staff as any)?.branch_id === branchId);
 
               const hasIssues = 
                 branchAbsents.length > 0 || 
@@ -1054,7 +1373,8 @@ export default function DashboardPage() {
                 branchClosingPending || 
                 branchEquipment.length > 0 || 
                 branchUrgentHandovers.length > 0 || 
-                branchOverdue.length > 0;
+                branchOverdue.length > 0 ||
+                branchAlerts.length > 0;
 
               return (
                 <div key={branchId} className="bg-white border border-[#EAEAEA] rounded-[20px] p-6 shadow-sm space-y-4">
@@ -1189,6 +1509,102 @@ export default function DashboardPage() {
                             </p>
                           </div>
                         </Link>
+                      )}
+
+                      {/* Critical Staff Alerts */}
+                      {branchAlerts.length > 0 && (
+                        <div className="bg-red-50 border border-red-100 rounded-xl p-4 flex flex-col gap-3">
+                          <div className="flex items-center gap-2">
+                            <AlertTriangle size={18} className="text-red-600 flex-shrink-0" />
+                            <h3 className="text-xs font-black text-red-950 uppercase tracking-wide">🔴 Critical Staff Alerts</h3>
+                          </div>
+                          
+                          <div className="space-y-3">
+                            {branchAlerts.map(alert => {
+                              const staffName = (alert.staff as any)?.name || 'Staff';
+                              const escalationText = 
+                                alert.escalation_level === 'repeat' ? `⚠️ Repeat — ${alert.occurrence_count}nd warning` :
+                                alert.escalation_level === 'habitual' ? `🔴 Habitual — consider formal action` : '';
+
+                              const isSent = alert.message_status === 'sent';
+                              let statusText = 'Not Sent';
+                              if (isSent && alert.sent_at) {
+                                const days = Math.floor((new Date().getTime() - new Date(alert.sent_at).getTime()) / (24 * 60 * 60 * 1000));
+                                statusText = `Sent ✓ (${days === 0 ? 'today' : `${days} days ago`})`;
+                              }
+
+                              const matchingHistory = historyAlerts.filter(
+                                h => h.staff_id === alert.staff_id && h.alert_type === alert.alert_type && h.id !== alert.id
+                              );
+
+                              return (
+                                <div key={alert.id} className="bg-white border border-red-100 rounded-xl p-3.5 space-y-3 shadow-xs">
+                                  <div className="flex justify-between items-start gap-2 flex-wrap">
+                                    <div className="text-left">
+                                      <span className="font-extrabold text-[#1A1A1A] block">{staffName}</span>
+                                      <span className="text-[10px] text-slate-500 font-bold block mt-0.5">{alert.trigger_summary}</span>
+                                    </div>
+                                    <div className="flex flex-col items-end gap-1.5">
+                                      {escalationText && (
+                                        <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded border ${
+                                          alert.escalation_level === 'repeat' ? 'text-amber-700 bg-amber-50 border-amber-200' : 'text-red-700 bg-red-50 border-red-200'
+                                        }`}>
+                                          {escalationText}
+                                        </span>
+                                      )}
+                                      <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded cursor-pointer border ${
+                                        isSent ? 'text-emerald-700 bg-emerald-50 border-emerald-200' : 'text-slate-500 bg-slate-50 border-slate-200'
+                                      }`}
+                                      onClick={() => handleToggleMessageStatus(alert.id, alert.message_status)}
+                                      title="Toggle Message Status"
+                                      >
+                                        {statusText}
+                                      </span>
+                                    </div>
+                                  </div>
+
+                                  {matchingHistory.length > 0 && (
+                                    <p className="text-[9px] text-slate-400 font-bold italic mt-1 bg-slate-50/50 p-1.5 rounded border border-slate-100 text-left">
+                                      Messaged {matchingHistory.length} time(s) before ({matchingHistory.slice(0, 3).map(h => new Date(h.sent_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })).join(', ')})
+                                    </p>
+                                  )}
+
+                                  <div className="flex gap-2 items-center pt-1 border-t border-slate-100">
+                                    <input
+                                      type="text"
+                                      placeholder="Ops note..."
+                                      defaultValue={alert.ops_note || ''}
+                                      onBlur={e => handleUpdateAlertNote(alert.id, e.target.value)}
+                                      disabled={updatingAlertId === alert.id}
+                                      className="flex-1 bg-slate-50 border border-slate-100 rounded-lg p-2 text-[10px] focus:outline-none focus:border-slate-300 font-semibold"
+                                    />
+                                    
+                                    <button
+                                      onClick={() => { setSelectedAlert(alert); setSelectedTemplate('late'); setCustomMsgText(''); setWhatsappModalOpen(true); }}
+                                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[9px] uppercase tracking-wider px-2.5 py-2 rounded-lg cursor-pointer transition-all"
+                                    >
+                                      WhatsApp
+                                    </button>
+                                    
+                                    <button
+                                      onClick={() => handleDownloadSummaryCard(alert)}
+                                      className="bg-slate-800 hover:bg-black text-white font-extrabold text-[9px] uppercase tracking-wider px-2.5 py-2 rounded-lg cursor-pointer transition-all"
+                                    >
+                                      Card
+                                    </button>
+
+                                    <button
+                                      onClick={() => handleResolveAlert(alert.id)}
+                                      className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-[9px] uppercase tracking-wider px-2.5 py-2 rounded-lg cursor-pointer transition-all"
+                                    >
+                                      Resolve
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
                       )}
                     </div>
                   )}
@@ -1745,6 +2161,95 @@ export default function DashboardPage() {
             </div>
           </div>
         </>
+      )}
+      {/* WhatsApp Template Dialog Modal */}
+      {whatsappModalOpen && selectedAlert && (
+        <div className="fixed inset-0 bg-[#1A1A1A]/60 backdrop-blur-sm z-[20000] flex items-center justify-center p-4">
+          <div className="bg-white border border-[#E8E8E8] rounded-[20px] max-w-sm w-full p-6 shadow-xl space-y-4 animate-in fade-in zoom-in-95 duration-150 text-xs font-semibold text-[#1A1A1A]">
+            <div className="flex justify-between items-center border-b border-[#F0F0F0] pb-3 text-left">
+              <h3 className="text-sm font-black uppercase tracking-wider text-[#1A1A1A]">
+                Message on WhatsApp
+              </h3>
+              <button
+                onClick={() => setWhatsappModalOpen(false)}
+                className="text-slate-400 hover:text-[#1A1A1A] text-xs font-bold"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="space-y-4 text-left">
+              <div>
+                <label className="block text-[9px] font-black uppercase text-[#999999] tracking-wider mb-2">Select Message Template</label>
+                <div className="flex flex-col gap-2">
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input 
+                      type="radio" 
+                      name="template" 
+                      value="late" 
+                      checked={selectedTemplate === 'late'} 
+                      onChange={() => setSelectedTemplate('late')}
+                      className="w-4 h-4 text-slate-900 border-gray-300 focus:ring-slate-900"
+                    />
+                    <div>
+                      <span className="font-bold text-[#1A1A1A]">Pattern Notice (Lates)</span>
+                      <p className="text-[9px] text-slate-400">Hi [Name], you've been late X times this month...</p>
+                    </div>
+                  </label>
+
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input 
+                      type="radio" 
+                      name="template" 
+                      value="app" 
+                      checked={selectedTemplate === 'app'} 
+                      onChange={() => setSelectedTemplate('app')}
+                      className="w-4 h-4 text-slate-900 border-gray-300 focus:ring-slate-900"
+                    />
+                    <div>
+                      <span className="font-bold text-[#1A1A1A]">Attention Request</span>
+                      <p className="text-[9px] text-slate-400">Hi [Name], please check the app...</p>
+                    </div>
+                  </label>
+
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input 
+                      type="radio" 
+                      name="template" 
+                      value="custom" 
+                      checked={selectedTemplate === 'custom'} 
+                      onChange={() => setSelectedTemplate('custom')}
+                      className="w-4 h-4 text-slate-900 border-gray-300 focus:ring-slate-900"
+                    />
+                    <div>
+                      <span className="font-bold text-[#1A1A1A]">Custom Message</span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              {selectedTemplate === 'custom' && (
+                <div>
+                  <label className="block text-[9px] font-black uppercase text-[#999999] tracking-wider mb-1">Custom Message Text</label>
+                  <textarea
+                    rows={3}
+                    placeholder="Type your WhatsApp message..."
+                    value={customMsgText}
+                    onChange={e => setCustomMsgText(e.target.value)}
+                    className="w-full bg-[#F8F8F8] border border-[#EAEAEA] rounded-xl p-3 focus:outline-none focus:border-slate-500 font-semibold"
+                  />
+                </div>
+              )}
+
+              <button
+                onClick={handleWhatsAppRedirect}
+                className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-xl transition-all shadow-md active:scale-95 cursor-pointer mt-4 flex items-center justify-center gap-1.5"
+              >
+                <span>Open WhatsApp Chat</span>
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
