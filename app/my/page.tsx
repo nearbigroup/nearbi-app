@@ -23,7 +23,8 @@ import {
   FileText,
   AlertCircle,
   Lock,
-  RefreshCw
+  RefreshCw,
+  Wrench
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { formatTime12hr } from '@/lib/utils';
@@ -77,6 +78,13 @@ export default function StaffHomePage() {
   const [handoverText, setHandoverText] = useState('');
   const [handoverPhoto, setHandoverPhoto] = useState<File | null>(null);
   const [submittingClose, setSubmittingClose] = useState(false);
+
+  // Issue reporting states
+  const [showReportIssueModal, setShowReportIssueModal] = useState(false);
+  const [issueCategory, setIssueCategory] = useState<'ac' | 'freezer' | 'lights' | 'pos' | 'plumbing' | 'stock_damage' | 'customer_complaint' | 'other'>('other');
+  const [issueDescription, setIssueDescription] = useState('');
+  const [issuePhoto, setIssuePhoto] = useState<File | null>(null);
+  const [submittingIssue, setSubmittingIssue] = useState(false);
 
   // Toast
   const [toastMsg, setToastMsg] = useState('');
@@ -575,6 +583,65 @@ export default function StaffHomePage() {
     } catch (err) {
       console.error(err);
       alert('Failed to acknowledge note');
+    }
+  };
+
+  const handleReportIssueSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!staffInfo) return;
+    if (!issueDescription.trim()) {
+      alert('Please describe the issue.');
+      return;
+    }
+    setSubmittingIssue(true);
+    try {
+      const todayStr = new Date().toISOString().split('T')[0];
+      let photoUrl: string | null = null;
+      
+      if (issuePhoto) {
+        const fileName = `issues/${staffInfo.id}/${todayStr}_issue_${Date.now()}.jpg`;
+        photoUrl = await uploadPhotoFile(issuePhoto, fileName);
+      }
+
+      // Insert ticket
+      const { data: ticket, error: ticketErr } = await supabase
+        .from('maintenance_tickets')
+        .insert({
+          branch_id: staffInfo.branch_id,
+          category: issueCategory,
+          description: issueDescription.trim(),
+          photo_url: photoUrl,
+          reported_by: staffInfo.id,
+          status: 'open',
+          priority: 'normal'
+        })
+        .select('id')
+        .single();
+
+      if (ticketErr) throw ticketErr;
+
+      // Insert activity log
+      const { error: logErr } = await supabase
+        .from('ticket_activity_log')
+        .insert({
+          ticket_id: ticket.id,
+          activity_type: 'created',
+          logged_by: staffInfo.name,
+          note: 'Issue reported by staff.'
+        });
+
+      if (logErr) throw logErr;
+
+      showToast('Issue reported successfully ✓');
+      setShowReportIssueModal(false);
+      setIssueDescription('');
+      setIssuePhoto(null);
+      setIssueCategory('other');
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to report issue: ' + err.message);
+    } finally {
+      setSubmittingIssue(false);
     }
   };
 
@@ -1379,6 +1446,103 @@ export default function StaffHomePage() {
           </div>
         </div>
       )}
+
+      {/* Report Issue Modal */}
+      {showReportIssueModal && (
+        <div className="fixed inset-0 bg-[#1A1A1A]/60 backdrop-blur-sm z-[20000] flex items-center justify-center p-4">
+          <div className="bg-white border border-[#E8E8E8] rounded-[20px] max-w-sm w-full p-6 shadow-xl space-y-4 animate-in fade-in zoom-in-95 duration-150 text-xs font-semibold text-[#1A1A1A]">
+            <div className="flex justify-between items-center border-b border-[#F0F0F0] pb-3">
+              <h3 className="text-sm font-black uppercase tracking-wider">
+                Report a Maintenance Issue
+              </h3>
+              <button
+                onClick={() => setShowReportIssueModal(false)}
+                className="text-slate-400 hover:text-[#1A1A1A] text-xs font-bold"
+              >
+                Close
+              </button>
+            </div>
+
+            <form onSubmit={handleReportIssueSubmit} className="space-y-4">
+              
+              {/* Category Select Chips */}
+              <div>
+                <label className="block text-[9px] font-black uppercase text-[#999999] tracking-wider mb-1.5">Issue Category</label>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { val: 'ac', label: 'AC / Cooling' },
+                    { val: 'freezer', label: 'Freezer / Fridge' },
+                    { val: 'lights', label: 'Lights / Elec' },
+                    { val: 'pos', label: 'POS System' },
+                    { val: 'plumbing', label: 'Plumbing' },
+                    { val: 'stock_damage', label: 'Stock Damage' },
+                    { val: 'customer_complaint', label: 'Complaint' },
+                    { val: 'other', label: 'Other' }
+                  ].map(cat => (
+                    <button
+                      key={cat.val}
+                      type="button"
+                      onClick={() => setIssueCategory(cat.val as any)}
+                      className={`px-2.5 py-1.5 rounded-lg text-[9px] font-black uppercase border transition-all cursor-pointer ${
+                        issueCategory === cat.val 
+                          ? 'bg-[#1a1a1a] text-white border-[#1a1a1a]' 
+                          : 'bg-[#f5f5f5] text-slate-500 border-slate-200'
+                      }`}
+                    >
+                      {cat.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Description */}
+              <div>
+                <label className="block text-[9px] font-black uppercase text-[#999999] tracking-wider mb-1">Issue Description</label>
+                <textarea
+                  rows={3}
+                  placeholder="Describe the issue in detail..."
+                  value={issueDescription}
+                  onChange={e => setIssueDescription(e.target.value)}
+                  className="w-full bg-[#F8F8F8] border border-[#EAEAEA] rounded-xl p-3 focus:outline-none focus:border-slate-500 font-semibold"
+                  required
+                />
+              </div>
+
+              {/* Optional Photo Attachment */}
+              <div>
+                <label className="block text-[9px] font-black uppercase text-[#999999] tracking-wider mb-1">Photo Proof (Optional)</label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  onChange={e => setIssuePhoto(e.target.files?.[0] || null)}
+                  className="w-full text-[10px] file:mr-2.5 file:py-2 file:px-3 file:rounded-lg file:border-0 file:text-[10px] file:font-black file:uppercase file:bg-slate-100 file:text-slate-700 hover:file:bg-slate-200 cursor-pointer"
+                />
+              </div>
+
+              {/* Submit */}
+              <button
+                type="submit"
+                disabled={submittingIssue}
+                className="w-full py-3 bg-[#1A1A1A] hover:bg-[#333333] disabled:opacity-50 text-white font-extrabold rounded-xl transition-all shadow-md active:scale-95 cursor-pointer mt-4 flex items-center justify-center gap-1.5"
+              >
+                {submittingIssue ? <RefreshCw size={14} className="animate-spin" /> : <Wrench size={14} />}
+                <span>Submit Ticket</span>
+              </button>
+
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Action Button (Report Issue) */}
+      <button
+        onClick={() => setShowReportIssueModal(true)}
+        className="fixed bottom-24 right-4 z-50 bg-[#C0392B] hover:bg-[#A93226] text-white rounded-full p-4 shadow-xl active:scale-95 transition-all cursor-pointer flex items-center justify-center border border-white/10 animate-bounce"
+        title="Report an Issue"
+      >
+        <Wrench size={22} />
+      </button>
 
       {/* Toast alert display */}
       {toastMsg && (

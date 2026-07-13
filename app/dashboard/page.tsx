@@ -27,7 +27,10 @@ import {
   X,
   Megaphone,
   UserMinus,
-  FileText
+  FileText,
+  CheckCircle,
+  Wrench,
+  RefreshCw
 } from 'lucide-react';
 
 const getMinutes = (timeStr: string) => {
@@ -216,6 +219,14 @@ export default function DashboardPage() {
   const [annSubmitting, setAnnSubmitting] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
 
+  // Exception dashboard states
+  const [absentStaff, setAbsentStaff] = useState<any[]>([]);
+  const [openingPendingBranches, setOpeningPendingBranches] = useState<string[]>([]);
+  const [closingPendingBranches, setClosingPendingBranches] = useState<string[]>([]);
+  const [equipmentIssues, setEquipmentIssues] = useState<any[]>([]);
+  const [urgentHandovers, setUrgentHandovers] = useState<any[]>([]);
+  const [overdueTasks, setOverdueTasks] = useState<any[]>([]);
+
   // Enforce branch HR to only see their branch
   useEffect(() => {
     if (userBranch) {
@@ -223,8 +234,199 @@ export default function DashboardPage() {
     }
   }, [userBranch]);
 
+  const fetchExceptions = async () => {
+    try {
+      const today = new Date();
+      const todayStr = today.toISOString().split('T')[0];
+      const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+      const yesterdayStr = yesterday.toISOString().split('T')[0];
+      const twoDaysAgo = new Date(today.getTime() - 2 * 24 * 60 * 60 * 1000);
+      const twoDaysAgoStr = twoDaysAgo.toISOString().split('T')[0];
+      
+      const currentH = today.getHours();
+      const currentM = today.getMinutes();
+      const currentMins = currentH * 60 + currentM;
+
+      // 1. Staff Absences
+      let staffQuery = supabase
+        .from('staff')
+        .select('id, name, branch_id, pay_type, shift:shifts(start_time, end_time)')
+        .eq('active', true)
+        .eq('is_resigned', false);
+
+      if (userBranch) {
+        staffQuery = staffQuery.eq('branch_id', userBranch);
+      }
+
+      const { data: staffData } = await staffQuery;
+
+      let attQuery = supabase
+        .from('attendance')
+        .select('*')
+        .eq('date', todayStr);
+
+      const { data: attData } = await attQuery;
+
+      let leavesQuery = supabase
+        .from('leave_requests')
+        .select('staff_id')
+        .eq('date', todayStr)
+        .eq('status', 'approved');
+
+      const { data: leavesData } = await leavesQuery;
+      const approvedLeaveStaffIds = new Set(leavesData?.map(l => l.staff_id) || []);
+      const absent: any[] = [];
+
+      if (staffData) {
+        for (const s of staffData) {
+          if (s.pay_type === 'hourly') continue;
+          const shift = Array.isArray(s.shift) ? s.shift[0] : s.shift;
+          if (!shift || !shift.start_time) continue;
+
+          const [sh, sm] = shift.start_time.split(':').map(Number);
+          const shiftStartMins = sh * 60 + sm;
+
+          // Buffer check (shift start + 15 minutes)
+          if (currentMins > shiftStartMins + 15) {
+            const hasCheckedIn = attData?.some(
+              a => a.staff_id === s.id && 
+              a.check_in_time !== null && 
+              a.check_in_time !== undefined && 
+              a.check_in_time !== ''
+            );
+            
+            const isWeeklyOffOrHoliday = attData?.some(
+              a => a.staff_id === s.id && (a.day_type === 'weekly_off' || a.day_type === 'holiday')
+            );
+
+            const hasApprovedLeave = approvedLeaveStaffIds.has(s.id);
+
+            if (!hasCheckedIn && !isWeeklyOffOrHoliday && !hasApprovedLeave) {
+              absent.push({
+                id: s.id,
+                name: s.name,
+                branch_id: s.branch_id,
+                shift_time: shift.start_time
+              });
+            }
+          }
+        }
+      }
+      setAbsentStaff(absent);
+
+      // 2. Opening checklist pending (flag if opened_at is null past 10:00 AM)
+      const isPastOpeningBuffer = currentMins >= 600; // 10:00 AM
+      const openingPending: string[] = [];
+
+      if (isPastOpeningBuffer) {
+        let storeQuery = supabase
+          .from('store_status')
+          .select('branch_id, opened_at')
+          .eq('status_date', todayStr);
+
+        if (userBranch) {
+          storeQuery = storeQuery.eq('branch_id', userBranch);
+        }
+
+        const { data: storeStatusToday } = await storeQuery;
+
+        if (userBranch) {
+          const status = storeStatusToday?.find(s => s.branch_id === userBranch);
+          if (!status || !status.opened_at) {
+            openingPending.push(userBranch);
+          }
+        } else {
+          const dailyStatus = storeStatusToday?.find(s => s.branch_id === 'daily');
+          const hmStatus = storeStatusToday?.find(s => s.branch_id === 'hypermarket');
+
+          if (!dailyStatus || !dailyStatus.opened_at) {
+            openingPending.push('daily');
+          }
+          if (!hmStatus || !hmStatus.opened_at) {
+            openingPending.push('hypermarket');
+          }
+        }
+      }
+      setOpeningPendingBranches(openingPending);
+
+      // 3. Closing checklist pending (flag if previous day's closed_at is null)
+      const closingPending: string[] = [];
+      let storeQueryYest = supabase
+        .from('store_status')
+        .select('branch_id, closed_at')
+        .eq('status_date', yesterdayStr);
+
+      if (userBranch) {
+        storeQueryYest = storeQueryYest.eq('branch_id', userBranch);
+      }
+
+      const { data: storeStatusYesterday } = await storeQueryYest;
+
+      if (userBranch) {
+        const status = storeStatusYesterday?.find(s => s.branch_id === userBranch);
+        if (!status || !status.closed_at) {
+          closingPending.push(userBranch);
+        }
+      } else {
+        const dailyClosed = storeStatusYesterday?.find(s => s.branch_id === 'daily');
+        const hmClosed = storeStatusYesterday?.find(s => s.branch_id === 'hypermarket');
+
+        if (!dailyClosed || !dailyClosed.closed_at) {
+          closingPending.push('daily');
+        }
+        if (!hmClosed || !hmClosed.closed_at) {
+          closingPending.push('hypermarket');
+        }
+      }
+      setClosingPendingBranches(closingPending);
+
+      // 4. Equipment issues (status in 'open', 'assigned', 'in_progress')
+      let ticketsQuery = supabase
+        .from('maintenance_tickets')
+        .select('id, branch_id, category, description, priority, status')
+        .in('status', ['open', 'assigned', 'in_progress']);
+
+      if (userBranch) {
+        ticketsQuery = ticketsQuery.eq('branch_id', userBranch);
+      }
+
+      const { data: ticketsData } = await ticketsQuery;
+      setEquipmentIssues(ticketsData || []);
+
+      // 5. Urgent handover notes
+      let handoversQuery = supabase
+        .from('handover_notes')
+        .select('id, branch_id, note_text, category, note_date, resolution_status, acknowledged_at')
+        .or(`and(resolution_status.eq.still_pending,note_date.lte.${twoDaysAgoStr}),and(category.eq.maintenance,acknowledged_at.is.null)`);
+
+      if (userBranch) {
+        handoversQuery = handoversQuery.eq('branch_id', userBranch);
+      }
+
+      const { data: notesData } = await handoversQuery;
+      setUrgentHandovers(notesData || []);
+
+      // 6. Overdue tasks
+      let missedQuery = supabase
+        .from('daily_task_completion')
+        .select('id, branch_id, task_id, task_date, status, sop_tasks(task_name)')
+        .eq('status', 'missed');
+
+      if (userBranch) {
+        missedQuery = missedQuery.eq('branch_id', userBranch);
+      }
+
+      const { data: missedTasksData } = await missedQuery;
+      setOverdueTasks(missedTasksData || []);
+
+    } catch (e) {
+      console.error('Error fetching dashboard exceptions:', e);
+    }
+  };
+
   const fetchDashboardData = async () => {
     try {
+      await fetchExceptions();
       // Auto-close checkouts for ops_manager
       if (user?.role === 'ops_manager') {
         try {
@@ -794,6 +996,211 @@ export default function DashboardPage() {
     );
   }
 
+  if (user?.role === 'admin' || user?.role === 'ops_manager') {
+    const branchesToShow = userBranch ? [userBranch] : ['daily', 'hypermarket'];
+
+    return (
+      <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">
+        {/* Header Info */}
+        <div className="flex justify-between items-center">
+          <div>
+            <p className="text-[#999999] text-xs font-semibold mb-0.5">
+              {getFormattedDate()}
+            </p>
+            <h1 className="text-[#1A1A1A] text-2xl font-bold">Today I Need to Know 🛡️</h1>
+          </div>
+          
+          <div className="flex gap-2">
+            <Link
+              href="/announcements"
+              className="bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold px-4 py-2 rounded-xl text-xs active:scale-95 transition-all shadow cursor-pointer text-center flex items-center justify-center"
+            >
+              Announcements
+            </Link>
+            <Link
+              href="/sop-tasks"
+              className="bg-slate-700 hover:bg-slate-600 text-white font-bold px-4 py-2 rounded-xl text-xs active:scale-95 transition-all shadow cursor-pointer text-center flex items-center justify-center"
+            >
+              SOP Tasks & Roster
+            </Link>
+            <Link
+              href="/maintenance"
+              className="bg-red-700 hover:bg-red-650 text-white font-bold px-4 py-2 rounded-xl text-xs active:scale-95 transition-all shadow cursor-pointer text-center flex items-center justify-center"
+            >
+              Maintenance & Visits
+            </Link>
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="bg-white border border-[#EAEAEA] rounded-[20px] py-16 flex flex-col items-center justify-center gap-3">
+            <RefreshCw className="animate-spin text-slate-600" size={32} />
+            <p className="text-xs text-[#888888] font-bold tracking-wider uppercase">Loading exceptions...</p>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            {branchesToShow.map(branchId => {
+              const branchName = branchId === 'daily' ? 'Nearbi Daily' : 'Nearbi Hypermarket';
+              const branchAbsents = absentStaff.filter(s => s.branch_id === branchId);
+              const branchOpeningPending = openingPendingBranches.includes(branchId);
+              const branchClosingPending = closingPendingBranches.includes(branchId);
+              const branchEquipment = equipmentIssues.filter(t => t.branch_id === branchId);
+              const branchUrgentHandovers = urgentHandovers.filter(h => h.branch_id === branchId);
+              const branchOverdue = overdueTasks.filter(o => o.branch_id === branchId);
+
+              const hasIssues = 
+                branchAbsents.length > 0 || 
+                branchOpeningPending || 
+                branchClosingPending || 
+                branchEquipment.length > 0 || 
+                branchUrgentHandovers.length > 0 || 
+                branchOverdue.length > 0;
+
+              return (
+                <div key={branchId} className="bg-white border border-[#EAEAEA] rounded-[20px] p-6 shadow-sm space-y-4">
+                  <h2 className="text-sm font-black uppercase tracking-wider text-slate-800 pb-2 border-b border-[#F0F0F0] flex justify-between items-center">
+                    <span>{branchName}</span>
+                    {hasIssues ? (
+                      <span className="text-[10px] text-red-600 font-extrabold px-2 py-0.5 rounded uppercase tracking-wider bg-red-50 border border-red-200">Attention Required</span>
+                    ) : (
+                      <span className="text-[10px] text-emerald-600 font-extrabold px-2 py-0.5 rounded uppercase tracking-wider bg-emerald-50 border border-emerald-200">Operational Clear</span>
+                    )}
+                  </h2>
+
+                  {!hasIssues ? (
+                    <div className="bg-emerald-50 border border-emerald-100 text-emerald-800 rounded-xl p-4 font-bold text-xs flex items-center gap-2">
+                      <CheckCircle size={18} className="text-emerald-600" />
+                      <span>✅ {branchName} — all clear today</span>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {/* Absences */}
+                      {branchAbsents.length > 0 && (
+                        <div className="bg-red-50 border border-red-100 rounded-xl p-3.5 flex items-start gap-3">
+                          <UserX size={18} className="text-red-600 mt-0.5 flex-shrink-0" />
+                          <div className="space-y-1">
+                            <h3 className="text-xs font-black text-red-950 uppercase tracking-wide">🔴 Staff Absent Today</h3>
+                            <div className="flex flex-wrap gap-2 pt-1">
+                              {branchAbsents.map(staff => (
+                                <Link 
+                                  key={staff.id} 
+                                  href={`/staff/${staff.id}`}
+                                  className="bg-white hover:bg-red-100 text-red-800 border border-red-200 rounded-lg px-2.5 py-1 text-[10px] font-extrabold shadow-sm active:scale-95 transition-all flex items-center gap-1"
+                                >
+                                  <span>{staff.name}</span>
+                                  <span className="text-[9px] text-red-400 font-medium">({staff.shift_time.slice(0, 5)})</span>
+                                  <ChevronRight size={10} />
+                                </Link>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Opening Pending */}
+                      {branchOpeningPending && (
+                        <Link 
+                          href="/sop-tasks"
+                          className="bg-red-50 border border-red-100 hover:border-red-300 rounded-xl p-3.5 flex items-start gap-3 transition-colors block cursor-pointer"
+                        >
+                          <AlertCircle size={18} className="text-red-600 mt-0.5 flex-shrink-0" />
+                          <div className="space-y-0.5">
+                            <h3 className="text-xs font-black text-red-950 uppercase tracking-wide">🔴 Opening Checklist Pending</h3>
+                            <p className="text-[10px] text-red-800 font-semibold leading-relaxed">
+                              Store has not been confirmed opened yet today and opening buffer time has exceeded. Tap to resolve.
+                            </p>
+                          </div>
+                        </Link>
+                      )}
+
+                      {/* Closing Pending */}
+                      {branchClosingPending && (
+                        <Link 
+                          href="/sop-tasks"
+                          className="bg-red-50 border border-red-100 hover:border-red-300 rounded-xl p-3.5 flex items-start gap-3 transition-colors block cursor-pointer"
+                        >
+                          <AlertTriangle size={18} className="text-red-600 mt-0.5 flex-shrink-0" />
+                          <div className="space-y-0.5">
+                            <h3 className="text-xs font-black text-red-950 uppercase tracking-wide">🔴 Closing Checklist Pending</h3>
+                            <p className="text-[10px] text-red-800 font-semibold leading-relaxed">
+                              Yesterday's closing check was not completed or confirmed. Tap to review previous shift handover status.
+                              </p>
+                          </div>
+                        </Link>
+                      )}
+
+                      {/* Equipment Issues */}
+                      {branchEquipment.length > 0 && (() => {
+                        const urgentCount = branchEquipment.filter(t => t.priority === 'urgent').length;
+                        return (
+                          <Link 
+                            href="/maintenance"
+                            className="bg-red-50 border border-red-100 hover:border-red-300 rounded-xl p-3.5 flex items-start gap-3 transition-colors block cursor-pointer"
+                          >
+                            <Wrench className="text-red-600 mt-0.5 flex-shrink-0" size={18} />
+                            <div className="space-y-0.5">
+                              <h3 className="text-xs font-black text-red-950 uppercase tracking-wide">
+                                🔴 Equipment & Facilities Issues ({branchEquipment.length})
+                              </h3>
+                              <p className="text-[10px] text-red-800 font-semibold leading-relaxed">
+                                {branchEquipment.length} open tickets require attention.
+                                {urgentCount > 0 && (
+                                  <span className="font-extrabold text-red-650 ml-1 bg-red-100 px-1.5 py-0.5 rounded border border-red-200">
+                                    ⚠️ {urgentCount} Urgent Ticket(s)
+                                  </span>
+                                )}
+                              </p>
+                            </div>
+                          </Link>
+                        );
+                      })()}
+
+                      {/* Urgent Handovers */}
+                      {branchUrgentHandovers.length > 0 && (
+                        <Link 
+                          href="/sop-tasks"
+                          className="bg-red-50 border border-red-100 hover:border-red-300 rounded-xl p-3.5 flex items-start gap-3 transition-colors block cursor-pointer"
+                        >
+                          <ClipboardList size={18} className="text-red-600 mt-0.5 flex-shrink-0" />
+                          <div className="space-y-0.5">
+                            <h3 className="text-xs font-black text-red-950 uppercase tracking-wide">
+                              🔴 Urgent Handover Notes ({branchUrgentHandovers.length})
+                            </h3>
+                            <p className="text-[10px] text-red-800 font-semibold leading-relaxed">
+                              {branchUrgentHandovers.length} handover notes are unacknowledged or still pending for 2+ days. Tap to inspect.
+                            </p>
+                          </div>
+                        </Link>
+                      )}
+
+                      {/* Overdue Tasks */}
+                      {branchOverdue.length > 0 && (
+                        <Link 
+                          href="/sop-tasks"
+                          className="bg-red-50 border border-red-100 hover:border-red-300 rounded-xl p-3.5 flex items-start gap-3 transition-colors block cursor-pointer"
+                        >
+                          <AlertCircle size={18} className="text-red-600 mt-0.5 flex-shrink-0" />
+                          <div className="space-y-0.5">
+                            <h3 className="text-xs font-black text-red-950 uppercase tracking-wide">
+                              🔴 Overdue Checklist Tasks ({branchOverdue.length})
+                            </h3>
+                            <p className="text-[10px] text-red-800 font-semibold leading-relaxed">
+                              {branchOverdue.length} checklist tasks were marked as missed today or carried forward. Tap to audit.
+                            </p>
+                          </div>
+                        </Link>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Header Info */}
@@ -804,7 +1211,7 @@ export default function DashboardPage() {
           </p>
           <h1 className="text-[#1A1A1A] text-2xl font-bold">{getGreeting()} 👋</h1>
         </div>
-        {(user?.role === 'admin' || user?.role === 'ops_manager' || user?.role === 'staff_executive') && (
+        {(user?.role === 'staff_executive') && (
           <div className="flex gap-2">
             <Link
               href="/announcements"
@@ -812,14 +1219,6 @@ export default function DashboardPage() {
             >
               Announcements
             </Link>
-            {(user.role === 'admin' || user.role === 'ops_manager') && (
-              <Link
-                href="/sop-tasks"
-                className="bg-slate-700 hover:bg-slate-600 text-white font-bold px-4 py-2 rounded-xl text-xs active:scale-95 transition-all shadow cursor-pointer text-center flex items-center justify-center"
-              >
-                SOP Tasks & Roster
-              </Link>
-            )}
           </div>
         )}
       </div>
@@ -892,7 +1291,7 @@ export default function DashboardPage() {
           </div>
 
           {/* Month-End Checklist */}
-          {new Date().getDate() >= 25 && (user?.role === 'admin' || user?.role === 'ops_manager') && (
+          {new Date().getDate() >= 25 && false && (
             <div className="space-y-3">
               <h4 className="text-[#999999] text-[11px] font-black uppercase tracking-wider">
                 Month-End Checklist
@@ -1142,7 +1541,7 @@ export default function DashboardPage() {
           )}
 
           {/* Birthday Tracker Card */}
-          {user?.role !== 'admin' && user?.role !== 'nearbi_homes_supervisor' && (() => {
+          {user?.role !== 'nearbi_homes_supervisor' && (() => {
             const activeBranchStaff = staffList.filter((s) => s.branch_id === activeTab);
             const activeBranchBirthdays = activeBranchStaff
               .filter((s) => s.date_of_birth)
@@ -1272,7 +1671,7 @@ export default function DashboardPage() {
               )}
 
               {/* Candidates Quick Action (Ops Manager only) */}
-              {user?.role === 'ops_manager' && (
+              {false && (
                 <Link
                   href="/candidates"
                   className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group col-span-2 relative"
@@ -1290,7 +1689,7 @@ export default function DashboardPage() {
               )}
 
               {/* The Wall Quick Action (Hidden from Admin and Supervisor) */}
-              {user?.role !== 'admin' && user?.role !== 'nearbi_homes_supervisor' && (
+              {user?.role !== 'nearbi_homes_supervisor' && (
                 <Link
                   href="/wall"
                   className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group col-span-2"
@@ -1303,7 +1702,7 @@ export default function DashboardPage() {
               )}
 
               {/* Resignations Quick Action */}
-              {(user?.role === 'admin' || user?.role === 'ops_manager' || user?.role === 'staff_executive') && (
+              {(user?.role === 'staff_executive') && (
                 <Link
                   href="/resignations"
                   className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group col-span-2"
@@ -1316,7 +1715,7 @@ export default function DashboardPage() {
               )}
 
               {/* Document Verification Quick Action */}
-              {(user?.role === 'admin' || user?.role === 'ops_manager' || user?.role === 'staff_executive') && (
+              {(user?.role === 'staff_executive') && (
                 <Link
                   href="/verification"
                   className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group col-span-2 relative"
