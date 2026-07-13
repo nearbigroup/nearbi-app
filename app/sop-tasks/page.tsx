@@ -65,7 +65,7 @@ export default function SOPTasksPage() {
   const router = useRouter();
 
   // Navigation & Tabs
-  const [activeTab, setActiveTab] = useState<'tasks' | 'roster'>('tasks');
+  const [activeTab, setActiveTab] = useState<'tasks' | 'roster' | 'swaps'>('tasks');
   const [selectedBranch, setSelectedBranch] = useState<'daily' | 'hypermarket'>('daily');
 
   // SOP Tasks State
@@ -87,6 +87,14 @@ export default function SOPTasksPage() {
   const [rosterLoading, setRosterLoading] = useState(true);
   const [staffList, setStaffList] = useState<StaffMember[]>([]);
   const [savingRoster, setSavingRoster] = useState(false);
+
+  // Shift Swap States
+  const [swaps, setSwaps] = useState<any[]>([]);
+  const [swapsLoading, setSwapsLoading] = useState(true);
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [rejectingSwapId, setRejectingSwapId] = useState<string | null>(null);
+  const [rejectionReason, setRejectionReason] = useState('');
+  const [processingSwapId, setProcessingSwapId] = useState<string | null>(null);
 
   // Toast
   const [toastMsg, setToastMsg] = useState('');
@@ -164,14 +172,137 @@ export default function SOPTasksPage() {
     }
   }, [selectedBranch]);
 
+  const fetchPendingSwaps = useCallback(async () => {
+    setSwapsLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('shift_swap_requests')
+        .select('*, requester:requested_by(name, branch_id), colleague:requested_with(name)')
+        .eq('status', 'pending_ops_approval')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setSwaps(data || []);
+    } catch (e) {
+      console.error('Error fetching pending swaps:', e);
+      showToast('Failed to load swap requests.');
+    } finally {
+      setSwapsLoading(false);
+    }
+  }, []);
+
+  const handleApproveSwap = async (swapId: string) => {
+    setProcessingSwapId(swapId);
+    try {
+      const swap = swaps.find(s => s.id === swapId);
+      if (!swap) return;
+
+      const { error } = await supabase
+        .from('shift_swap_requests')
+        .update({
+          status: 'approved',
+          ops_approved_by: user?.email || 'Ops Head',
+          ops_approved_at: new Date().toISOString()
+        })
+        .eq('id', swapId);
+
+      if (error) throw error;
+
+      const { createNotification } = await import('@/lib/notifications');
+      
+      await createNotification({
+        type: 'shift_swap',
+        title: '✅ Shift Swap Approved!',
+        message: `Your shift swap request with ${swap.colleague?.name || 'your colleague'} for ${new Date(swap.swap_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} has been approved by Operations.`,
+        branchId: swap.requester?.branch_id || null,
+        staffId: swap.requested_by,
+        targetRole: 'staff'
+      });
+
+      await createNotification({
+        type: 'shift_swap',
+        title: '✅ Shift Swap Approved!',
+        message: `Your shift swap request with ${swap.requester?.name || 'your colleague'} for ${new Date(swap.swap_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} has been approved by Operations.`,
+        branchId: swap.requester?.branch_id || null,
+        staffId: swap.requested_with,
+        targetRole: 'staff'
+      });
+
+      showToast('Shift swap request approved successfully ✓');
+      fetchPendingSwaps();
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to approve swap: ' + err.message);
+    } finally {
+      setProcessingSwapId(null);
+    }
+  };
+
+  const handleRejectSwap = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rejectingSwapId || !rejectionReason.trim()) return;
+
+    setProcessingSwapId(rejectingSwapId);
+    try {
+      const swap = swaps.find(s => s.id === rejectingSwapId);
+      if (!swap) return;
+
+      const { error } = await supabase
+        .from('shift_swap_requests')
+        .update({
+          status: 'rejected',
+          rejection_reason: rejectionReason.trim(),
+          ops_approved_by: user?.email || 'Ops Head',
+          ops_approved_at: new Date().toISOString()
+        })
+        .eq('id', rejectingSwapId);
+
+      if (error) throw error;
+
+      const { createNotification } = await import('@/lib/notifications');
+      
+      await createNotification({
+        type: 'shift_swap',
+        title: '❌ Shift Swap Rejected',
+        message: `Your shift swap request for ${new Date(swap.swap_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} was rejected: ${rejectionReason.trim()}`,
+        branchId: swap.requester?.branch_id || null,
+        staffId: swap.requested_by,
+        targetRole: 'staff'
+      });
+
+      await createNotification({
+        type: 'shift_swap',
+        title: '❌ Shift Swap Rejected',
+        message: `Your shift swap request for ${new Date(swap.swap_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} was rejected: ${rejectionReason.trim()}`,
+        branchId: swap.requester?.branch_id || null,
+        staffId: swap.requested_with,
+        targetRole: 'staff'
+      });
+
+      showToast('Shift swap request rejected ✓');
+      setShowRejectModal(false);
+      setRejectingSwapId(null);
+      setRejectionReason('');
+      fetchPendingSwaps();
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to reject swap: ' + err.message);
+    } finally {
+      setProcessingSwapId(null);
+    }
+  };
+
   useEffect(() => {
     if (authLoading || !user) return;
-    fetchTasks();
-    if (user.role === 'admin') {
+    if (activeTab === 'tasks') {
+      fetchTasks();
+    } else if (activeTab === 'roster' && user.role === 'admin') {
       fetchStaff();
       fetchRoster();
+    } else if (activeTab === 'swaps') {
+      fetchPendingSwaps();
     }
-  }, [fetchTasks, fetchStaff, fetchRoster, selectedBranch, authLoading, user]);
+  }, [fetchTasks, fetchStaff, fetchRoster, fetchPendingSwaps, selectedBranch, activeTab, authLoading, user]);
 
   // Add or Edit SOP Task
   const handleSaveTask = async (e: React.FormEvent) => {
@@ -448,6 +579,15 @@ export default function SOPTasksPage() {
               Guardian Duty Roster
             </button>
           )}
+
+          <button
+            onClick={() => setActiveTab('swaps')}
+            className={`flex-1 text-center py-3 text-xs font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer ${
+              activeTab === 'swaps' ? 'bg-white text-[#1A1A1A] shadow' : 'text-slate-500 hover:text-[#1A1A1A]'
+            }`}
+          >
+            Swap Requests
+          </button>
         </div>
 
         {/* --- TAB 1: SOP TASKS CONFIG --- */}
@@ -644,6 +784,80 @@ export default function SOPTasksPage() {
           </div>
         )}
 
+        {/* --- TAB 3: SHIFT SWAP REQUESTS --- */}
+        {activeTab === 'swaps' && (
+          <div className="space-y-6">
+            <h2 className="text-sm font-extrabold uppercase text-[#1A1A1A] tracking-wider pb-2 border-b border-[#F0F0F0]">
+              Pending Shift Swap Approvals
+            </h2>
+
+            {swapsLoading ? (
+              <div className="bg-white border border-[#EAEAEA] rounded-[20px] py-16 flex flex-col items-center justify-center gap-3">
+                <RefreshCw className="animate-spin text-slate-600" size={32} />
+                <p className="text-xs text-[#888888] font-bold tracking-wider uppercase">Loading swap requests...</p>
+              </div>
+            ) : swaps.length === 0 ? (
+              <div className="bg-white border border-[#EAEAEA] rounded-[20px] py-16 text-center select-none text-slate-400 space-y-1.5 shadow-sm">
+                <RefreshCw size={36} className="mx-auto text-slate-300 mb-2" />
+                <p className="text-xs font-black uppercase tracking-wider text-slate-600">No Swaps Pending Approval</p>
+                <p className="text-[10px] text-slate-400 font-semibold">Any swap requests agreed by colleagues will appear here.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {swaps.map(swap => (
+                  <div key={swap.id} className="bg-white border border-[#EAEAEA] rounded-2xl p-5 shadow-sm space-y-4 flex flex-col justify-between">
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-start">
+                        <span className="bg-[#F0F2F5] text-slate-700 text-[9px] font-black uppercase px-2 py-0.5 rounded border border-[#EAEAEA]">
+                          {swap.requester?.branch_id === 'daily' ? 'Daily Branch' : 'Hypermarket Branch'}
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-bold flex items-center gap-1">
+                          <Calendar size={12} />
+                          {new Date(swap.swap_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 text-xs font-bold pt-1.5 text-center">
+                        <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 space-y-1">
+                          <span className="text-[9px] font-black uppercase text-slate-400">Requester</span>
+                          <p className="text-slate-800 truncate">{swap.requester?.name || 'Staff'}</p>
+                          <span className="text-[9px] bg-slate-200/50 px-1 rounded inline-block text-slate-600 truncate max-w-full">
+                            {swap.requester_original_role}
+                          </span>
+                        </div>
+                        <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 space-y-1">
+                          <span className="text-[9px] font-black uppercase text-slate-400">Colleague</span>
+                          <p className="text-slate-800 truncate">{swap.colleague?.name || 'Colleague'}</p>
+                          <span className="text-[9px] bg-slate-200/50 px-1 rounded inline-block text-slate-600 truncate max-w-full">
+                            {swap.colleague_original_role}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2 pt-2 border-t border-[#F0F0F0]">
+                      <button
+                        onClick={() => handleApproveSwap(swap.id)}
+                        disabled={processingSwapId !== null}
+                        className="flex-grow min-h-[36px] bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-[10px] uppercase tracking-wider rounded-xl transition-all cursor-pointer flex items-center justify-center"
+                      >
+                        {processingSwapId === swap.id ? <RefreshCw size={14} className="animate-spin" /> : 'Approve Swap'}
+                      </button>
+                      <button
+                        onClick={() => { setRejectingSwapId(swap.id); setRejectionReason(''); setShowRejectModal(true); }}
+                        disabled={processingSwapId !== null}
+                        className="flex-grow min-h-[36px] bg-red-600 hover:bg-red-700 text-white font-extrabold text-[10px] uppercase tracking-wider rounded-xl transition-all cursor-pointer flex items-center justify-center"
+                      >
+                        Reject
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* --- ADD/EDIT TASK MODAL --- */}
         {showTaskModal && (
           <div className="fixed inset-0 bg-[#1A1A1A]/60 backdrop-blur-sm z-[20000] flex items-center justify-center p-4">
@@ -752,6 +966,50 @@ export default function SOPTasksPage() {
             </div>
           </div>
         )}
+
+      {/* Rejection Reason Modal */}
+      {showRejectModal && (
+        <div className="fixed inset-0 bg-[#1A1A1A]/60 backdrop-blur-sm z-[20000] flex items-center justify-center p-4">
+          <div className="bg-white border border-[#E8E8E8] rounded-[20px] max-w-sm w-full p-6 shadow-xl space-y-4 animate-in fade-in zoom-in-95 duration-150 text-xs font-semibold text-[#1A1A1A]">
+            <div className="flex justify-between items-center border-b border-[#F0F0F0] pb-3 text-left">
+              <h3 className="text-sm font-black uppercase tracking-wider text-red-600">
+                Reject Swap Request
+              </h3>
+              <button
+                onClick={() => { setShowRejectModal(false); setRejectingSwapId(null); }}
+                className="text-slate-400 hover:text-[#1A1A1A] text-xs font-bold"
+              >
+                Close
+              </button>
+            </div>
+
+            <form onSubmit={handleRejectSwap} className="space-y-4 text-left">
+              
+              <div>
+                <label className="block text-[9px] font-black uppercase text-[#999999] tracking-wider mb-1">Reason for Rejection</label>
+                <textarea
+                  rows={3}
+                  placeholder="Provide details why this swap is rejected..."
+                  value={rejectionReason}
+                  onChange={e => setRejectionReason(e.target.value)}
+                  className="w-full bg-[#F8F8F8] border border-[#EAEAEA] rounded-xl p-3 focus:outline-none focus:border-slate-500 font-semibold"
+                  required
+                />
+              </div>
+
+              {/* Submit */}
+              <button
+                type="submit"
+                disabled={processingSwapId !== null}
+                className="w-full py-3 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-extrabold rounded-xl transition-all shadow-md active:scale-95 cursor-pointer mt-4 flex items-center justify-center gap-1.5"
+              >
+                {processingSwapId !== null ? <RefreshCw size={14} className="animate-spin" /> : 'Confirm Rejection'}
+              </button>
+
+            </form>
+          </div>
+        </div>
+      )}
 
         {/* Toast alerts */}
         {toastMsg && (

@@ -12,7 +12,8 @@ interface CreateNotificationParams {
     | 'salary_confirmed'
     | 'absent_alert'
     | 'birthday'
-    | 'duty_promotion';
+    | 'duty_promotion'
+    | 'shift_swap';
   title: string;
   message: string;
   branchId: string | null;

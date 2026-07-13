@@ -32,12 +32,55 @@ export async function getActiveDutyInfo(branchId: string, dateStr: string): Prom
   const dayOfWeek = dateObj.getDay(); // 0 is Sun, 6 is Sat
 
   // 1. Fetch Today's Duty Roster for the branch
-  const { data: rosterEntries } = await supabase
+  const { data: initialRosterEntries } = await supabase
     .from('duty_roster')
     .select('*, staff:staff_id(*, shift:shift_id(*))')
     .eq('branch_id', branchId)
     .eq('day_of_week', dayOfWeek)
     .eq('active', true);
+
+  const rosterEntries = initialRosterEntries ? [...initialRosterEntries] : [];
+
+  // 1b. Fetch approved swap requests for today to override roster
+  const { data: approvedSwaps } = await supabase
+    .from('shift_swap_requests')
+    .select('*')
+    .eq('swap_date', dateStr)
+    .eq('status', 'approved');
+
+  if (approvedSwaps && approvedSwaps.length > 0 && rosterEntries.length > 0) {
+    const participantIds = approvedSwaps.flatMap(s => [s.requested_by, s.requested_with]);
+    const { data: staffList } = await supabase
+      .from('staff')
+      .select('*, shift:shifts(*)')
+      .in('id', participantIds);
+
+    for (const swap of approvedSwaps) {
+      const staffA = staffList?.find(s => s.id === swap.requested_by);
+      const staffB = staffList?.find(s => s.id === swap.requested_with);
+      if (!staffA || !staffB) continue;
+
+      const entryAIndex = rosterEntries.findIndex(r => r.staff_id === swap.requested_by);
+      const entryBIndex = rosterEntries.findIndex(r => r.staff_id === swap.requested_with);
+
+      if (entryAIndex !== -1 && entryBIndex !== -1) {
+        const tempStaffId = rosterEntries[entryAIndex].staff_id;
+        const tempStaff = rosterEntries[entryAIndex].staff;
+
+        rosterEntries[entryAIndex].staff_id = rosterEntries[entryBIndex].staff_id;
+        rosterEntries[entryAIndex].staff = rosterEntries[entryBIndex].staff;
+
+        rosterEntries[entryBIndex].staff_id = tempStaffId;
+        rosterEntries[entryBIndex].staff = tempStaff;
+      } else if (entryAIndex !== -1) {
+        rosterEntries[entryAIndex].staff_id = swap.requested_with;
+        rosterEntries[entryAIndex].staff = staffB;
+      } else if (entryBIndex !== -1) {
+        rosterEntries[entryBIndex].staff_id = swap.requested_by;
+        rosterEntries[entryBIndex].staff = staffA;
+      }
+    }
+  }
 
   // 2. Fetch today's attendance for the branch
   const { data: attRecords } = await supabase

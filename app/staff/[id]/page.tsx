@@ -174,7 +174,7 @@ interface SalaryConfirmation {
   hourly_rate?: number;
 }
 
-type TabName = 'attendance' | 'fines' | 'leaves' | 'salary' | 'breaks' | 'notes' | 'profile';
+type TabName = 'attendance' | 'fines' | 'leaves' | 'salary' | 'breaks' | 'notes' | 'profile' | 'swaps';
 
 export default function StaffProfilePage() {
   const params = useParams();
@@ -203,6 +203,7 @@ export default function StaffProfilePage() {
   const [leaves, setLeaves] = useState<LeaveRequest[]>([]);
   const [breaks, setBreaks] = useState<BreakLog[]>([]);
   const [notes, setNotes] = useState<StaffNote[]>([]);
+  const [swapsHistory, setSwapsHistory] = useState<any[]>([]);
   const [salaryConfirmations, setSalaryConfirmations] = useState<SalaryConfirmation[]>([]);
   const [perfScore, setPerfScore] = useState<any | null>(null);
 
@@ -1273,6 +1274,14 @@ export default function StaffProfilePage() {
           .order('created_at', { ascending: false });
         setNotes(notesData || []);
       }
+
+      // 4. Shift Swap History
+      const { data: swapsData } = await supabase
+        .from('shift_swap_requests')
+        .select('*, requester:requested_by(name), colleague:requested_with(name)')
+        .or(`requested_by.eq.${id},requested_with.eq.${id}`)
+        .order('swap_date', { ascending: false });
+      setSwapsHistory(swapsData || []);
     } catch (err) {
       console.error('Error fetching logs:', err);
     }
@@ -1922,6 +1931,7 @@ export default function StaffProfilePage() {
           { id: 'leaves', label: 'Leaves' },
           { id: 'salary', label: 'Salary' },
           { id: 'breaks', label: 'Breaks' },
+          { id: 'swaps', label: 'Swaps' },
           { id: 'profile', label: 'Profile' },
           ...(user?.role === 'ops_manager' ? [{ id: 'notes', label: 'Notes' }] : [])
         ].map((tab) => {
@@ -2635,6 +2645,63 @@ export default function StaffProfilePage() {
                 ))
               )}
             </div>
+          </div>
+        )}
+
+        {/* Tab: Shift Swap History */}
+        {activeTab === 'swaps' && (
+          <div className="space-y-4">
+            <h3 className="text-xs font-extrabold text-[var(--text-secondary)] uppercase tracking-wider">Shift Swap History</h3>
+            {swapsHistory.length === 0 ? (
+              <p className="text-xs text-[var(--text-muted)] italic p-3 bg-[var(--bg-surface)] rounded-xl border border-[var(--border)] text-center">No swaps logged yet.</p>
+            ) : (
+              <div className="space-y-2.5">
+                {swapsHistory.map(swap => {
+                  const isRequester = swap.requested_by === id;
+                  const colleagueName = isRequester ? (swap.colleague?.name || 'Colleague') : (swap.requester?.name || 'Staff');
+                  
+                  let statusColor = 'text-amber-500 bg-amber-500/10 border-amber-500/20';
+                  if (swap.status === 'approved') {
+                    statusColor = 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20';
+                  } else if (swap.status === 'declined' || swap.status === 'rejected') {
+                    statusColor = 'text-red-500 bg-red-500/10 border-red-500/20';
+                  }
+
+                  return (
+                    <div key={swap.id} className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-xl p-3.5 space-y-2 relative shadow-sm text-xs font-semibold">
+                      <div className="flex justify-between items-start">
+                        <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded border ${statusColor}`}>
+                          {swap.status.replace('_', ' ')}
+                        </span>
+                        <span className="text-[9px] font-bold text-[var(--text-muted)] font-mono">
+                          {new Date(swap.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 text-[10px] text-center bg-white/5 rounded-lg p-2.5 border border-white/5">
+                        <div>
+                          <p className="text-[8px] text-[var(--text-muted)] uppercase font-black">Swap Participant</p>
+                          <p className="font-extrabold text-white mt-0.5 truncate">{colleagueName}</p>
+                        </div>
+                        <div>
+                          <p className="text-[8px] text-[var(--text-muted)] uppercase font-black">Target Date</p>
+                          <p className="font-extrabold text-white mt-0.5 truncate">
+                            {new Date(swap.swap_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                          </p>
+                        </div>
+                      </div>
+
+                      {swap.rejection_reason && (
+                        <div className="text-[10px] text-red-300 bg-red-500/5 p-2 rounded-lg border border-red-500/10 mt-1">
+                          <span className="font-black uppercase text-[8px] block text-red-400">Rejection Reason:</span>
+                          {swap.rejection_reason}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 

@@ -86,6 +86,16 @@ export default function StaffHomePage() {
   const [issuePhoto, setIssuePhoto] = useState<File | null>(null);
   const [submittingIssue, setSubmittingIssue] = useState(false);
 
+  // Shift Swap States
+  const [colleagues, setColleagues] = useState<any[]>([]);
+  const [incomingSwaps, setIncomingSwaps] = useState<any[]>([]);
+  const [showSwapModal, setShowSwapModal] = useState(false);
+  const [swapColleagueId, setSwapColleagueId] = useState('');
+  const [swapDate, setSwapDate] = useState('');
+  const [swapNote, setSwapNote] = useState('');
+  const [submittingSwap, setSubmittingSwap] = useState(false);
+  const [processingSwapId, setProcessingSwapId] = useState<string | null>(null);
+
   // Toast
   const [toastMsg, setToastMsg] = useState('');
   const showToast = (msg: string) => {
@@ -244,10 +254,11 @@ export default function StaffHomePage() {
           setTomorrowShift('No shift scheduled');
         }
 
-        // SOP Initialization
+        // SOP & Swap Initialization
         if (sData.branch_id) {
           await checkAndMarkMissedTasks(sData.branch_id, todayStr);
           await loadTodayDuty(sData.branch_id, user.staffId!);
+          await fetchSwapData(sData.branch_id, user.staffId!);
         }
 
       } catch (err) {
@@ -645,6 +656,156 @@ export default function StaffHomePage() {
     }
   };
 
+  const fetchSwapData = async (branchId: string, staffId: string) => {
+    try {
+      const { data: cols } = await supabase
+        .from('staff')
+        .select('id, name')
+        .eq('branch_id', branchId)
+        .neq('id', staffId)
+        .eq('active', true)
+        .eq('is_resigned', false)
+        .order('name');
+      setColleagues(cols || []);
+
+      const { data: swaps } = await supabase
+        .from('shift_swap_requests')
+        .select('*, requested_by_staff:requested_by(name)')
+        .eq('requested_with', staffId)
+        .eq('status', 'pending_colleague');
+      setIncomingSwaps(swaps || []);
+    } catch (e) {
+      console.error('Failed to fetch swap data:', e);
+    }
+  };
+
+  const handleSwapSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!staffInfo || !swapColleagueId || !swapDate) {
+      alert('Please fill in all swap fields.');
+      return;
+    }
+    setSubmittingSwap(true);
+    try {
+      const dateObj = new Date(swapDate + 'T00:00:00');
+      const dayOfWeek = dateObj.getDay();
+
+      const { data: rosterEntries } = await supabase
+        .from('duty_roster')
+        .select('*')
+        .eq('branch_id', staffInfo.branch_id)
+        .eq('day_of_week', dayOfWeek)
+        .eq('active', true);
+
+      const reqEntry = rosterEntries?.find(r => r.staff_id === staffInfo.id);
+      const colEntry = rosterEntries?.find(r => r.staff_id === swapColleagueId);
+
+      const requesterOriginalRole = reqEntry 
+        ? `${reqEntry.role_type === 'primary' ? 'Primary' : 'Backup'} (${reqEntry.shift_window === 'opening' ? 'Opening' : 'Closing'})` 
+        : 'Regular Shift';
+
+      const colleagueOriginalRole = colEntry 
+        ? `${colEntry.role_type === 'primary' ? 'Primary' : 'Backup'} (${colEntry.shift_window === 'opening' ? 'Opening' : 'Closing'})` 
+        : 'Regular Shift';
+
+      const { error } = await supabase
+        .from('shift_swap_requests')
+        .insert({
+          requested_by: staffInfo.id,
+          requested_with: swapColleagueId,
+          swap_date: swapDate,
+          requester_original_role: requesterOriginalRole,
+          colleague_original_role: colleagueOriginalRole,
+          status: 'pending_colleague'
+        });
+
+      if (error) throw error;
+
+      const { createNotification } = await import('@/lib/notifications');
+      await createNotification({
+        type: 'shift_swap',
+        title: '🔄 Shift Swap Request',
+        message: `${staffInfo.name} wants to swap shift with you on ${new Date(swapDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}. Note: ${swapNote || 'None'}`,
+        branchId: staffInfo.branch_id,
+        staffId: swapColleagueId,
+        targetRole: 'staff'
+      });
+
+      showToast('Shift swap request sent ✓');
+      setShowSwapModal(false);
+      setSwapColleagueId('');
+      setSwapDate('');
+      setSwapNote('');
+      fetchSwapData(staffInfo.branch_id, staffInfo.id);
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to request shift swap: ' + err.message);
+    } finally {
+      setSubmittingSwap(false);
+    }
+  };
+
+  const handleColleagueResponse = async (swapId: string, action: 'accept' | 'decline') => {
+    if (!staffInfo) return;
+    setProcessingSwapId(swapId);
+    try {
+      const status = action === 'accept' ? 'pending_ops_approval' : 'declined';
+      
+      const { data: swapReq, error: updateErr } = await supabase
+        .from('shift_swap_requests')
+        .update({
+          status,
+          colleague_responded_at: new Date().toISOString()
+        })
+        .eq('id', swapId)
+        .select('*, requester:requested_by(name, branch_id)')
+        .single();
+
+      if (updateErr) throw updateErr;
+
+      const requesterName = (swapReq.requester as any)?.name || 'Your colleague';
+      const { createNotification } = await import('@/lib/notifications');
+      
+      if (action === 'decline') {
+        await createNotification({
+          type: 'shift_swap',
+          title: '❌ Shift Swap Declined',
+          message: `${staffInfo.name} declined your shift swap request for ${new Date(swapReq.swap_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}.`,
+          branchId: staffInfo.branch_id,
+          staffId: swapReq.requested_by,
+          targetRole: 'staff'
+        });
+        showToast('Shift swap declined ✓');
+      } else {
+        await createNotification({
+          type: 'shift_swap',
+          title: '⏳ Shift Swap Accepted (Pending Ops)',
+          message: `${staffInfo.name} accepted your shift swap request for ${new Date(swapReq.swap_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}. Awaiting Operations Head approval.`,
+          branchId: staffInfo.branch_id,
+          staffId: swapReq.requested_by,
+          targetRole: 'staff'
+        });
+
+        await createNotification({
+          type: 'shift_swap',
+          title: '🔄 Shift Swap Approval Pending',
+          message: `${requesterName} and ${staffInfo.name} have agreed to swap shifts on ${new Date(swapReq.swap_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}. Operations approval required.`,
+          branchId: staffInfo.branch_id,
+          staffId: null,
+          targetRole: 'ops_manager'
+        });
+        showToast('Shift swap accepted & pending approval ✓');
+      }
+
+      fetchSwapData(staffInfo.branch_id, staffInfo.id);
+    } catch (err: any) {
+      console.error(err);
+      alert('Failed to respond to swap request: ' + err.message);
+    } finally {
+      setProcessingSwapId(null);
+    }
+  };
+
   const handleDismissAnnouncement = async (annId: string) => {
     if (!user?.staffId) return;
     try {
@@ -759,6 +920,51 @@ export default function StaffHomePage() {
 
   return (
     <div className="space-y-5 pb-6">
+
+      {/* --- INCOMING SHIFT SWAP REQUESTS --- */}
+      {incomingSwaps.map(swap => (
+        <div 
+          key={swap.id} 
+          className="bg-gradient-to-br from-amber-50 to-amber-100/50 border border-amber-200 rounded-2xl p-4 shadow-sm flex flex-col space-y-3 animate-in fade-in duration-200 text-xs font-semibold text-amber-950"
+        >
+          <div className="flex items-start gap-3 text-left">
+            <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center flex-shrink-0 shadow-sm">
+              <RefreshCw size={16} />
+            </div>
+            <div className="flex-1 space-y-0.5">
+              <h4 className="text-[10px] font-black uppercase tracking-wider text-amber-800">Shift Swap Request</h4>
+              <p className="font-extrabold text-[#1A1A1A]">
+                {swap.requested_by_staff?.name || 'A colleague'} wants to swap shift with you.
+              </p>
+              <p className="text-[10px] text-slate-500 font-bold">
+                Date: {new Date(swap.swap_date).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' })}
+              </p>
+              {swap.colleague_original_role && swap.colleague_original_role !== 'Regular Shift' && (
+                <p className="text-[9px] bg-amber-200/50 px-1.5 py-0.5 rounded inline-block text-amber-900 font-black uppercase mt-1">
+                  Your Duty Role: {swap.colleague_original_role}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="flex gap-2 pt-1">
+            <button
+              onClick={() => handleColleagueResponse(swap.id, 'accept')}
+              disabled={processingSwapId !== null}
+              className="flex-1 min-h-[36px] bg-slate-900 hover:bg-black text-white font-black text-[10px] uppercase tracking-wider rounded-xl active:scale-95 transition-all cursor-pointer flex items-center justify-center"
+            >
+              {processingSwapId === swap.id ? <RefreshCw size={14} className="animate-spin" /> : 'Accept Swap'}
+            </button>
+            <button
+              onClick={() => handleColleagueResponse(swap.id, 'decline')}
+              disabled={processingSwapId !== null}
+              className="flex-1 min-h-[36px] bg-white border border-[#EAEAEA] text-slate-700 hover:bg-slate-50 font-black text-[10px] uppercase tracking-wider rounded-xl active:scale-95 transition-all cursor-pointer flex items-center justify-center"
+            >
+              Decline
+            </button>
+          </div>
+        </div>
+      ))}
 
       {/* --- SOP TODAY'S DUTY CARDS --- */}
       {isDeputyGuardian && activeShiftWindow && (
@@ -1542,6 +1748,93 @@ export default function StaffHomePage() {
         title="Report an Issue"
       >
         <Wrench size={22} />
+      </button>
+
+      {/* Shift Swap Request Modal */}
+      {showSwapModal && (
+        <div className="fixed inset-0 bg-[#1A1A1A]/60 backdrop-blur-sm z-[20000] flex items-center justify-center p-4">
+          <div className="bg-white border border-[#E8E8E8] rounded-[20px] max-w-sm w-full p-6 shadow-xl space-y-4 animate-in fade-in zoom-in-95 duration-150 text-xs font-semibold text-[#1A1A1A]">
+            <div className="flex justify-between items-center border-b border-[#F0F0F0] pb-3 text-left">
+              <h3 className="text-sm font-black uppercase tracking-wider">
+                Request Shift Swap
+              </h3>
+              <button
+                onClick={() => setShowSwapModal(false)}
+                className="text-slate-400 hover:text-[#1A1A1A] text-xs font-bold"
+              >
+                Close
+              </button>
+            </div>
+
+            <form onSubmit={handleSwapSubmit} className="space-y-4 text-left">
+              
+              {/* Pick colleague */}
+              <div>
+                <label className="block text-[9px] font-black uppercase text-[#999999] tracking-wider mb-1">Pick a Colleague (Same Branch)</label>
+                <select
+                  value={swapColleagueId}
+                  onChange={e => setSwapColleagueId(e.target.value)}
+                  className="w-full bg-[#F8F8F8] border border-[#EAEAEA] rounded-xl p-3 focus:outline-none focus:border-slate-500 font-bold cursor-pointer"
+                  required
+                >
+                  <option value="">Select Colleague...</option>
+                  {colleagues.map(col => (
+                    <option key={col.id} value={col.id}>{col.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Date */}
+              <div>
+                <label className="block text-[9px] font-black uppercase text-[#999999] tracking-wider mb-1">Swap Date</label>
+                <input
+                  type="date"
+                  value={swapDate}
+                  onChange={e => setSwapDate(e.target.value)}
+                  className="w-full bg-[#F8F8F8] border border-[#EAEAEA] rounded-xl p-3 focus:outline-none focus:border-slate-500 font-bold cursor-pointer [color-scheme:light]"
+                  required
+                />
+              </div>
+
+              {/* Optional context note */}
+              <div>
+                <label className="block text-[9px] font-black uppercase text-[#999999] tracking-wider mb-1">Swap Note (Optional)</label>
+                <textarea
+                  rows={2}
+                  placeholder="e.g. Can you cover my opening shift, I will cover yours?"
+                  value={swapNote}
+                  onChange={e => setSwapNote(e.target.value)}
+                  className="w-full bg-[#F8F8F8] border border-[#EAEAEA] rounded-xl p-3 focus:outline-none focus:border-slate-500 font-semibold"
+                />
+              </div>
+
+              {/* Submit */}
+              <button
+                type="submit"
+                disabled={submittingSwap}
+                className="w-full py-3 bg-[#1A1A1A] hover:bg-[#333333] disabled:opacity-50 text-white font-extrabold rounded-xl transition-all shadow-md active:scale-95 cursor-pointer mt-4 flex items-center justify-center gap-1.5"
+              >
+                {submittingSwap ? <RefreshCw size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+                <span>Submit Swap Request</span>
+              </button>
+
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Action Button (Request Swap) */}
+      <button
+        onClick={() => {
+          setSwapColleagueId('');
+          setSwapDate('');
+          setSwapNote('');
+          setShowSwapModal(true);
+        }}
+        className="fixed bottom-40 right-4 z-50 bg-[#7D3C98] hover:bg-[#6C3483] text-white rounded-full p-4 shadow-xl active:scale-95 transition-all cursor-pointer flex items-center justify-center border border-white/10"
+        title="Request Shift Swap"
+      >
+        <RefreshCw size={22} />
       </button>
 
       {/* Toast alert display */}
