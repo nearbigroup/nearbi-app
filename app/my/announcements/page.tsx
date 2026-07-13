@@ -12,6 +12,7 @@ interface Announcement {
   created_by: string;
   branch_id: string | null;
   target: 'all' | 'daily' | 'hypermarket';
+  requires_acknowledgement: boolean;
   created_at: string;
 }
 
@@ -20,6 +21,7 @@ export default function StaffAnnouncementsPage() {
   
   const [loading, setLoading] = useState(true);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [acknowledgedIds, setAcknowledgedIds] = useState<string[]>([]);
   const [error, setError] = useState('');
 
   const fetchAnnouncements = async () => {
@@ -39,6 +41,17 @@ export default function StaffAnnouncementsPage() {
 
       if (fetchErr) throw fetchErr;
       setAnnouncements(data || []);
+
+      if (user.staffId) {
+        const { data: ackD } = await supabase
+          .from('announcement_acknowledgements')
+          .select('announcement_id')
+          .eq('staff_id', user.staffId);
+        
+        if (ackD) {
+          setAcknowledgedIds(ackD.map(a => a.announcement_id));
+        }
+      }
     } catch (err: any) {
       console.error('Error fetching announcements:', err);
       setError('Failed to load announcements. Please try again.');
@@ -55,6 +68,23 @@ export default function StaffAnnouncementsPage() {
     const diffMs = new Date().getTime() - new Date(createdAtString).getTime();
     const diffHours = diffMs / (1000 * 60 * 60);
     return diffHours >= 0 && diffHours < 24;
+  };
+
+  const handleAcknowledge = async (annId: string) => {
+    if (!user?.staffId) return;
+    try {
+      const { error: insertErr } = await supabase
+        .from('announcement_acknowledgements')
+        .insert({
+          announcement_id: annId,
+          staff_id: user.staffId
+        });
+      if (insertErr) throw insertErr;
+      setAcknowledgedIds(prev => [...prev, annId]);
+    } catch (err) {
+      console.error('Error acknowledging announcement:', err);
+      alert('Failed to record acknowledgement. Please try again.');
+    }
   };
 
   if (loading) {
@@ -103,6 +133,7 @@ export default function StaffAnnouncementsPage() {
         <div className="space-y-4">
           {announcements.map((ann) => {
             const hasNewBadge = isNew(ann.created_at);
+            const isAcked = acknowledgedIds.includes(ann.id);
             return (
               <div
                 key={ann.id}
@@ -127,6 +158,24 @@ export default function StaffAnnouncementsPage() {
                 <p className="text-xs text-[var(--text-secondary)] font-medium leading-relaxed whitespace-pre-wrap break-words">
                   {ann.message}
                 </p>
+
+                {/* Acknowledgement trigger button if required */}
+                {ann.requires_acknowledgement && (
+                  <div className="pt-2">
+                    {isAcked ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] text-emerald-600 font-extrabold bg-emerald-50 border border-emerald-100 rounded-lg px-2.5 py-1">
+                        ✓ Read & Understood
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => handleAcknowledge(ann.id)}
+                        className="bg-[#1A1A1A] hover:bg-[#333333] text-white font-extrabold text-[10px] px-3.5 py-1.5 rounded-lg active:scale-95 transition-all cursor-pointer shadow-sm uppercase tracking-wider"
+                      >
+                        Acknowledge Read & Understood
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 <div className="border-t border-[var(--border)] pt-2.5 flex items-center justify-between text-[10px] font-bold text-[var(--text-muted)]">
                   <div className="flex items-center space-x-1">

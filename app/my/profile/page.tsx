@@ -25,7 +25,8 @@ import {
   AlertCircle,
   Stethoscope,
   Eye,
-  RefreshCw
+  RefreshCw,
+  Award
 } from 'lucide-react';
 import { formatTime12hr } from '@/lib/utils';
 
@@ -152,6 +153,7 @@ export default function StaffProfilePage() {
   // General saving state
   const [saving, setSaving] = useState(false);
   const [toastMsg, setToastMsg] = useState('');
+  const [recognitions, setRecognitions] = useState<any[]>([]);
 
   const fetchProfileDetails = async () => {
     if (!user || !user.staffId) return;
@@ -258,6 +260,16 @@ export default function StaffProfilePage() {
             loadSignedPreview(`doc_${doc.id}`, doc.doc_url);
           }
         }
+      }
+
+      // 5. Fetch Recognitions
+      const { data: recData } = await supabase
+        .from('staff_recognition')
+        .select('*')
+        .eq('staff_id', user.staffId)
+        .order('awarded_at', { ascending: false });
+      if (recData) {
+        setRecognitions(recData);
       }
 
     } catch (e) {
@@ -1443,6 +1455,70 @@ export default function StaffProfilePage() {
                   className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3.5 text-xs font-bold text-[#1A1A1A] focus:outline-none"
                 />
               </div>
+            </div>
+          )}
+        </div>
+
+        {/* 9. RECOGNITION & AWARDS */}
+        <div className="bg-white border border-[#E8E8E8] rounded-xl overflow-hidden shadow-sm">
+          <button
+            type="button"
+            onClick={() => toggleSection('awards')}
+            className="w-full px-4 py-3.5 flex items-center justify-between text-[#1a1a1a] hover:bg-gray-50/50 transition-colors"
+          >
+            <span className="text-xs font-black uppercase tracking-wider flex items-center gap-2">
+              <Award size={15} className="text-indigo-650" />
+              9. Recognition & Awards Received
+            </span>
+            <div className="flex items-center gap-1">
+              {recognitions.length > 0 && (
+                <span className="bg-indigo-50 border border-indigo-200 text-indigo-705 text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider">
+                  {recognitions.length} Awards
+                </span>
+              )}
+              <ChevronDown
+                size={16}
+                className={`text-[#BBBBBB] transition-transform ${openSection === 'awards' ? 'rotate-180' : ''}`}
+              />
+            </div>
+          </button>
+
+          {openSection === 'awards' && (
+            <div className="px-4 pb-5 pt-1.5 border-t border-[#F2F2F2] space-y-4 text-xs font-semibold text-[#555555]">
+              {recognitions.length === 0 ? (
+                <p className="text-xs text-gray-400 italic text-center py-4">No recognition awards or badges received yet.</p>
+              ) : (
+                <div className="space-y-3">
+                  {recognitions.map((rec: any, idx: number) => (
+                    <div key={idx} className="bg-slate-50/80 border border-slate-100 p-3.5 rounded-xl space-y-1.5 text-left">
+                      <div className="flex justify-between items-center">
+                        <span className="bg-indigo-50 border border-indigo-205 text-indigo-700 text-[10px] font-black px-2 py-0.5 rounded uppercase tracking-wide">
+                          🏆 {rec.award_type}
+                        </span>
+                        <span className="text-[9px] text-gray-400 font-bold">
+                          {new Date(rec.awarded_at).toLocaleDateString()}
+                        </span>
+                      </div>
+                      
+                      {rec.period_label && (
+                        <span className="text-[9px] text-amber-600 font-black uppercase block tracking-wider mt-1">
+                          Period: {rec.period_label}
+                        </span>
+                      )}
+
+                      {rec.award_note && (
+                        <p className="text-[11px] text-slate-700 italic border-l-2 border-indigo-200 pl-2 font-medium mt-1 leading-relaxed">
+                          "{rec.award_note}"
+                        </p>
+                      )}
+
+                      <p className="text-[8.5px] text-gray-450 mt-1 font-bold">
+                        Awarded by: {rec.awarded_by}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

@@ -226,6 +226,7 @@ export default function DashboardPage() {
   const [equipmentIssues, setEquipmentIssues] = useState<any[]>([]);
   const [urgentHandovers, setUrgentHandovers] = useState<any[]>([]);
   const [overdueTasks, setOverdueTasks] = useState<any[]>([]);
+  const [dueRenewals, setDueRenewals] = useState<any[]>([]);
 
   // Staff Alerts States
   const [alerts, setAlerts] = useState<any[]>([]);
@@ -454,6 +455,25 @@ export default function DashboardPage() {
         filteredAlerts = filteredAlerts.filter(a => a.escalation_level === 'habitual');
       }
       setAlerts(filteredAlerts);
+
+      // Load compliance renewals
+      let renewalsQuery = supabase
+        .from('compliance_renewals')
+        .select('*');
+
+      if (userBranch) {
+        renewalsQuery = renewalsQuery.eq('branch_id', userBranch);
+      }
+
+      const { data: renewalsData } = await renewalsQuery;
+      
+      const activeDueRenewals = (renewalsData || []).filter((r: any) => {
+        const dueDate = new Date(r.next_due_date);
+        const diffDays = Math.ceil((dueDate.getTime() - today.getTime()) / (24 * 60 * 60 * 1000));
+        return diffDays <= r.reminder_days_before && diffDays >= 0;
+      });
+
+      setDueRenewals(activeDueRenewals);
 
       // Fetch sent history alerts
       const { data: historyData } = await supabase
@@ -1328,24 +1348,36 @@ export default function DashboardPage() {
             <h1 className="text-[#1A1A1A] text-2xl font-bold">Today I Need to Know 🛡️</h1>
           </div>
           
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2 justify-end">
             <Link
               href="/announcements"
-              className="bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold px-4 py-2 rounded-xl text-xs active:scale-95 transition-all shadow cursor-pointer text-center flex items-center justify-center"
+              className="bg-[#1A1A1A] hover:bg-[#333333] text-white font-bold px-3.5 py-2 rounded-xl text-xs active:scale-95 transition-all shadow cursor-pointer text-center flex items-center justify-center"
             >
               Announcements
             </Link>
             <Link
               href="/sop-tasks"
-              className="bg-slate-700 hover:bg-slate-600 text-white font-bold px-4 py-2 rounded-xl text-xs active:scale-95 transition-all shadow cursor-pointer text-center flex items-center justify-center"
+              className="bg-slate-700 hover:bg-slate-600 text-white font-bold px-3.5 py-2 rounded-xl text-xs active:scale-95 transition-all shadow cursor-pointer text-center flex items-center justify-center"
             >
               SOP Tasks & Roster
             </Link>
             <Link
               href="/maintenance"
-              className="bg-red-700 hover:bg-red-650 text-white font-bold px-4 py-2 rounded-xl text-xs active:scale-95 transition-all shadow cursor-pointer text-center flex items-center justify-center"
+              className="bg-red-700 hover:bg-red-650 text-white font-bold px-3.5 py-2 rounded-xl text-xs active:scale-95 transition-all shadow cursor-pointer text-center flex items-center justify-center"
             >
               Maintenance & Visits
+            </Link>
+            <Link
+              href="/sop-utilities"
+              className="bg-indigo-700 hover:bg-indigo-650 text-white font-bold px-3.5 py-2 rounded-xl text-xs active:scale-95 transition-all shadow cursor-pointer text-center flex items-center justify-center"
+            >
+              SOP Utilities
+            </Link>
+            <Link
+              href="/settings"
+              className="bg-slate-800 hover:bg-black text-white font-bold px-3.5 py-2 rounded-xl text-xs active:scale-95 transition-all shadow cursor-pointer text-center flex items-center justify-center"
+            >
+              Settings
             </Link>
           </div>
         </div>
@@ -1366,6 +1398,7 @@ export default function DashboardPage() {
               const branchUrgentHandovers = urgentHandovers.filter(h => h.branch_id === branchId);
               const branchOverdue = overdueTasks.filter(o => o.branch_id === branchId);
               const branchAlerts = alerts.filter(a => (a.staff as any)?.branch_id === branchId);
+              const branchRenewals = dueRenewals.filter(r => r.branch_id === branchId);
 
               const hasIssues = 
                 branchAbsents.length > 0 || 
@@ -1374,7 +1407,8 @@ export default function DashboardPage() {
                 branchEquipment.length > 0 || 
                 branchUrgentHandovers.length > 0 || 
                 branchOverdue.length > 0 ||
-                branchAlerts.length > 0;
+                branchAlerts.length > 0 ||
+                branchRenewals.length > 0;
 
               return (
                 <div key={branchId} className="bg-white border border-[#EAEAEA] rounded-[20px] p-6 shadow-sm space-y-4">
@@ -1603,6 +1637,29 @@ export default function DashboardPage() {
                                 </div>
                               );
                             })}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Compliance Renewals Alert Banner */}
+                      {branchRenewals.length > 0 && (
+                        <div className="bg-amber-50 border border-amber-200/50 rounded-xl p-3.5 flex flex-col gap-2">
+                          <div className="flex items-center gap-2">
+                            <AlertTriangle size={18} className="text-amber-600 flex-shrink-0" />
+                            <h3 className="text-xs font-black text-amber-950 uppercase tracking-wide">⚠️ Compliance Renewals Due</h3>
+                          </div>
+                          <div className="space-y-1.5 pl-0.5 text-left text-[11px] font-semibold text-amber-900">
+                            {branchRenewals.map((r: any) => (
+                              <div key={r.id} className="bg-white/80 border border-amber-200/40 p-2 rounded-lg flex justify-between items-center">
+                                <div>
+                                  <span className="font-extrabold text-[#1A1A1A] block">{r.item_name}</span>
+                                  <span className="text-[9px] text-gray-500 block uppercase font-bold mt-0.5">{r.renewal_type.replace(/_/g, ' ')}</span>
+                                </div>
+                                <span className="text-[10px] text-amber-850 font-black uppercase tracking-wider">
+                                  Due: {new Date(r.next_due_date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
+                                </span>
+                              </div>
+                            ))}
                           </div>
                         </div>
                       )}

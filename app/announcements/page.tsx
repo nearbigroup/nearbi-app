@@ -22,6 +22,7 @@ interface Announcement {
   target_staff_id: string | null;
   is_important: boolean;
   show_on_kiosk: boolean;
+  requires_acknowledgement: boolean;
   created_by: string;
   created_at: string;
 }
@@ -50,6 +51,7 @@ export default function AnnouncementsPage() {
   const [targetStaffId, setTargetStaffId] = useState('');
   const [isImportant, setIsImportant] = useState(false);
   const [showOnKiosk, setShowOnKiosk] = useState(false);
+  const [requiresAcknowledgement, setRequiresAcknowledgement] = useState(false);
 
   // Selected announcement for receipts
   const [selectedAnn, setSelectedAnn] = useState<Announcement | null>(null);
@@ -108,6 +110,7 @@ export default function AnnouncementsPage() {
           target_staff_id: staffIdVal,
           is_important: isImportant,
           show_on_kiosk: showOnKiosk,
+          requires_acknowledgement: requiresAcknowledgement,
           created_by: user.name || user.email || 'Operations Manager'
         })
         .select()
@@ -119,7 +122,7 @@ export default function AnnouncementsPage() {
         action: 'create',
         table_name: 'staff_announcements',
         record_id: newAnn.id,
-        new_value: { title: title.trim(), target: targetVal, is_important: isImportant, show_on_kiosk: showOnKiosk },
+        new_value: { title: title.trim(), target: targetVal, is_important: isImportant, show_on_kiosk: showOnKiosk, requires_acknowledgement: requiresAcknowledgement },
         performed_by: user.email,
         performed_by_role: user.role,
         reason: `Created announcement "${title.trim()}"`
@@ -163,6 +166,7 @@ export default function AnnouncementsPage() {
       setTargetStaffId('');
       setIsImportant(false);
       setShowOnKiosk(false);
+      setRequiresAcknowledgement(false);
       setShowCreateForm(false);
       fetchAnnouncements();
     } catch (err) {
@@ -201,6 +205,7 @@ export default function AnnouncementsPage() {
     }
     setIsImportant(ann.is_important);
     setShowOnKiosk(ann.show_on_kiosk);
+    setRequiresAcknowledgement(ann.requires_acknowledgement || false);
   };
 
   const handleUpdate = async (e: React.FormEvent) => {
@@ -220,7 +225,8 @@ export default function AnnouncementsPage() {
           target: targetVal,
           target_staff_id: staffIdVal,
           is_important: isImportant,
-          show_on_kiosk: showOnKiosk
+          show_on_kiosk: showOnKiosk,
+          requires_acknowledgement: requiresAcknowledgement
         })
         .eq('id', editingAnn.id);
 
@@ -230,7 +236,7 @@ export default function AnnouncementsPage() {
         action: 'update',
         table_name: 'staff_announcements',
         record_id: editingAnn.id,
-        new_value: { title: title.trim(), target: targetVal, is_important: isImportant, show_on_kiosk: showOnKiosk },
+        new_value: { title: title.trim(), target: targetVal, is_important: isImportant, show_on_kiosk: showOnKiosk, requires_acknowledgement: requiresAcknowledgement },
         performed_by: user.email,
         performed_by_role: user.role,
         reason: `Updated announcement "${title.trim()}"`
@@ -247,6 +253,7 @@ export default function AnnouncementsPage() {
       setTargetStaffId('');
       setIsImportant(false);
       setShowOnKiosk(false);
+      setRequiresAcknowledgement(false);
       
       fetchAnnouncements();
     } catch (err) {
@@ -304,8 +311,9 @@ export default function AnnouncementsPage() {
     setSelectedAnn(ann);
     setLoadingReceipts(true);
     try {
+      const tableName = ann.requires_acknowledgement ? 'announcement_acknowledgements' : 'announcement_reads';
       const { data: readData, error } = await supabase
-        .from('announcement_reads')
+        .from(tableName)
         .select('*')
         .eq('announcement_id', ann.id);
 
@@ -324,6 +332,7 @@ export default function AnnouncementsPage() {
 
       const mergedReceipts: ReadReceipt[] = targetStaff.map(s => {
         const readLog = readMap.get(s.id);
+        const timestamp = readLog ? (readLog.read_at || readLog.acknowledged_at) : null;
         return {
           staff_id: s.id,
           name: s.name,
@@ -331,7 +340,7 @@ export default function AnnouncementsPage() {
           branch_id: s.branch_id,
           read: !!readLog,
           read_on_kiosk: readLog ? !!readLog.read_on_kiosk : false,
-          read_at: readLog ? readLog.read_at : null
+          read_at: timestamp
         };
       });
 
@@ -483,6 +492,16 @@ export default function AnnouncementsPage() {
                 />
                 <span className="font-semibold text-gray-700">Display on Kiosk (Forced check-in acknowledgment overlay)</span>
               </label>
+
+              <label className="flex items-center space-x-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={requiresAcknowledgement}
+                  onChange={e => setRequiresAcknowledgement(e.target.checked)}
+                  className="rounded border-[#E8E8E8] text-[#1A1A1A] focus:ring-0"
+                />
+                <span className="font-semibold text-gray-700">Require "Read & Understood" acknowledgement</span>
+              </label>
             </div>
 
             <button
@@ -597,7 +616,9 @@ export default function AnnouncementsPage() {
             <div className="bg-white border border-[#E8E8E8] rounded-[16px] p-5 shadow-md space-y-4">
               <div className="flex justify-between items-start border-b border-[#E8E8E8] pb-3">
                 <div>
-                  <h3 className="text-sm font-extrabold text-[#1A1A1A]">Read Receipts</h3>
+                  <h3 className="text-sm font-extrabold text-[#1A1A1A]">
+                    {selectedAnn.requires_acknowledgement ? 'Acknowledgements' : 'Read Receipts'}
+                  </h3>
                   <p className="text-[9.5px] text-[var(--text-muted)] font-bold uppercase mt-0.5 tracking-wider truncate max-w-[200px]" title={selectedAnn.title}>
                     {selectedAnn.title}
                   </p>
@@ -625,11 +646,15 @@ export default function AnnouncementsPage() {
                       <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3.5 grid grid-cols-3 gap-2.5 text-center font-bold">
                         <div>
                           <span className="text-[20px] text-[#1A1A1A] font-black">{readCount}</span>
-                          <span className="text-[8.5px] text-[var(--text-muted)] uppercase block tracking-wider mt-0.5">Read</span>
+                          <span className="text-[8.5px] text-[var(--text-muted)] uppercase block tracking-wider mt-0.5">
+                            {selectedAnn.requires_acknowledgement ? 'Acked' : 'Read'}
+                          </span>
                         </div>
                         <div>
                           <span className="text-[20px] text-gray-400 font-black">{totalCount - readCount}</span>
-                          <span className="text-[8.5px] text-[var(--text-muted)] uppercase block tracking-wider mt-0.5">Unread</span>
+                          <span className="text-[8.5px] text-[var(--text-muted)] uppercase block tracking-wider mt-0.5">
+                            {selectedAnn.requires_acknowledgement ? 'Pending' : 'Unread'}
+                          </span>
                         </div>
                         <div>
                           <span className="text-[20px] text-[#2D7A3A] font-black">{percent}%</span>
@@ -641,7 +666,7 @@ export default function AnnouncementsPage() {
 
                   {/* List of Receipts */}
                   <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
-                    {receipts.map(rec => (
+                     {receipts.map(rec => (
                       <div
                         key={rec.staff_id}
                         className="bg-gray-50/50 border border-gray-100 rounded-xl p-2.5 flex items-center justify-between text-[11px]"
@@ -657,7 +682,11 @@ export default function AnnouncementsPage() {
                             <div className="flex flex-col items-end">
                               <span className="bg-[#EDF7EF] text-[#2D7A3A] border border-[#C3E6CB]/20 text-[9px] font-black px-1.5 py-0.5 rounded flex items-center gap-1 uppercase leading-none">
                                 <CheckCircle size={8} fill="currentColor" />
-                                <span>Read ({rec.read_on_kiosk ? 'Kiosk' : 'Portal'})</span>
+                                <span>
+                                  {selectedAnn.requires_acknowledgement
+                                    ? 'Acked'
+                                    : `Read (${rec.read_on_kiosk ? 'Kiosk' : 'Portal'})`}
+                                </span>
                               </span>
                               {rec.read_at && (
                                 <span className="text-[8px] text-[var(--text-muted)] mt-1 font-bold">
@@ -667,7 +696,7 @@ export default function AnnouncementsPage() {
                             </div>
                           ) : (
                             <span className="bg-gray-100 text-gray-400 border border-gray-200 text-[9px] font-black px-1.5 py-0.5 rounded uppercase leading-none">
-                              Unread
+                              {selectedAnn.requires_acknowledgement ? 'Pending' : 'Unread'}
                             </span>
                           )}
                         </div>
@@ -787,6 +816,16 @@ export default function AnnouncementsPage() {
                     className="rounded border-[#E8E8E8] text-[#1A1A1A] focus:ring-0"
                   />
                   <span className="font-semibold text-gray-700">Display on Kiosk (Forced check-in acknowledgment overlay)</span>
+                </label>
+
+                <label className="flex items-center space-x-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={requiresAcknowledgement}
+                    onChange={e => setRequiresAcknowledgement(e.target.checked)}
+                    className="rounded border-[#E8E8E8] text-[#1A1A1A] focus:ring-0"
+                  />
+                  <span className="font-semibold text-gray-700">Require "Read & Understood" acknowledgement</span>
                 </label>
               </div>
 

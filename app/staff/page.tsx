@@ -1483,10 +1483,17 @@ export default function StaffPage() {
         .eq('staff_id', s.id)
         .order('flagged_at', { ascending: false });
 
+      const { data: recData } = await supabase
+        .from('staff_recognition')
+        .select('*')
+        .eq('staff_id', s.id)
+        .order('awarded_at', { ascending: false });
+
       const att = attData || [];
       const lFines = lfData || [];
       const sFines = sfData || [];
       const alerts = alertsData || [];
+      const recognitions = recData || [];
 
       // Calculate clean streak (days since last absence/late)
       let cleanStreak = 0;
@@ -1669,7 +1676,8 @@ export default function StaffPage() {
             history: [...lFines, ...sFines].slice(0, 5)
           },
           recognition: {
-            count: 0
+            count: recognitions.length,
+            history: recognitions
           },
           alerts: {
             thisYearCount: alerts.filter(a => new Date(a.flagged_at).getFullYear() === new Date().getFullYear()).length,
@@ -4374,13 +4382,32 @@ export default function StaffPage() {
                         <span className="text-slate-200">⭐ Recognition</span>
                       </div>
                       <div className="flex items-center space-x-1.5 text-[10px] text-slate-400 font-extrabold uppercase">
-                        <span>0 Positive Markers</span>
+                        <span>{reportCardData.metrics.recognition.count} Positive Markers</span>
                         {expandedMetric === 'recognition' ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                       </div>
                     </button>
                     {expandedMetric === 'recognition' && (
-                      <div className="px-4 pb-4 pt-1 border-t border-slate-700/50 text-left text-[11px] font-semibold text-slate-450 italic">
-                        No active recognition system markers configured yet.
+                      <div className="px-4 pb-4 pt-1 border-t border-slate-700/50 text-left text-[11px] font-semibold text-slate-300 space-y-2">
+                        {reportCardData.metrics.recognition.history.length === 0 ? (
+                          <span className="text-[10px] text-slate-500 italic block py-2">No recognition awards received yet.</span>
+                        ) : (
+                          <div className="space-y-1.5 max-h-[160px] overflow-y-auto pr-1 py-1">
+                            {reportCardData.metrics.recognition.history.map((rec: any, idx: number) => (
+                              <div key={idx} className="bg-slate-900/60 border border-slate-700/40 p-2 rounded-lg text-[10.5px]">
+                                <div className="flex justify-between items-center font-bold text-slate-200">
+                                  <span className="font-extrabold text-indigo-400">🏆 {rec.award_type}</span>
+                                  <span className="text-[8.5px] text-slate-400 font-bold">{new Date(rec.awarded_at).toLocaleDateString()}</span>
+                                </div>
+                                {rec.period_label && (
+                                  <span className="text-[8px] text-amber-400 font-black uppercase mt-0.5 block">{rec.period_label}</span>
+                                )}
+                                {rec.award_note && (
+                                  <p className="text-[10px] text-slate-300/80 italic mt-1 border-l border-slate-650 pl-1.5 font-medium">"{rec.award_note}"</p>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

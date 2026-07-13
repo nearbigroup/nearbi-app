@@ -24,7 +24,10 @@ import {
   AlertCircle,
   Lock,
   RefreshCw,
-  Wrench
+  Wrench,
+  Phone,
+  Lightbulb,
+  Send
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { formatTime12hr } from '@/lib/utils';
@@ -95,6 +98,22 @@ export default function StaffHomePage() {
   const [swapNote, setSwapNote] = useState('');
   const [submittingSwap, setSubmittingSwap] = useState(false);
   const [processingSwapId, setProcessingSwapId] = useState<string | null>(null);
+
+  // New SOP utilities states
+  const [showContactsModal, setShowContactsModal] = useState(false);
+  const [showSuggestionModal, setShowSuggestionModal] = useState(false);
+  const [showRecognitionsModal, setShowRecognitionsModal] = useState(false);
+
+  const [emergencyContacts, setEmergencyContacts] = useState<any[]>([]);
+  const [loadingContacts, setLoadingContacts] = useState(false);
+
+  const [suggestions, setSuggestions] = useState<any[]>([]);
+  const [newSuggestionText, setNewSuggestionText] = useState('');
+  const [submittingSuggestion, setSubmittingSuggestion] = useState(false);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+
+  const [recognitions, setRecognitions] = useState<any[]>([]);
+  const [loadingRecognitions, setLoadingRecognitions] = useState(false);
 
   // Toast
   const [toastMsg, setToastMsg] = useState('');
@@ -257,9 +276,33 @@ export default function StaffHomePage() {
         // SOP & Swap Initialization
         if (sData.branch_id) {
           await checkAndMarkMissedTasks(sData.branch_id, todayStr);
-          await loadTodayDuty(sData.branch_id, user.staffId!);
           await fetchSwapData(sData.branch_id, user.staffId!);
+          await loadTodayDuty(sData.branch_id, user.staffId!);
+
+          // Fetch emergency contacts
+          const { data: contactsD } = await supabase
+            .from('emergency_contacts_directory')
+            .select('*')
+            .or(`branch_id.is.null,branch_id.eq.${sData.branch_id}`)
+            .order('display_order');
+          if (contactsD) setEmergencyContacts(contactsD);
         }
+
+        // Fetch staff suggestions
+        const { data: suggestionsD } = await supabase
+          .from('staff_suggestions')
+          .select('*')
+          .eq('staff_id', user.staffId)
+          .order('submitted_at', { ascending: false });
+        if (suggestionsD) setSuggestions(suggestionsD);
+
+        // Fetch recognitions
+        const { data: recognitionsD } = await supabase
+          .from('staff_recognition')
+          .select('*')
+          .eq('staff_id', user.staffId)
+          .order('awarded_at', { ascending: false });
+        if (recognitionsD) setRecognitions(recognitionsD);
 
       } catch (err) {
         console.error('Error fetching staff home data:', err);
@@ -858,6 +901,37 @@ export default function StaffHomePage() {
     await handleDismissAnnouncement(ann.id);
   };
 
+  const handleSubmitSuggestion = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newSuggestionText.trim() || !user?.staffId) return;
+    setSubmittingSuggestion(true);
+    try {
+      const { error: insertErr } = await supabase
+        .from('staff_suggestions')
+        .insert({
+          staff_id: user.staffId,
+          suggestion_text: newSuggestionText.trim()
+        });
+      if (insertErr) throw insertErr;
+      setNewSuggestionText('');
+      
+      // Refresh suggestions list
+      const { data: suggestionsD } = await supabase
+        .from('staff_suggestions')
+        .select('*')
+        .eq('staff_id', user.staffId)
+        .order('submitted_at', { ascending: false });
+      if (suggestionsD) setSuggestions(suggestionsD);
+
+      alert('Thank you! Your suggestion has been submitted successfully ✓');
+    } catch (err) {
+      console.error('Error submitting suggestion:', err);
+      alert('Failed to submit suggestion.');
+    } finally {
+      setSubmittingSuggestion(false);
+    }
+  };
+
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user || !user.staffId || !dobInput) return;
@@ -1437,6 +1511,197 @@ export default function StaffHomePage() {
           Planned
         </div>
       </div>
+
+      {/* Quick Utilities Section */}
+      <div className="space-y-2.5">
+        <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+          📋 Quick Utilities
+        </h4>
+        <div className="grid grid-cols-3 gap-2.5">
+          {/* Emergency Directory */}
+          <button
+            onClick={() => setShowContactsModal(true)}
+            className="bg-white border border-[#E8E8E8] hover:border-[#1A1A1A] rounded-2xl p-3 flex flex-col items-center justify-center text-center transition-all cursor-pointer shadow-sm active:scale-95 text-[#1A1A1A]"
+          >
+            <Phone className="text-red-500 mb-1.5" size={20} strokeWidth={1.5} />
+            <span className="text-[10px] font-bold block leading-tight">Emergency Contacts</span>
+          </button>
+
+          {/* Submit Suggestion */}
+          <button
+            onClick={() => setShowSuggestionModal(true)}
+            className="bg-white border border-[#E8E8E8] hover:border-[#1A1A1A] rounded-2xl p-3 flex flex-col items-center justify-center text-center transition-all cursor-pointer shadow-sm active:scale-95 text-[#1A1A1A]"
+          >
+            <Lightbulb className="text-amber-500 mb-1.5" size={20} strokeWidth={1.5} />
+            <span className="text-[10px] font-bold block leading-tight">Suggestion Box</span>
+          </button>
+
+          {/* My Recognitions */}
+          <button
+            onClick={() => setShowRecognitionsModal(true)}
+            className="bg-white border border-[#E8E8E8] hover:border-[#1A1A1A] rounded-2xl p-3 flex flex-col items-center justify-center text-center transition-all cursor-pointer shadow-sm active:scale-95 text-[#1A1A1A]"
+          >
+            <Award className="text-indigo-500 mb-1.5" size={20} strokeWidth={1.5} />
+            <span className="text-[10px] font-bold block leading-tight">My Awards</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Modals for Quick Utilities */}
+      {showContactsModal && (
+        <div className="fixed inset-0 z-[20000] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="bg-white border border-[#E8E8E8] rounded-2xl max-w-sm w-full p-5 flex flex-col space-y-4 shadow-2xl">
+            <div className="flex items-start justify-between border-b border-gray-100 pb-3">
+              <div className="flex items-center space-x-2">
+                <Phone className="text-red-500" size={18} />
+                <h3 className="text-[#1A1A1A] text-sm font-black uppercase tracking-wider">Emergency Contacts</h3>
+              </div>
+              <button
+                onClick={() => setShowContactsModal(false)}
+                className="p-1 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
+              {emergencyContacts.length === 0 ? (
+                <p className="text-xs text-gray-400 italic text-center py-4">No contact numbers added.</p>
+              ) : (
+                emergencyContacts.map(contact => (
+                  <div key={contact.id} className="bg-gray-50 border border-gray-100 rounded-xl p-3 flex items-center justify-between">
+                    <div className="text-left">
+                      <span className="text-xs font-black text-[#1A1A1A] block">{contact.contact_name}</span>
+                      <span className="text-[9px] bg-slate-200 text-slate-600 px-1 py-0.5 rounded font-bold uppercase inline-block mt-0.5">{contact.contact_type}</span>
+                      {contact.notes && <p className="text-[9px] text-gray-400 mt-1">{contact.notes}</p>}
+                    </div>
+                    <a
+                      href={`tel:${contact.phone_number}`}
+                      className="bg-red-50 hover:bg-red-100 text-red-600 border border-red-200/50 p-2.5 rounded-full transition-all active:scale-90"
+                    >
+                      <Phone size={14} />
+                    </a>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSuggestionModal && (
+        <div className="fixed inset-0 z-[20000] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="bg-white border border-[#E8E8E8] rounded-2xl max-w-sm w-full p-5 flex flex-col space-y-4 shadow-2xl">
+            <div className="flex items-start justify-between border-b border-gray-100 pb-3">
+              <div className="flex items-center space-x-2">
+                <Lightbulb className="text-amber-500" size={18} />
+                <h3 className="text-[#1A1A1A] text-sm font-black uppercase tracking-wider">Staff Suggestion Box</h3>
+              </div>
+              <button
+                onClick={() => setShowSuggestionModal(false)}
+                className="p-1 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmitSuggestion} className="space-y-3">
+              <textarea
+                value={newSuggestionText}
+                onChange={e => setNewSuggestionText(e.target.value)}
+                placeholder="Share your thoughts, suggestions, or concerns with management..."
+                rows={4}
+                className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3 text-xs font-bold text-[#1A1A1A] focus:outline-none focus:border-black"
+                required
+              />
+              <button
+                type="submit"
+                disabled={submittingSuggestion}
+                className="w-full min-h-[40px] bg-[#1a1a1a] hover:bg-black text-white font-black text-xs rounded-xl active:scale-95 transition-all flex items-center justify-center gap-1.5"
+              >
+                <Send size={12} />
+                <span>{submittingSuggestion ? 'Submitting...' : 'Submit Suggestion'}</span>
+              </button>
+            </form>
+
+            <div className="border-t border-gray-100 pt-3">
+              <h4 className="text-[10px] font-black uppercase tracking-wider text-slate-400 mb-2">My Submissions</h4>
+              <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1">
+                {suggestions.length === 0 ? (
+                  <p className="text-[10px] text-gray-400 italic text-center py-2">No suggestions submitted yet.</p>
+                ) : (
+                  suggestions.map(sug => (
+                    <div key={sug.id} className="bg-gray-50 border border-gray-100 rounded-xl p-2.5 text-left text-[11px] font-semibold text-gray-600 space-y-1.5">
+                      <div className="flex justify-between items-start">
+                        <p className="font-extrabold text-[#1A1A1A] leading-normal break-words flex-1 pr-2">{sug.suggestion_text}</p>
+                        <span className={`text-[8px] font-black uppercase px-1.5 py-0.5 rounded border flex-shrink-0 ${
+                          sug.status === 'new' ? 'text-blue-500 bg-blue-50 border-blue-100' :
+                          sug.status === 'reviewed' ? 'text-amber-500 bg-amber-50 border-amber-100' :
+                          sug.status === 'implemented' ? 'text-emerald-500 bg-emerald-50 border-emerald-100' :
+                          'text-red-500 bg-red-50 border-red-100'
+                        }`}>
+                          {sug.status}
+                        </span>
+                      </div>
+                      {sug.ops_response && (
+                        <div className="bg-white border border-[#E8E8E8] rounded-lg p-2 mt-1">
+                          <span className="text-[8.5px] text-[var(--text-muted)] font-black uppercase block tracking-wider">Ops Response:</span>
+                          <p className="text-[10px] text-slate-800 font-extrabold mt-0.5">{sug.ops_response}</p>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showRecognitionsModal && (
+        <div className="fixed inset-0 z-[20000] flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="bg-white border border-[#E8E8E8] rounded-2xl max-w-sm w-full p-5 flex flex-col space-y-4 shadow-2xl">
+            <div className="flex items-start justify-between border-b border-gray-100 pb-3">
+              <div className="flex items-center space-x-2">
+                <Award className="text-indigo-500" size={18} />
+                <h3 className="text-[#1A1A1A] text-sm font-black uppercase tracking-wider">My Awards</h3>
+              </div>
+              <button
+                onClick={() => setShowRecognitionsModal(false)}
+                className="p-1 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
+              {recognitions.length === 0 ? (
+                <p className="text-xs text-gray-400 italic text-center py-6">No recognitions awarded yet. Keep up the good work!</p>
+              ) : (
+                recognitions.map(rec => (
+                  <div key={rec.id} className="bg-gradient-to-br from-indigo-50/50 to-indigo-100/30 border border-indigo-200/50 rounded-xl p-3.5 text-left flex items-start gap-3">
+                    <div className="w-9 h-9 rounded-full bg-indigo-500 text-white flex items-center justify-center flex-shrink-0 shadow-sm">
+                      <Award size={18} />
+                    </div>
+                    <div className="space-y-1 min-w-0">
+                      <span className="text-xs font-black text-indigo-950 block">{rec.award_type}</span>
+                      {rec.period_label && (
+                        <span className="text-[8.5px] bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded font-black uppercase inline-block">{rec.period_label}</span>
+                      )}
+                      {rec.award_note && (
+                        <p className="text-[10.5px] text-indigo-900/80 font-bold leading-normal italic mt-1 bg-white/60 border border-indigo-200/20 p-2 rounded-lg">
+                          "{rec.award_note}"
+                        </p>
+                      )}
+                      <span className="text-[8px] text-gray-400 block pt-1">Awarded by: {rec.awarded_by} on {new Date(rec.awarded_at).toLocaleDateString()}</span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 7. Announcement Detail Dialog (Popup Modal) */}
       {selectedAnnouncement && (
