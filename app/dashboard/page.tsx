@@ -2148,7 +2148,7 @@ export default function DashboardPage() {
               {((user as any)?.role === 'admin' || (user as any)?.role === 'ops_manager' || (user as any)?.role === 'staff_executive') && (
                 <Link
                   href="/candidates"
-                  className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group col-span-2 relative"
+                  className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group relative"
                 >
                   <div className="w-9 h-9 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center mb-2 mx-auto relative">
                     <Users size={16} strokeWidth={1.5} className="text-white" />
@@ -2159,6 +2159,19 @@ export default function DashboardPage() {
                     )}
                   </div>
                   <span className="text-[13px] font-bold text-[#1A1A1A]">Candidates</span>
+                </Link>
+              )}
+
+              {/* Profile Completion Quick Action */}
+              {((user as any)?.role === 'admin' || (user as any)?.role === 'ops_manager') && (
+                <Link
+                  href="/profile-completion"
+                  className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group relative"
+                >
+                  <div className="w-9 h-9 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center mb-2 mx-auto relative">
+                    <CheckSquare size={16} strokeWidth={1.5} className="text-white" />
+                  </div>
+                  <span className="text-[13px] font-bold text-[#1A1A1A]">Profile Completion</span>
                 </Link>
               )}
 

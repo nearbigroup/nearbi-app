@@ -30,12 +30,14 @@ import {
   Flag,
   Smartphone,
   Stethoscope,
-  ExternalLink
+  ExternalLink,
+  RefreshCw
 } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import { formatTime12hr } from '@/lib/utils';
 import { calculateEarlyLeaveDeduction, calculateLateSalaryDeduction, calculateActualHours, calculateOTMinutes, calculateEarlyLeaveMinutes, calculateLateMinutes, calculateMinutesWorked, calculateHourlySalary, getDaysInMonth, calculateSalary } from '@/lib/salary';
 import { createAuditLog, writeAuditLog } from '@/lib/audit';
+import { recalculateStaffAttendance } from '@/lib/recalculate';
 
 interface StaffMember {
   id: string;
@@ -214,6 +216,40 @@ export default function StaffProfilePage() {
   const [addNoteModalOpen, setAddNoteModalOpen] = useState(false);
   const [noteText, setNoteText] = useState('');
   const [isSubmittingNote, setIsSubmittingNote] = useState(false);
+
+  // Single Staff Recalculate Modal state
+  const [singleRecalcModalOpen, setSingleRecalcModalOpen] = useState(false);
+  const [singleRecalcMonth, setSingleRecalcMonth] = useState(() => new Date().getMonth() + 1);
+  const [singleRecalcYear, setSingleRecalcYear] = useState(() => new Date().getFullYear());
+  const [isSingleRecalculating, setIsSingleRecalculating] = useState(false);
+  const [singleRecalcSummary, setSingleRecalcSummary] = useState<string | null>(null);
+
+  const handleRunSingleRecalculation = async () => {
+    if (!staff) return;
+    try {
+      setIsSingleRecalculating(true);
+      setSingleRecalcSummary(null);
+
+      const res = await recalculateStaffAttendance({
+        staffId: staff.id,
+        year: singleRecalcYear,
+        month: singleRecalcMonth,
+        performedBy: user?.email || 'admin',
+        performedByRole: user?.role || 'admin',
+        triggerReason: 'recalculate_only',
+        isBulk: false
+      });
+
+      setSingleRecalcSummary(res.message);
+      showToast('Recalculation complete ✓');
+      fetchMonthData();
+    } catch (err: any) {
+      console.error('Error during recalculation:', err);
+      alert(err.message || 'Failed to recalculate.');
+    } finally {
+      setIsSingleRecalculating(false);
+    }
+  };
   const [selectedDayDetail, setSelectedDayDetail] = useState<{
     day: number;
     dateStr: string;
@@ -781,18 +817,24 @@ export default function StaffProfilePage() {
         reason: 'Manual attendance edit via staff profile calendar'
       });
 
-      // Write to audit_log (singular)
-      await writeAuditLog({
-        action_type: 'attendance_edited',
-        performed_by: user?.email || 'admin',
-        performed_by_role: user?.role || 'admin',
-        staff_id: staff.id,
-        old_value: `Check-in: ${oldRecord?.check_in_time || 'none'}, Check-out: ${oldRecord?.check_out_time || 'none'}`,
-        new_value: `Check-in: ${finalCheckIn || 'none'}, Check-out: ${finalCheckOut || 'none'}`,
-        notes: `Attendance edited on staff profile page. Day type: ${finalDayType}`
+      // Auto-trigger 4-step recalculation chain for this staff & month
+      const [yrStr, moStr] = dateStr.split('-');
+      const recalcRes = await recalculateStaffAttendance({
+        staffId: staff.id,
+        year: Number(yrStr),
+        month: Number(moStr),
+        performedBy: user?.email || 'admin',
+        performedByRole: user?.role || 'admin',
+        triggerReason: 'manual_edit',
+        isBulk: false
       });
 
-      showToast('Attendance saved ✓');
+      if (recalcRes.salaryLocked) {
+        showToast(`Attendance updated — ${recalcRes.monthLabel} salary is confirmed (totals locked)`);
+      } else {
+        showToast('Attendance updated — late/OT/salary recalculated for this day ✓');
+      }
+
       setIsEditingAttendance(false);
       setSelectedDayDetail(null);
       fetchMonthData();
@@ -1968,6 +2010,20 @@ export default function StaffProfilePage() {
         {/* Tab 1: Attendance Grid */}
         {activeTab === 'attendance' && (
           <div className="space-y-4">
+            <div className="flex items-center justify-between gap-2 px-1">
+              <span className="text-xs font-extrabold text-[var(--text-secondary)] uppercase tracking-wider">Attendance Register</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setSingleRecalcSummary(null);
+                  setSingleRecalcModalOpen(true);
+                }}
+                className="bg-white/10 hover:bg-white/20 text-white border border-white/15 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-all active:scale-95 cursor-pointer"
+              >
+                <RefreshCw size={13} />
+                <span>Recalculate (No Time Change)</span>
+              </button>
+            </div>
             <div 
               className="bg-[var(--bg-surface)] border border-[var(--border)] rounded-[18px] p-4"
               onTouchStart={onTouchStart}
@@ -3825,6 +3881,100 @@ export default function StaffProfilePage() {
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-[15000] bg-[var(--success-bg)] border border-[var(--success)] text-[#4ADE80] font-black text-xs px-4 py-2.5 rounded-full shadow-lg flex items-center space-x-1">
           <CheckCircle2 size={14} />
           <span>{toastMsg}</span>
+        </div>
+      )}
+
+      {/* Single Staff Recalculation Modal */}
+      {singleRecalcModalOpen && (
+        <div className="fixed inset-0 z-[13000] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/75 backdrop-blur-xs"
+            onClick={() => { if (!isSingleRecalculating) setSingleRecalcModalOpen(false); }}
+          />
+          <div className="bg-[var(--bg-surface)] border border-[var(--border-strong)] rounded-2xl p-5 shadow-2xl relative z-10 w-full max-w-sm space-y-4">
+            <div className="flex justify-between items-center border-b border-[var(--border-strong)] pb-3">
+              <div className="flex items-center space-x-2">
+                <RefreshCw size={16} className="text-white" />
+                <h3 className="text-sm font-bold text-white">Recalculate Attendance</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSingleRecalcModalOpen(false)}
+                disabled={isSingleRecalculating}
+                className="text-[var(--text-secondary)] hover:text-white"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <p className="text-xs text-[var(--text-secondary)]">
+              Re-evaluate required hours, late minutes, early leave, OT, and late fines for <strong className="text-white">{staff?.name}</strong> without changing actual check-in/out punch timestamps.
+            </p>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase mb-1">Month</label>
+                <select
+                  value={singleRecalcMonth}
+                  onChange={(e) => setSingleRecalcMonth(Number(e.target.value))}
+                  disabled={isSingleRecalculating}
+                  className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-xl px-3 py-2 text-xs font-bold text-white"
+                >
+                  {[
+                    'January', 'February', 'March', 'April', 'May', 'June',
+                    'July', 'August', 'September', 'October', 'November', 'December'
+                  ].map((m, idx) => (
+                    <option key={idx + 1} value={idx + 1}>{m}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase mb-1">Year</label>
+                <select
+                  value={singleRecalcYear}
+                  onChange={(e) => setSingleRecalcYear(Number(e.target.value))}
+                  disabled={isSingleRecalculating}
+                  className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-xl px-3 py-2 text-xs font-bold text-white"
+                >
+                  <option value={2025}>2025</option>
+                  <option value={2026}>2026</option>
+                  <option value={2027}>2027</option>
+                </select>
+              </div>
+            </div>
+
+            {singleRecalcSummary && (
+              <div className="bg-[#EDF7EF]/10 border border-[#C3E6CB]/30 text-[#4ADE80] text-xs font-medium p-3 rounded-xl whitespace-pre-line leading-relaxed">
+                {singleRecalcSummary}
+              </div>
+            )}
+
+            <div className="flex justify-end space-x-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setSingleRecalcModalOpen(false)}
+                disabled={isSingleRecalculating}
+                className="px-4 py-2 bg-[var(--bg-elevated)] border border-[var(--border-strong)] text-xs font-bold text-white rounded-xl"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                onClick={handleRunSingleRecalculation}
+                disabled={isSingleRecalculating}
+                className="px-4 py-2 bg-white text-[#1E2028] hover:bg-white/95 text-xs font-bold rounded-xl flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {isSingleRecalculating ? (
+                  <span>Processing...</span>
+                ) : (
+                  <>
+                    <RefreshCw size={14} />
+                    <span>Run Recalculation</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

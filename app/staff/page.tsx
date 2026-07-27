@@ -10,6 +10,7 @@ import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import * as XLSX from 'xlsx';
 import { DEPARTMENTS } from '@/lib/data';
 import { calculateLateMinutes, calculateOTMinutes, calculateEarlyLeaveMinutes } from '@/lib/salary';
+import { recalculateStaffAttendance } from '@/lib/recalculate';
 
 
 interface Shift {
@@ -141,6 +142,14 @@ export default function StaffPage() {
   const [bulkDeleteModalOpen, setBulkDeleteModalOpen] = useState(false);
   const [bulkDeleteConfirmText, setBulkDeleteConfirmText] = useState('');
   const [singleDeleteConfirmText, setSingleDeleteConfirmText] = useState('');
+
+  // Recalculate-Only Tool State
+  const [bulkRecalcModalOpen, setBulkRecalcModalOpen] = useState(false);
+  const [recalcMonth, setRecalcMonth] = useState(() => new Date().getMonth() + 1);
+  const [recalcYear, setRecalcYear] = useState(() => new Date().getFullYear());
+  const [isRecalculating, setIsRecalculating] = useState(false);
+  const [recalcProgress, setRecalcProgress] = useState<string | null>(null);
+  const [recalcSummary, setRecalcSummary] = useState<string | null>(null);
 
   // Special Fine Modal State
   const [fineModalOpen, setFineModalOpen] = useState(false);
@@ -438,8 +447,75 @@ export default function StaffPage() {
     });
   };
 
+  const handleRunBulkRecalculation = async () => {
+    const targetIds = selectedStaffIds.length > 0 ? selectedStaffIds : filteredStaff.map(s => s.id);
+    if (targetIds.length === 0) {
+      alert('No staff selected for recalculation.');
+      return;
+    }
+
+    try {
+      setIsRecalculating(true);
+      setRecalcSummary(null);
+
+      let totalProcessed = 0;
+      let totalVoided = 0;
+      let totalAdjusted = 0;
+      let totalOTAdjusted = 0;
+      let salaryLockedCount = 0;
+
+      for (let i = 0; i < targetIds.length; i++) {
+        const id = targetIds[i];
+        setRecalcProgress(`Processing ${i + 1} of ${targetIds.length}...`);
+
+        const res = await recalculateStaffAttendance({
+          staffId: id,
+          year: recalcYear,
+          month: recalcMonth,
+          performedBy: user?.email || 'admin',
+          performedByRole: user?.role || 'admin',
+          triggerReason: 'recalculate_only',
+          isBulk: true
+        });
+
+        totalProcessed += res.recordsProcessed;
+        totalVoided += res.finesVoided;
+        totalAdjusted += res.finesAdjusted;
+        totalOTAdjusted += res.otAdjusted;
+        if (res.salaryLocked) salaryLockedCount++;
+      }
+
+      const MONTH_NAMES = [
+        'January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'
+      ];
+      const monthLabel = `${MONTH_NAMES[recalcMonth - 1]} ${recalcYear}`;
+
+      let summary = `Completed recalculation for ${targetIds.length} staff member(s) (${monthLabel}):\n`;
+      summary += `• Fines voided: ${totalVoided}\n`;
+      summary += `• Fines adjusted: ${totalAdjusted}\n`;
+      summary += `• OT entries adjusted: ${totalOTAdjusted}\n`;
+
+      if (salaryLockedCount > 0) {
+        summary += `\n⚠️ Note: ${salaryLockedCount} staff member(s) have confirmed salaries for ${monthLabel} — attendance was recalculated, but salary totals were not altered.`;
+      } else {
+        summary += `\n✓ Monthly salary totals re-aggregated for pending staff.`;
+      }
+
+      setRecalcSummary(summary);
+      showToast('Recalculation complete ✓');
+      fetchStaff();
+    } catch (err: any) {
+      console.error('Error during bulk recalculation:', err);
+      alert(err.message || 'Failed during recalculation.');
+    } finally {
+      setIsRecalculating(false);
+      setRecalcProgress(null);
+    }
+  };
+
   const handleShiftChangeRecalculate = async (recalculate: boolean) => {
-    const { staffId, newShift, oldShiftId } = shiftChangeDialog;
+    const { staffId } = shiftChangeDialog;
     setShiftChangeDialog(prev => ({ ...prev, visible: false }));
 
     if (!recalculate) {
@@ -450,95 +526,20 @@ export default function StaffPage() {
     try {
       setFormLoading(true);
       const today = new Date();
-      const year = today.getFullYear();
-      const month = today.getMonth() + 1;
-      const firstDay = `${year}-${String(month).padStart(2, '0')}-01`;
-      const lastDayNum = new Date(year, month, 0).getDate();
-      const lastDay = `${year}-${String(month).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
-
-      const { data: staffData } = await supabase
-        .from('staff')
-        .select('ot_threshold_minutes')
-        .eq('id', staffId)
-        .single();
-
-      const { data: attRecords, error: fetchErr } = await supabase
-        .from('attendance')
-        .select('*')
-        .eq('staff_id', staffId)
-        .gte('date', firstDay)
-        .lte('date', lastDay)
-        .not('check_in_time', 'is', null);
-
-      if (fetchErr) throw fetchErr;
-
-      let updatedCount = 0;
-      let skippedConfirmed = 0;
-
-      for (const record of attRecords || []) {
-        // Skip if OT already approved
-        if (record.ot_approved) {
-          skippedConfirmed++;
-          continue;
-        }
-
-        const newLateMins = calculateLateMinutes(
-          record.check_in_time,
-          newShift.start_time
-        );
-        const newColorCode =
-          newLateMins === 0 ? 'green' :
-          newLateMins <= 15 ? 'yellow' :
-          newLateMins <= 30 ? 'orange' : 'red';
-        const newOTMins = record.check_out_time
-          ? calculateOTMinutes(
-              newShift.end_time,
-              record.check_out_time,
-              newShift.start_time,
-              staffData?.ot_threshold_minutes || 30
-            )
-          : 0;
-        const newEarlyLeaveMins = record.check_out_time
-          ? calculateEarlyLeaveMinutes(
-              newShift.end_time,
-              record.check_out_time,
-              newShift.start_time
-            )
-          : 0;
-
-        const { error: updateErr } = await supabase
-          .from('attendance')
-          .update({
-            minutes_late: newLateMins,
-            color_code: newColorCode,
-            status: newLateMins > 0 ? 'late' : 'present',
-            ot_minutes: newOTMins,
-            early_leave_minutes: newEarlyLeaveMins,
-            late_salary_deduction_minutes: newLateMins
-          })
-          .eq('id', record.id);
-
-        if (updateErr) throw updateErr;
-
-        updatedCount++;
-      }
-
-      // Create audit_log entry
-      await createAuditLog({
-        action: 'shift_changed_recalculated',
-        table_name: 'attendance',
-        record_id: staffId,
-        old_value: { shift_id: oldShiftId },
-        new_value: { shift_id: newShift.id },
-        performed_by: user?.email || 'admin',
-        performed_by_role: user?.role || 'admin',
-        reason: `Recalculated ${updatedCount} attendance records for shift change. ${skippedConfirmed} skipped.`
+      const res = await recalculateStaffAttendance({
+        staffId,
+        year: today.getFullYear(),
+        month: today.getMonth() + 1,
+        performedBy: user?.email || 'admin',
+        performedByRole: user?.role || 'admin',
+        triggerReason: 'shift_change',
+        isBulk: false
       });
 
-      alert(`Recalculated ${updatedCount} attendance records.\n${skippedConfirmed} records skipped\n(OT already approved).`);
+      alert(res.message);
       fetchStaff();
     } catch (err: any) {
-      console.error(err);
+      console.error('Error in shift change recalculation:', err);
       alert(err.message || 'Failed to recalculate attendance');
     } finally {
       setFormLoading(false);
@@ -2677,6 +2678,17 @@ export default function StaffPage() {
               {selectionMode ? 'Exit Selection' : 'Select Staff'}
             </button>
             
+            <button
+              onClick={() => {
+                setRecalcSummary(null);
+                setBulkRecalcModalOpen(true);
+              }}
+              className="bg-[#1A1A1A] text-white hover:bg-[#333333] px-3 py-1.5 rounded-lg text-xs font-bold flex items-center space-x-1.5 transition-all active:scale-95 shadow-xs"
+            >
+              <RefreshCw size={13} />
+              <span>Recalculate</span>
+            </button>
+
             {selectionMode && (
               <button
                 onClick={toggleSelectAll}
@@ -2688,16 +2700,28 @@ export default function StaffPage() {
           </div>
           
           {selectionMode && selectedStaffIds.length > 0 && (
-            <button
-              onClick={() => {
-                setBulkDeleteConfirmText('');
-                setBulkDeleteModalOpen(true);
-              }}
-              className="bg-[rgba(248,113,113,0.15)] border border-[rgba(248,113,113,0.3)] text-[#C0392B] hover:bg-[rgba(248,113,113,0.25)] px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider flex items-center space-x-1 transition-all"
-            >
-              <Trash2 size={13} />
-              <span>Delete ({selectedStaffIds.length})</span>
-            </button>
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={() => {
+                  setRecalcSummary(null);
+                  setBulkRecalcModalOpen(true);
+                }}
+                className="bg-[#1A1A1A] text-white hover:bg-[#333333] px-3 py-1.5 rounded-lg text-xs font-bold flex items-center space-x-1 transition-all"
+              >
+                <RefreshCw size={13} />
+                <span>Recalculate ({selectedStaffIds.length})</span>
+              </button>
+              <button
+                onClick={() => {
+                  setBulkDeleteConfirmText('');
+                  setBulkDeleteModalOpen(true);
+                }}
+                className="bg-[rgba(248,113,113,0.15)] border border-[rgba(248,113,113,0.3)] text-[#C0392B] hover:bg-[rgba(248,113,113,0.25)] px-3 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider flex items-center space-x-1 transition-all"
+              >
+                <Trash2 size={13} />
+                <span>Delete ({selectedStaffIds.length})</span>
+              </button>
+            </div>
           )}
         </div>
       )}
@@ -4015,6 +4039,110 @@ export default function StaffPage() {
                 className="flex-1 bg-[#FDECEA] border border-[#FDECEA] text-[#C0392B] hover:bg-[#FCDAD7] font-bold text-xs py-2.5 rounded-[10px] active:scale-95 transition-all shadow disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
               >
                 Yes, delete all
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bulk Recalculation Modal */}
+      {bulkRecalcModalOpen && (
+        <div className="fixed inset-0 z-[13000] flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => { if (!isRecalculating) setBulkRecalcModalOpen(false); }}
+          />
+          <div className="bg-white rounded-[16px] shadow-2xl relative z-10 p-6 w-full max-w-md text-left border border-[#E8E8E8] space-y-4">
+            <div className="flex justify-between items-center border-b border-[#E8E8E8] pb-3">
+              <div className="flex items-center space-x-2">
+                <RefreshCw size={18} className="text-[#1A1A1A]" />
+                <h3 className="text-base font-bold text-[#1A1A1A]">Recalculate Attendance</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBulkRecalcModalOpen(false)}
+                disabled={isRecalculating}
+                className="text-[#999999] hover:text-[#1A1A1A]"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <p className="text-xs text-[#555555]">
+              Re-evaluate required hours, late minutes, early leave, OT, and late fines for selected staff without altering actual check-in/out punch timestamps.
+            </p>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[10px] font-bold text-[#999999] uppercase mb-1">Month</label>
+                <select
+                  value={recalcMonth}
+                  onChange={(e) => setRecalcMonth(Number(e.target.value))}
+                  disabled={isRecalculating}
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl px-3 py-2 text-xs font-bold text-[#1A1A1A]"
+                >
+                  {[
+                    'January', 'February', 'March', 'April', 'May', 'June',
+                    'July', 'August', 'September', 'October', 'November', 'December'
+                  ].map((m, idx) => (
+                    <option key={idx + 1} value={idx + 1}>{m}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-[10px] font-bold text-[#999999] uppercase mb-1">Year</label>
+                <select
+                  value={recalcYear}
+                  onChange={(e) => setRecalcYear(Number(e.target.value))}
+                  disabled={isRecalculating}
+                  className="w-full bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl px-3 py-2 text-xs font-bold text-[#1A1A1A]"
+                >
+                  <option value={2025}>2025</option>
+                  <option value={2026}>2026</option>
+                  <option value={2027}>2027</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3 text-xs text-[#555555]">
+              Target: <strong className="text-[#1A1A1A]">{selectedStaffIds.length > 0 ? `${selectedStaffIds.length} selected staff` : `All staff (${filteredStaff.length})`}</strong>
+            </div>
+
+            {recalcProgress && (
+              <div className="bg-blue-50 text-blue-800 font-bold text-xs p-3 rounded-xl animate-pulse text-center">
+                {recalcProgress}
+              </div>
+            )}
+
+            {recalcSummary && (
+              <div className="bg-[#EDF7EF] border border-[#C3E6CB] text-[#2D7A3A] text-xs font-medium p-3.5 rounded-xl whitespace-pre-line">
+                {recalcSummary}
+              </div>
+            )}
+
+            <div className="flex justify-end space-x-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setBulkRecalcModalOpen(false)}
+                disabled={isRecalculating}
+                className="px-4 py-2 bg-[#F2F2F2] hover:bg-[#E8E8E8] text-xs font-bold text-[#555555] rounded-xl"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                onClick={handleRunBulkRecalculation}
+                disabled={isRecalculating}
+                className="px-4 py-2 bg-[#1A1A1A] hover:bg-[#333333] text-white text-xs font-bold rounded-xl flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {isRecalculating ? (
+                  <span>Processing...</span>
+                ) : (
+                  <>
+                    <RefreshCw size={14} />
+                    <span>Run Recalculation</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

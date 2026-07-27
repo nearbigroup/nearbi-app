@@ -10,6 +10,7 @@ import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import * as XLSX from 'xlsx';
 import { DEPARTMENTS } from '@/lib/data';
 import { calculateOTMinutes, calculateActualHours, calculateEarlyLeaveDeduction, calculateEarlyLeaveMinutes, calculateLateMinutes, autoCloseCheckouts } from '@/lib/salary';
+import { recalculateStaffAttendance } from '@/lib/recalculate';
 import { formatTime12hr } from '@/lib/utils';
 
 
@@ -1042,7 +1043,24 @@ export default function AttendancePage() {
         notes: `Attendance edited on page /attendance. Reason: ${editReason || 'Manual attendance update'}`
       });
 
-      showToast(`Attendance record ${isAddingRecord ? 'added' : 'updated'} successfully.`);
+      // Auto-trigger 4-step recalculation chain for this staff & month
+      const [yrStr, moStr] = date.split('-');
+      const recalcRes = await recalculateStaffAttendance({
+        staffId,
+        year: Number(yrStr),
+        month: Number(moStr),
+        performedBy: user?.email || 'admin',
+        performedByRole: user?.role || 'admin',
+        triggerReason: 'manual_edit',
+        isBulk: false
+      });
+
+      if (recalcRes.salaryLocked) {
+        showToast(`Attendance updated — ${recalcRes.monthLabel} salary is confirmed (totals locked)`);
+      } else {
+        showToast('Attendance updated — late/OT/salary recalculated for this day ✓');
+      }
+
       setDetailModalOpen(false);
       setDetailRecord(null);
       fetchData();
