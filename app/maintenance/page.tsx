@@ -404,7 +404,11 @@ export default function MaintenanceTicketsPage() {
   };
 
   const getTimeAgo = (dateStr: string) => {
-    const diff = Date.now() - new Date(dateStr).getTime();
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '';
+    const diff = Date.now() - d.getTime();
+    if (diff < 0) return 'just now';
     const mins = Math.floor(diff / 60000);
     if (mins < 60) return `${mins}m ago`;
     const hrs = Math.floor(mins / 60);
@@ -413,17 +417,37 @@ export default function MaintenanceTicketsPage() {
     return `${days}d ago`;
   };
 
-  if (authLoading || (user && user.role !== 'admin' && user.role !== 'ops_manager')) {
+  const formatLogDate = (dateStr: string) => {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '';
+    return `${d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })} — ${d.toLocaleDateString('en-US', { day: 'numeric', month: 'short' })}`;
+  };
+
+  if (authLoading) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center select-none bg-[#F8F9FA]">
-        <div className="bg-white border border-[#E8E8E8] rounded-[18px] p-8 max-w-sm w-full flex flex-col items-center shadow-lg">
-          <Lock size={48} className="mb-4 text-slate-400 animate-pulse" />
-          <h2 className="text-lg font-extrabold text-[#1A1A1A] mb-2 uppercase tracking-wide">Access Denied</h2>
-          <p className="text-[#666666] text-xs font-semibold leading-relaxed mb-6">
-            Only administrators and operations managers can access the maintenance module.
-          </p>
+      <AppShell>
+        <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center select-none">
+          <RefreshCw className="animate-spin text-slate-600 mb-3" size={32} />
+          <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">Loading Maintenance Tickets...</p>
         </div>
-      </div>
+      </AppShell>
+    );
+  }
+
+  if (!user || (user.role !== 'admin' && user.role !== 'ops_manager')) {
+    return (
+      <AppShell>
+        <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center select-none">
+          <div className="bg-white border border-[#E8E8E8] rounded-[18px] p-8 max-w-sm w-full flex flex-col items-center shadow-lg">
+            <Lock size={48} className="mb-4 text-slate-400" />
+            <h2 className="text-lg font-extrabold text-[#1A1A1A] mb-2 uppercase tracking-wide">Access Denied</h2>
+            <p className="text-[#666666] text-xs font-semibold leading-relaxed mb-6">
+              Only administrators and operations managers can access the maintenance module.
+            </p>
+          </div>
+        </div>
+      </AppShell>
     );
   }
 
@@ -705,7 +729,7 @@ export default function MaintenanceTicketsPage() {
                                      'Comment Added 💬'}
                                   </span>
                                   <span className="text-[10px] text-slate-400 font-semibold">
-                                    {new Date(log.logged_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })} — {new Date(log.logged_at).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })}
+                                    {formatLogDate(log.logged_at)}
                                   </span>
                                 </div>
                                 <p className="text-[#555555] font-semibold">

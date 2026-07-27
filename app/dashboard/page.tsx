@@ -123,7 +123,8 @@ const autoCloseCheckouts = async (effectiveBranch: string | null) => {
       adjustedNow = nowMins + 1440;
     }
 
-    if (adjustedNow > adjustedEnd + 60) {
+    // Auto-close after 3 hours (180 mins) past scheduled shift end
+    if (adjustedNow > adjustedEnd + 180) {
       const hoursWorked = calculateMinutesWorked(record.check_in_time, shiftEnd) / 60;
 
       await supabase
@@ -2143,8 +2144,8 @@ export default function DashboardPage() {
                 </Link>
               )}
 
-              {/* Candidates Quick Action (Ops Manager only) */}
-              {false && (
+              {/* Candidates Quick Action */}
+              {((user as any)?.role === 'admin' || (user as any)?.role === 'ops_manager' || (user as any)?.role === 'staff_executive') && (
                 <Link
                   href="/candidates"
                   className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group col-span-2 relative"

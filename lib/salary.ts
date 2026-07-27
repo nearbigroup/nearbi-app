@@ -222,7 +222,7 @@ export function calculateOTMinutes(
   shiftStart: string,
   thresholdMinutes: number = 30
 ): number {
-  if (!shiftEnd || !actualOut || !shiftStart)
+  if (!shiftEnd || !actualOut || !shiftStart || actualOut === 'N/A' || actualOut.trim() === '')
     return 0
   const shiftEndMins = getMinutes(shiftEnd)
   const outMins = getMinutes(actualOut)

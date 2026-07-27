@@ -508,18 +508,39 @@ export default function SOPTasksPage() {
   // Filter staff list per branch to narrow dropdowns
   const branchStaff = staffList.filter(s => s.branch_id === selectedBranch);
 
+  // Helper for safe date formatting
+  const formatDateSafe = (dateStr: string) => {
+    if (!dateStr) return '';
+    const d = new Date(dateStr.includes('T') ? dateStr : dateStr + 'T00:00:00');
+    if (isNaN(d.getTime())) return dateStr;
+    return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  };
+
   // Security guard rendering
-  if (authLoading || (user && user.role !== 'admin' && user.role !== 'ops_manager')) {
+  if (authLoading) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center select-none bg-[#F8F9FA]">
-        <div className="bg-white border border-[#E8E8E8] rounded-[18px] p-8 max-w-sm w-full flex flex-col items-center shadow-lg">
-          <Lock size={48} className="mb-4 text-slate-400 animate-pulse" />
-          <h2 className="text-lg font-extrabold text-[#1A1A1A] mb-2 uppercase tracking-wide">Access Denied</h2>
-          <p className="text-[#666666] text-xs font-semibold leading-relaxed mb-6">
-            Only administrators and operations managers can manage SOP tasks and rosters.
-          </p>
+      <AppShell>
+        <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center select-none">
+          <RefreshCw className="animate-spin text-slate-600 mb-3" size={32} />
+          <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">Loading SOP & Duty Settings...</p>
         </div>
-      </div>
+      </AppShell>
+    );
+  }
+
+  if (!user || (user.role !== 'admin' && user.role !== 'ops_manager')) {
+    return (
+      <AppShell>
+        <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center select-none">
+          <div className="bg-white border border-[#E8E8E8] rounded-[18px] p-8 max-w-sm w-full flex flex-col items-center shadow-lg">
+            <Lock size={48} className="mb-4 text-slate-400" />
+            <h2 className="text-lg font-extrabold text-[#1A1A1A] mb-2 uppercase tracking-wide">Access Denied</h2>
+            <p className="text-[#666666] text-xs font-semibold leading-relaxed mb-6">
+              Only administrators and operations managers can manage SOP tasks and rosters.
+            </p>
+          </div>
+        </div>
+      </AppShell>
     );
   }
 
@@ -658,7 +679,7 @@ export default function SOPTasksPage() {
                                   )}
                                 </div>
                                 <div className="text-[10px] text-slate-400 font-semibold flex gap-2">
-                                  <span>Time window: {t.time_start ? `${t.time_start.slice(0, 5)} - ${t.time_end?.slice(0, 5)}` : 'Flexible / Shift Hour'}</span>
+                                  <span>Time window: {t.time_start ? `${t.time_start.slice(0, 5)}${t.time_end ? ` - ${t.time_end.slice(0, 5)}` : ''}` : 'Flexible / Shift Hour'}</span>
                                 </div>
                               </div>
 

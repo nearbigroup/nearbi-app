@@ -436,7 +436,7 @@ export default function KioskPage() {
       if (seH * 60 + seM <= shH * 60 + shM) {
         shiftEndToday.setDate(shiftEndToday.getDate() + 1);
       }
-      const blockTime = new Date(shiftEndToday.getTime() + 2 * 60 * 60 * 1000);
+      const blockTime = new Date(shiftEndToday.getTime() + 3 * 60 * 60 * 1000);
       
       if (now.getTime() > blockTime.getTime()) {
         const { data: record, error } = await supabase
@@ -447,7 +447,7 @@ export default function KioskPage() {
           .maybeSingle();
           
         if (!error && (!record || !record.check_in_time)) {
-          setErrorMsg(`Check-in is blocked. Your shift ended at ${formatTime12hr(shiftEnd)}, and check-in is only allowed up to 2 hours after shift end.`);
+          setErrorMsg(`Check-in is blocked. Your shift ended at ${formatTime12hr(shiftEnd)}, and check-in is only allowed up to 3 hours after shift end.`);
           setKioskState('ERROR');
           setTimeout(() => resetKiosk(), 5000);
           return;
@@ -487,7 +487,7 @@ export default function KioskPage() {
     setCameraError(false);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 640 } },
+        video: { facingMode: 'environment', width: { ideal: 640 }, height: { ideal: 640 } },
       });
       streamRef.current = stream;
       setKioskState('CANDIDATE_CAMERA');
@@ -941,10 +941,10 @@ export default function KioskPage() {
           if (seH * 60 + seM <= sh * 60 + sm) {
             shiftEndToday.setDate(shiftEndToday.getDate() + 1);
           }
-          const blockTime = new Date(shiftEndToday.getTime() + 2 * 60 * 60 * 1000);
+          const blockTime = new Date(shiftEndToday.getTime() + 3 * 60 * 60 * 1000);
           
           if (now.getTime() > blockTime.getTime()) {
-            setErrorMsg(`Check-in is blocked. Your shift ended at ${formatTime12hr(shiftEndStr)}, and check-in is only allowed up to 2 hours after shift end.`);
+            setErrorMsg(`Check-in is blocked. Your shift ended at ${formatTime12hr(shiftEndStr)}, and check-in is only allowed up to 3 hours after shift end.`);
             setKioskState('ERROR');
             setTimeout(() => resetKiosk(), 5000);
             return;
@@ -1203,9 +1203,13 @@ export default function KioskPage() {
         }
 
         if (record.check_out_time) {
-          setErrorMsg('Already checked out');
+          if (record.auto_closed) {
+            setErrorMsg("Already auto-closed — please contact HR to adjust your checkout time");
+          } else {
+            setErrorMsg('Already checked out');
+          }
           setKioskState('ERROR');
-          setTimeout(() => resetKiosk(), 2500);
+          setTimeout(() => resetKiosk(), 3500);
           return;
         }
 

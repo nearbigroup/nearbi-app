@@ -53,7 +53,8 @@ export default function CandidatesPage() {
 
   // Role restriction
   useEffect(() => {
-    if (!authLoading && (!user || user.role !== 'ops_manager')) {
+    const isAllowed = user && (user.role === 'admin' || user.role === 'ops_manager' || user.role === 'staff_executive');
+    if (!authLoading && !isAllowed) {
       router.replace('/dashboard');
     }
   }, [user, authLoading, router]);
@@ -131,7 +132,8 @@ export default function CandidatesPage() {
   };
 
   useEffect(() => {
-    if (user && user.role === 'ops_manager') {
+    const isAllowed = user && (user.role === 'admin' || user.role === 'ops_manager' || user.role === 'staff_executive');
+    if (isAllowed) {
       fetchCandidates();
     }
   }, [user]);
@@ -152,7 +154,8 @@ export default function CandidatesPage() {
     setTimeout(() => setToastMsg(''), 3000);
   };
 
-  if (authLoading || !user || user.role !== 'ops_manager') {
+  const isAllowed = user && (user.role === 'admin' || user.role === 'ops_manager' || user.role === 'staff_executive');
+  if (authLoading || !isAllowed) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[var(--bg-primary)]">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[#1A1A1A]"></div>

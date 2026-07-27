@@ -3014,7 +3014,7 @@ export default function AttendancePage() {
                   </div>
 
                   {/* Three dots menu */}
-                  {item.record && (user?.role === 'admin' || user?.role === 'ops_manager') && (
+                  {item.record && (user?.role === 'admin' || user?.role === 'ops_manager' || (user?.role === 'staff_executive' && (!user?.branch || item.branch_id === user.branch))) && (
                     <div className="absolute top-3 right-3" onClick={(e) => e.stopPropagation()}>
                       <button
                         onClick={(e) => {
@@ -3799,7 +3799,7 @@ export default function AttendancePage() {
                     </div>
                   </div>
                   
-                  {(user?.role === 'admin' || user?.role === 'ops_manager') && (
+                  {(user?.role === 'admin' || user?.role === 'ops_manager' || (user?.role === 'staff_executive' && (!user?.branch || detailRecord?.branch_id === user.branch))) && (
                     <button
                       type="button"
                       onClick={() => setIsAddingRecord(true)}
@@ -4429,7 +4429,7 @@ export default function AttendancePage() {
         </div>
       )}
       {/* Floating Action Button */}
-      {(user?.role === 'admin' || user?.role === 'ops_manager') && (
+      {(user?.role === 'admin' || user?.role === 'ops_manager' || (user?.role === 'staff_executive' && user?.branch !== null)) && (
         <button
           onClick={() => {
             setAddStaffId('');

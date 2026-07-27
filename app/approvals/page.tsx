@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { createAuditLog, writeAuditLog } from '@/lib/audit';
 import { Check, X, RefreshCw, CheckSquare, Edit2 } from 'lucide-react';
+import Link from 'next/link';
 import { formatTime12hr } from '@/lib/utils';
 import { autoCloseCheckouts } from '@/lib/salary';
 
@@ -149,18 +150,18 @@ export default function ApprovalsPage() {
           .eq('staff_id', att.staff_id)
           .eq('date', att.date)
           .eq('type', 'ot')
-          .maybeSingle();
+          .limit(1);
 
-        if (!existing) {
+        if (!existing || existing.length === 0) {
           await supabase
             .from('attendance_adjustments')
-            .insert({
+            .upsert({
               staff_id: att.staff_id,
               date: att.date,
               type: 'ot',
               minutes: att.ot_minutes,
               status: 'pending'
-            });
+            }, { onConflict: 'staff_id,date,type', ignoreDuplicates: true });
         }
       }
 
@@ -881,6 +882,7 @@ export default function ApprovalsPage() {
                   const att = attendanceMap[`${adj.staff_id}_${adj.date}`];
                   const shiftHours = Number(adj.staff?.shift?.hours || 8);
                   const actualHours = att ? Number(att.actual_hours_worked || 0) : 0;
+                  const hasNoCheckout = !att?.check_out_time || att.check_out_time === 'N/A' || att.check_out_time.trim() === '';
                   
                   const parseMins = (str: string) => {
                     const [h, m] = str.split(':').map(Number);
@@ -900,7 +902,7 @@ export default function ApprovalsPage() {
                     <div key={adj.id} className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col shadow-sm">
                       <div className="flex items-start justify-between mb-3">
                         <div className="flex items-start space-x-3">
-                          {user?.role !== 'partner_viewer' && (
+                          {user?.role !== 'partner_viewer' && !hasNoCheckout && (
                             <input
                               type="checkbox"
                               checked={selectedIds.includes(adj.id)}
@@ -932,7 +934,7 @@ export default function ApprovalsPage() {
                           </div>
                           <div>
                             <div className="text-[10px] text-[var(--text-muted)] uppercase font-bold">Extra Time</div>
-                            <div className="text-[var(--info)] font-bold mt-0.5">{extraTimeMins} mins</div>
+                            <div className="text-[var(--info)] font-bold mt-0.5">{hasNoCheckout ? 0 : extraTimeMins} mins</div>
                           </div>
                         </div>
                         <div className="grid grid-cols-3 gap-2 text-center mt-2 pt-2 border-t border-[#E8E8E8]">
@@ -972,11 +974,11 @@ export default function ApprovalsPage() {
                               </div>
                             ) : (
                               <div className="text-[var(--info)] font-bold mt-0.5 flex items-center justify-center space-x-1">
-                                <span>{adj.minutes} mins</span>
-                                {adj.original_ot_minutes !== undefined && adj.original_ot_minutes !== null && adj.original_ot_minutes !== adj.minutes && (
+                                <span>{hasNoCheckout ? 0 : adj.minutes} mins</span>
+                                {!hasNoCheckout && adj.original_ot_minutes !== undefined && adj.original_ot_minutes !== null && adj.original_ot_minutes !== adj.minutes && (
                                   <span className="text-[9px] text-[var(--text-muted)] font-normal line-through">({adj.original_ot_minutes})</span>
                                 )}
-                                {isAuthorizedToEdit && (
+                                {!hasNoCheckout && isAuthorizedToEdit && (
                                   <button
                                     type="button"
                                     onClick={() => {
@@ -995,7 +997,19 @@ export default function ApprovalsPage() {
                         </div>
                       </div>
 
-                      {user?.role === 'partner_viewer' ? (
+                      {hasNoCheckout ? (
+                        <div className="space-y-2">
+                          <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-3 text-xs font-bold text-center">
+                            ⚠️ No checkout recorded — needs manual review
+                          </div>
+                          <Link
+                            href="/attendance"
+                            className="w-full min-h-[40px] bg-[#1A1A1A] text-white hover:bg-[#333333] text-xs font-bold rounded-[12px] active:scale-[0.97] transition-transform flex items-center justify-center cursor-pointer"
+                          >
+                            <span>Review Attendance</span>
+                          </Link>
+                        </div>
+                      ) : user?.role === 'partner_viewer' ? (
                         <div className="text-center py-2.5 text-xs text-[#999] font-bold border border-[#E8E8E8] rounded-[12px] bg-[#F2F2F2] w-full">
                           Pending Approval (Read Only)
                         </div>

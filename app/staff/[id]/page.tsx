@@ -3142,8 +3142,9 @@ export default function StaffProfilePage() {
 
         const isAdminOps = user?.role === 'admin' || user?.role === 'ops_manager';
         const isHR = user?.role === 'staff_executive';
+        const isBranchMatch = !user?.branch || staff?.branch_id === user.branch;
 
-        const canEdit = !isFuture && isWithinLast4Months(selectedDayDetail.dateStr) && (isAdminOps || isHR);
+        const canEdit = !isFuture && isWithinLast4Months(selectedDayDetail.dateStr) && (isAdminOps || (isHR && isBranchMatch));
 
         return (
           <div className="fixed inset-0 z-[12000] flex items-center justify-center p-4">
