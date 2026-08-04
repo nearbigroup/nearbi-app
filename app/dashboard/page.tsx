@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase';
 import { createNotification } from '@/lib/notifications';
 import { createAuditLog } from '@/lib/audit';
 import { calculateMinutesWorked } from '@/lib/salary';
+import { autoProcessResignations } from '@/lib/resignations';
 import Link from 'next/link';
 import {
   Clock,
@@ -491,6 +492,7 @@ export default function DashboardPage() {
 
   const fetchDashboardData = async () => {
     try {
+      await autoProcessResignations();
       await fetchExceptions();
       // Auto-close checkouts for ops_manager
       if (user?.role === 'ops_manager') {

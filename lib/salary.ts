@@ -141,9 +141,8 @@ export function calculateSalary(
   // Gross pay
   const grossPay = paidDays * dailyRate;
 
-  // OT pay (Hypermarket has divisor 240, others use normal hourlyRate. Multiplier is 1.5x)
-  const otHourlyRate = branchId === 'hypermarket' ? (monthlySalary / 240) : hourlyRate;
-  const otPay = (approvedOTMinutes / 60) * otHourlyRate * 1.5;
+  // OT pay (Flat 1x rate: (monthlySalary / (calendarDays * shiftHours)) * (approvedOTMinutes / 60))
+  const otPay = (approvedOTMinutes / 60) * hourlyRate;
 
   // Early check-in pay (approved only)
   const earlyInPay = calculateEarlyInPay(approvedEarlyInMinutes, hourlyRate);
@@ -344,7 +343,7 @@ export async function autoCloseCheckouts(effectiveBranch: string | null) {
       shiftEndDateObj.setDate(shiftEndDateObj.getDate() + 1);
     }
 
-    const cutoffTime = shiftEndDateObj.getTime() + 60 * 60 * 1000;
+    const cutoffTime = shiftEndDateObj.getTime() + 3 * 60 * 60 * 1000;
 
     if (now.getTime() > cutoffTime) {
       // Set checkout to shift end time

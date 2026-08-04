@@ -100,7 +100,7 @@ export default function ApprovalsPage() {
   const [editingAdjId, setEditingAdjId] = useState<string | null>(null);
   const [editMinutes, setEditMinutes] = useState<number>(0);
 
-  const isAuthorizedToEdit = user?.role === 'ops_manager' || user?.role === 'staff_executive' || user?.role === 'nearbi_homes_supervisor';
+  const isAuthorizedToEdit = user?.role === 'admin' || user?.role === 'ops_manager' || user?.role === 'staff_executive' || user?.role === 'nearbi_homes_supervisor';
 
   useEffect(() => {
     setSelectedIds([]);

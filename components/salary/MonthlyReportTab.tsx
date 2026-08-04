@@ -110,19 +110,22 @@ export default function MonthlyReportTab({
         .from('attendance')
         .select('*')
         .gte('date', firstDay)
-        .lte('date', lastDay);
+        .lte('date', lastDay)
+        .limit(5000);
       if (attError) throw attError;
 
       const { data: lfData, error: lfError } = await supabase
         .from('late_fines')
         .select('*')
-        .eq('month', selectedMonth);
+        .eq('month', selectedMonth)
+        .limit(5000);
       if (lfError) throw lfError;
 
       const { data: sfData, error: sfError } = await supabase
         .from('special_fines')
         .select('*')
-        .eq('month', selectedMonth);
+        .eq('month', selectedMonth)
+        .limit(5000);
       if (sfError) throw sfError;
 
       // Fetch approved leaves
@@ -131,7 +134,8 @@ export default function MonthlyReportTab({
         .select('*')
         .eq('status', 'approved')
         .gte('date', firstDay)
-        .lte('date', lastDay);
+        .lte('date', lastDay)
+        .limit(5000);
       if (leaveError) throw leaveError;
 
       if (staffData) setStaffList(staffData as unknown as Staff[]);
@@ -459,7 +463,7 @@ export default function MonthlyReportTab({
           earlyInMins = isHourly ? 0 : (att.early_in_minutes || 0);
           earlyInApproved = isHourly ? 'No' : (att.early_in_approved ? 'Yes' : 'No');
           earlyLeaveMins = isHourly ? 0 : (att.early_leave_minutes || 0);
-          dayType = isHourly ? 'hourly' : (att.day_type || 'present');
+          dayType = isHourly ? 'hourly' : (att.day_type || (att.status === 'absent' ? 'absent' : 'present'));
         } else if (hasLeave && !isHourly) {
           dayType = hasLeave.is_weekly_off ? 'weekly_off' : 'leave';
         } else if (isHourly) {
@@ -821,21 +825,24 @@ export default function MonthlyReportTab({
         .from('attendance')
         .select('*')
         .gte('date', firstDay)
-        .lte('date', lastDay);
+        .lte('date', lastDay)
+        .limit(5000);
       if (attErr) throw attErr;
 
       // 4. Fetch fresh late fines
       const { data: freshLateFines, error: lfErr } = await supabase
         .from('late_fines')
         .select('*')
-        .eq('month', selectedMonth);
+        .eq('month', selectedMonth)
+        .limit(5000);
       if (lfErr) throw lfErr;
 
       // 5. Fetch fresh special fines
       const { data: freshSpecialFines, error: sfErr } = await supabase
         .from('special_fines')
         .select('*')
-        .eq('month', selectedMonth);
+        .eq('month', selectedMonth)
+        .limit(5000);
       if (sfErr) throw sfErr;
 
       // 6. Fetch fresh leave requests
@@ -844,7 +851,8 @@ export default function MonthlyReportTab({
         .select('*')
         .eq('status', 'approved')
         .gte('date', firstDay)
-        .lte('date', lastDay);
+        .lte('date', lastDay)
+        .limit(5000);
       if (leaveErr) throw leaveErr;
 
       // 7. Fetch fresh adjustments
@@ -852,8 +860,9 @@ export default function MonthlyReportTab({
         .from('attendance_adjustments')
         .select('*')
         .eq('status', 'approved')
-.gte('date', firstDay)
-        .lte('date', lastDay);
+        .gte('date', firstDay)
+        .lte('date', lastDay)
+        .limit(5000);
       if (adjErr) throw adjErr;
 
       const activeStaff = (freshStaff || []).filter((s: any) => s.active).sort((a: any, b: any) => a.name.localeCompare(b.name));
@@ -1194,11 +1203,7 @@ export default function MonthlyReportTab({
 
         const confirmedNetSalary = conf ? Number(conf.net_salary) : 'PENDING';
 
-        const lateSalDeductionAmount = (() => {
-          const totalLateMins = staffAtt.reduce((sum, r) => sum + (r.late_salary_deduction_minutes || 0), 0);
-          const lateSalDeductionTotal = calculateLateSalaryDeduction(totalLateMins, hourlyRateInd);
-          return Math.round(lateSalDeductionTotal * hourlyRateInd / 60 * 100) / 100;
-        })();
+        const lateSalDeductionAmount = lateSalaryDeduction;
 
         const staffDetailedHeaders = [
           "DATE", "DAY", "CHECK IN", "CHECK OUT", "ACTUAL HOURS", "STATUS", "DAY TYPE", "LATE MINUTES", "OT MINUTES", "LATE FINE"
@@ -1241,7 +1246,7 @@ export default function MonthlyReportTab({
             status = att.status || '';
             lateMins = isHourly ? 0 : (att.minutes_late || 0);
             otMins = isHourly ? 0 : (att.ot_minutes || 0);
-            dayType = isHourly ? 'hourly' : (att.day_type || 'present');
+            dayType = isHourly ? 'hourly' : (att.day_type || (att.status === 'absent' ? 'absent' : 'present'));
           } else if (hasLeave && !isHourly) {
             dayType = hasLeave.is_weekly_off ? 'weekly_off' : 'leave';
           } else if (isHourly) {

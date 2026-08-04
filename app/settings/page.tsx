@@ -1798,8 +1798,8 @@ export default function SettingsPage() {
             </div>
           )}
 
-          {/* Credentials & Access Manager Section (Admin/Ops Manager) */}
-          {(user?.role === 'admin' || user?.role === 'ops_manager') && (
+          {/* Credentials & Access Manager Section (Admin Only) */}
+          {user?.role === 'admin' && (
             <div className="space-y-4 pt-6">
               <div>
                 <h2 className="text-[#1A1A1A] font-extrabold text-sm tracking-wider uppercase">

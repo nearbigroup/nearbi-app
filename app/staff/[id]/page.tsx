@@ -75,6 +75,7 @@ interface StaffMember {
 
 interface AttendanceRecord {
   id: string;
+  staff_id?: string;
   date: string;
   check_in_time: string | null;
   check_out_time: string | null;
@@ -853,7 +854,7 @@ export default function StaffProfilePage() {
     setEditCheckIn(r?.check_in_time || '');
     setEditCheckOut(r?.check_out_time || '');
     setEditStatus(r?.status || 'present');
-    setEditDayType(r?.day_type || 'present');
+    setEditDayType(r?.day_type || (r?.status === 'absent' ? 'absent' : 'present'));
     
     const hasOverride = !!(r?.override_shift_start || r?.override_shift_end);
     setOverrideShift(hasOverride);
@@ -927,6 +928,13 @@ export default function StaffProfilePage() {
       if (error) throw error;
       
       for (const ot of pendingOT) {
+        await supabase
+          .from('attendance_adjustments')
+          .update({ status: 'approved', approved_by: user?.email || 'admin', approved_at: new Date().toISOString() })
+          .eq('staff_id', ot.staff_id || id)
+          .eq('date', ot.date)
+          .eq('type', 'ot');
+
         await createAuditLog({
           action: 'APPROVE_OT',
           table_name: 'attendance',
@@ -1012,6 +1020,13 @@ export default function StaffProfilePage() {
         .eq('id', record.id);
       if (error) throw error;
       
+      await supabase
+        .from('attendance_adjustments')
+        .update({ status: 'approved', approved_by: user?.email || 'admin', approved_at: new Date().toISOString() })
+        .eq('staff_id', record.staff_id || id)
+        .eq('date', record.date)
+        .eq('type', 'ot');
+
       await createAuditLog({
         action: 'APPROVE_OT',
         table_name: 'attendance',
@@ -1039,6 +1054,13 @@ export default function StaffProfilePage() {
         .update({ ot_minutes: 0, ot_approved: false })
         .eq('id', record.id);
       if (error) throw error;
+
+      await supabase
+        .from('attendance_adjustments')
+        .update({ status: 'rejected', approved_by: user?.email || 'admin', approved_at: new Date().toISOString() })
+        .eq('staff_id', record.staff_id || id)
+        .eq('date', record.date)
+        .eq('type', 'ot');
 
       await createAuditLog({
         action: 'REJECT_OT',
@@ -3502,7 +3524,7 @@ export default function StaffProfilePage() {
                         </div>
                         <div className="flex justify-between">
                           <span>Day Type:</span>
-                          <span className="text-white capitalize">{selectedDayDetail.record.day_type || 'present'}</span>
+                          <span className="text-white capitalize">{selectedDayDetail.record.day_type || (selectedDayDetail.record.status === 'absent' ? 'absent' : 'present')}</span>
                         </div>
                         {staff?.pay_type === 'hourly' ? (
                           <div className="flex justify-between border-t border-[var(--border-strong)] pt-2 mt-1">

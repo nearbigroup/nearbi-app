@@ -2472,8 +2472,8 @@ export default function StaffPage() {
 
     if (!profile) {
       return (
-        <span className="w-5 h-5 rounded-full flex items-center justify-center bg-gray-100 border border-gray-300 text-gray-400" title="Profile Incomplete (0%)">
-          <FileText size={10} />
+        <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-slate-100 text-slate-500 border border-slate-200 inline-flex items-center gap-1" title="Profile Incomplete (0%)">
+          0%
         </span>
       );
     }
@@ -2500,8 +2500,15 @@ export default function StaffPage() {
 
     if (percent < 100) {
       return (
-        <span className="w-5 h-5 rounded-full flex items-center justify-center bg-gray-100 border border-gray-300 text-gray-400" title={`Profile Incomplete (${percent}%)`}>
-          <FileText size={10} />
+        <span
+          className={`px-2 py-0.5 rounded-full text-[10px] font-black inline-flex items-center gap-1 border ${
+            percent < 50
+              ? 'bg-amber-50 text-amber-700 border-amber-200'
+              : 'bg-blue-50 text-blue-700 border-blue-200'
+          }`}
+          title={`Profile Incomplete (${percent}%)`}
+        >
+          {percent}%
         </span>
       );
     }
@@ -2518,8 +2525,8 @@ export default function StaffPage() {
     const hasPending = uploads.some(status => status === 'pending');
     if (hasPending) {
       return (
-        <span className="w-5 h-5 rounded-full flex items-center justify-center bg-amber-50 border border-amber-300 text-amber-500" title="100% Complete — Verification Pending">
-          <FileText size={10} />
+        <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-amber-50 border border-amber-300 text-amber-700 inline-flex items-center gap-1" title="100% Complete — Verification Pending">
+          100%
         </span>
       );
     }
@@ -2527,15 +2534,15 @@ export default function StaffPage() {
     const hasRejected = uploads.some(status => status === 'rejected');
     if (hasRejected) {
       return (
-        <span className="w-5 h-5 rounded-full flex items-center justify-center bg-red-50 border border-red-300 text-red-500" title="100% Complete — Rejections Exist">
-          <FileText size={10} />
+        <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-red-50 border border-red-300 text-red-700 inline-flex items-center gap-1" title="100% Complete — Rejections Exist">
+          100%
         </span>
       );
     }
 
     return (
-      <span className="w-5 h-5 rounded-full flex items-center justify-center bg-emerald-50 border border-emerald-300 text-emerald-600" title="100% Complete — Fully Verified">
-        <FileText size={10} />
+      <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-50 border border-emerald-300 text-emerald-700 inline-flex items-center gap-1" title="100% Complete — Fully Verified">
+        100%
       </span>
     );
   };

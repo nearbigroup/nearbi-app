@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { autoProcessResignations } from '@/lib/resignations';
 import {
   ArrowLeft,
   UserMinus,
@@ -62,6 +63,8 @@ export default function ResignationsPage() {
     try {
       setLoading(true);
       setErrorMsg('');
+
+      await autoProcessResignations();
 
       // Build query to fetch resignations left-joining staff details
       let query = supabase

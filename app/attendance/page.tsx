@@ -2985,7 +2985,7 @@ export default function AttendancePage() {
                       }}
                     >
                       {item.record?.check_in_photo && (
-                        user?.role === 'nearbi_homes_supervisor' ? (
+                        (user?.role === 'nearbi_homes_supervisor' || user?.role === 'partner_viewer') ? (
                           <div className="w-9 h-9 rounded-full bg-[#1A1A1A] text-white flex items-center justify-center border border-[#E8E8E8] flex-shrink-0">
                             <User size={16} />
                           </div>
@@ -3075,7 +3075,7 @@ export default function AttendancePage() {
                       <div className="bg-[#EDF7EF] border border-[#2D7A3A]/20 text-[#2D7A3A] text-[10px] font-bold px-2.5 py-1 rounded-[20px] flex items-center space-x-1.5">
                         <span>IN: {formatTime12hr(item.record.check_in_time)}</span>
                         {item.record.check_in_photo && (
-                          user?.role === 'nearbi_homes_supervisor' ? (
+                          (user?.role === 'nearbi_homes_supervisor' || user?.role === 'partner_viewer') ? (
                             <div className="w-4.5 h-4.5 rounded-full bg-[#2D7A3A]/10 text-[#2D7A3A] flex items-center justify-center border border-[#2D7A3A]/25 flex-shrink-0">
                               <User size={10} />
                             </div>
@@ -3128,7 +3128,7 @@ export default function AttendancePage() {
                         <div className="bg-[#EBF3FB] border border-[#1A5FA8]/20 text-[#1A5FA8] text-[10px] font-bold px-2.5 py-1 rounded-[20px] flex items-center space-x-1.5">
                           <span>OUT: {formatTime12hr(item.record.check_out_time)}</span>
                           {item.record.check_out_photo && (
-                            user?.role === 'nearbi_homes_supervisor' ? (
+                            (user?.role === 'nearbi_homes_supervisor' || user?.role === 'partner_viewer') ? (
                               <div className="w-4.5 h-4.5 rounded-full bg-[#1A5FA8]/10 text-[#1A5FA8] flex items-center justify-center border border-[#1A5FA8]/25 flex-shrink-0">
                                 <User size={10} />
                               </div>
@@ -3271,7 +3271,7 @@ export default function AttendancePage() {
       )}
 
       {/* Photo Modal */}
-      {selectedPhoto && user?.role !== 'nearbi_homes_supervisor' && (
+      {selectedPhoto && user?.role !== 'nearbi_homes_supervisor' && user?.role !== 'partner_viewer' && (
         <div
           className="fixed inset-0 z-[14000] bg-black/95 backdrop-blur-md flex flex-col justify-between p-6"
           onClick={() => setSelectedPhoto(null)}
@@ -4039,7 +4039,7 @@ export default function AttendancePage() {
                         <div className="flex flex-col items-center">
                           <span className="text-[11px] font-bold text-[#555555] mb-1.5">Check In</span>
                           {detailRecord.record.check_in_photo ? (
-                            user?.role === 'nearbi_homes_supervisor' ? (
+                            (user?.role === 'nearbi_homes_supervisor' || user?.role === 'partner_viewer') ? (
                               <div className="w-full aspect-square max-w-[120px] rounded-[12px] bg-[#F2F2F2] border border-[#E8E8E8] flex flex-col items-center justify-center text-[#999999]">
                                 <User size={24} className="mb-1" strokeWidth={1.5} />
                                 <span className="text-[9px] font-bold">Photo Hidden</span>
@@ -4088,7 +4088,7 @@ export default function AttendancePage() {
                         <div className="flex flex-col items-center">
                           <span className="text-[11px] font-bold text-[#555555] mb-1.5">Check Out</span>
                           {detailRecord.record.check_out_photo ? (
-                            user?.role === 'nearbi_homes_supervisor' ? (
+                            (user?.role === 'nearbi_homes_supervisor' || user?.role === 'partner_viewer') ? (
                               <div className="w-full aspect-square max-w-[120px] rounded-[12px] bg-[#F2F2F2] border border-[#E8E8E8] flex flex-col items-center justify-center text-[#999999]">
                                 <User size={24} className="mb-1" strokeWidth={1.5} />
                                 <span className="text-[9px] font-bold">Photo Hidden</span>
