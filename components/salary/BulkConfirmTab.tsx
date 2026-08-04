@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth-context';
-import { calculateSalary, calculateHourlySalary, calculateMinutesWorked, calculateBonusDays } from '@/lib/salary';
+import { calculateSalary, calculateHourlySalary, calculateMinutesWorked, calculateBonusDays, fetchAllAttendance } from '@/lib/salary';
 import { Staff, SalaryConfirmation } from './types';
 import { formatCurrency, getCurrentMonthStr, formatMonthDisplay } from './utils';
 import { Check, Search, AlertCircle, RefreshCw } from 'lucide-react';
@@ -71,29 +71,7 @@ export default function BulkConfirmTab({
       const startDate = `${month}-01`;
       const lastDayNum = new Date(year, monthNum, 0).getDate();
       const endDate = `${year}-${String(monthNum).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
-      const { data: attData, error: attError } = await supabase
-        .from('attendance')
-        .select(`
-          staff_id,
-          date,
-          check_in_time,
-          status,
-          ot_minutes,
-          ot_approved,
-          early_in_minutes,
-          early_in_approved,
-          early_leave_minutes,
-          day_type,
-          late_salary_deduction_minutes,
-          override_shift_start,
-          override_shift_end,
-          override_reason,
-          override_approved_by
-        `)
-        .gte('date', startDate)
-        .lte('date', endDate);
-
-      if (attError) throw attError;
+      const attData = await fetchAllAttendance(supabase, startDate, endDate);
       setAttendanceRecords(attData || []);
 
       // Fetch approved leaves

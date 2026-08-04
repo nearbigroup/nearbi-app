@@ -1,5 +1,25 @@
 import { supabase } from './supabase';
 
+export async function fetchAllAttendance(supabaseClient: any, startDate: string, endDate: string) {
+  let allRows: any[] = [];
+  let page = 0;
+  const pageSize = 1000;
+  while (true) {
+    const { data, error } = await supabaseClient
+      .from('attendance')
+      .select('*')
+      .gte('date', startDate)
+      .lte('date', endDate)
+      .range(page * pageSize, (page + 1) * pageSize - 1);
+    
+    if (error || !data || data.length === 0) break;
+    allRows = allRows.concat(data);
+    if (data.length < pageSize) break;
+    page++;
+  }
+  return allRows;
+}
+
 export function getDaysInMonth(
   year: number,
   month: number

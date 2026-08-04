@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { Staff, SalaryConfirmation, SalaryPayment } from './types';
 import { formatCurrency, getPastMonths, formatMonthDisplay } from './utils';
 import { Download } from 'lucide-react';
-import { calculateSalary, calculateLateSalaryDeduction, calculateBonusDays } from '@/lib/salary';
+import { calculateSalary, calculateLateSalaryDeduction, calculateBonusDays, fetchAllAttendance } from '@/lib/salary';
 import XLSX from 'xlsx-js-style';
 import { useAuth } from '@/lib/auth-context';
 import { jsPDF } from 'jspdf';
@@ -106,13 +106,7 @@ export default function MonthlyReportTab({
       const lastDayNum = new Date(year, monthNum, 0).getDate();
       const lastDay = `${year}-${String(monthNum).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
 
-      const { data: attData, error: attError } = await supabase
-        .from('attendance')
-        .select('*')
-        .gte('date', firstDay)
-        .lte('date', lastDay)
-        .limit(5000);
-      if (attError) throw attError;
+      const attData = await fetchAllAttendance(supabase, firstDay, lastDay);
 
       const { data: lfData, error: lfError } = await supabase
         .from('late_fines')
@@ -793,13 +787,7 @@ export default function MonthlyReportTab({
       if (confErr) throw confErr;
 
       // 3. Fetch fresh attendance
-      const { data: freshAtt, error: attErr } = await supabase
-        .from('attendance')
-        .select('*')
-        .gte('date', firstDay)
-        .lte('date', lastDay)
-        .limit(5000);
-      if (attErr) throw attErr;
+      const freshAtt = await fetchAllAttendance(supabase, firstDay, lastDay);
 
       // 4. Fetch fresh late fines
       const { data: freshLateFines, error: lfErr } = await supabase
