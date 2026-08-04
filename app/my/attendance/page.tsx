@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useMemo } from 'react';
 import { useAuth } from '@/lib/auth-context';
-import { supabase } from '@/lib/supabase';
+import { supabase, fetchAllPages } from '@/lib/supabase';
 import { ChevronLeft, ChevronRight, X, Clock, AlertTriangle, AlertCircle, CheckCircle, Calendar, Sparkles } from 'lucide-react';
 import { HOLIDAYS } from '@/lib/data';
 import { formatTime12hr } from '@/lib/utils';
@@ -87,45 +87,60 @@ export default function StaffAttendancePage() {
       setStaff(sData);
 
       // 2. Fetch Attendance for Month
-      const { data: attData } = await supabase
-        .from('attendance')
-        .select('*')
-        .eq('staff_id', user.staffId)
-        .gte('date', startOfMonth)
-        .lte('date', endOfMonth);
+      const { data: attData } = await fetchAllPages((start, end) =>
+        supabase
+          .from('attendance')
+          .select('*')
+          .eq('staff_id', user.staffId)
+          .gte('date', startOfMonth)
+          .lte('date', endOfMonth)
+          .range(start, end)
+      );
       setAttendance(attData || []);
 
       // 3. Fetch Approved Leaves for Month
-      const { data: leaveData } = await supabase
-        .from('leave_requests')
-        .select('*')
-        .eq('staff_id', user.staffId)
-        .eq('status', 'approved')
-        .gte('date', startOfMonth)
-        .lte('date', endOfMonth);
+      const { data: leaveData } = await fetchAllPages((start, end) =>
+        supabase
+          .from('leave_requests')
+          .select('*')
+          .eq('staff_id', user.staffId)
+          .eq('status', 'approved')
+          .gte('date', startOfMonth)
+          .lte('date', endOfMonth)
+          .range(start, end)
+      );
       setLeaves(leaveData || []);
 
       // Fetch Attendance Adjustments for Month (for OT status)
-      const { data: adjData } = await supabase
-        .from('attendance_adjustments')
-        .select('*')
-        .eq('staff_id', user.staffId)
-        .gte('date', startOfMonth)
-        .lte('date', endOfMonth);
+      const { data: adjData } = await fetchAllPages((start, end) =>
+        supabase
+          .from('attendance_adjustments')
+          .select('*')
+          .eq('staff_id', user.staffId)
+          .gte('date', startOfMonth)
+          .lte('date', endOfMonth)
+          .range(start, end)
+      );
       setAdjustments(adjData || []);
 
       // 4. Fetch Fines for Month (both late and special)
-      const { data: lfData } = await supabase
-        .from('late_fines')
-        .select('*')
-        .eq('staff_id', user.staffId)
-        .eq('month', selectedMonth);
+      const { data: lfData } = await fetchAllPages((start, end) =>
+        supabase
+          .from('late_fines')
+          .select('*')
+          .eq('staff_id', user.staffId)
+          .eq('month', selectedMonth)
+          .range(start, end)
+      );
       
-      const { data: sfData } = await supabase
-        .from('special_fines')
-        .select('*')
-        .eq('staff_id', user.staffId)
-        .eq('month', selectedMonth);
+      const { data: sfData } = await fetchAllPages((start, end) =>
+        supabase
+          .from('special_fines')
+          .select('*')
+          .eq('staff_id', user.staffId)
+          .eq('month', selectedMonth)
+          .range(start, end)
+      );
       
       const combinedFines: FineItem[] = [];
       (lfData || []).forEach(f => {

@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
-import { supabase } from '@/lib/supabase';
+import { supabase, fetchAllPages } from '@/lib/supabase';
 import { 
   Lock, 
   Wrench, 
@@ -167,11 +167,14 @@ export default function MaintenanceTicketsPage() {
   // Fetch Activity Timeline
   const fetchActivityTimeline = useCallback(async (ticketId: string) => {
     try {
-      const { data, error } = await supabase
-        .from('ticket_activity_log')
-        .select('*')
-        .eq('ticket_id', ticketId)
-        .order('logged_at', { ascending: true });
+      const { data, error } = await fetchAllPages((start, end) =>
+        supabase
+          .from('ticket_activity_log')
+          .select('*')
+          .eq('ticket_id', ticketId)
+          .order('logged_at', { ascending: true })
+          .range(start, end)
+      );
 
       if (error) throw error;
       setActivityTimeline(data || []);

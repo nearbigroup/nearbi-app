@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
+import { supabase, fetchAllPages } from '@/lib/supabase';
 import { Staff, SalaryConfirmation, SalaryPayment } from './types';
 import { formatCurrency, getPastMonths, formatMonthDisplay } from './utils';
 import { Download } from 'lucide-react';
@@ -108,28 +108,34 @@ export default function MonthlyReportTab({
 
       const attData = await fetchAllAttendance(supabase, firstDay, lastDay);
 
-      const { data: lfData, error: lfError } = await supabase
-        .from('late_fines')
-        .select('*')
-        .eq('month', selectedMonth)
-        .limit(5000);
+      const { data: lfData, error: lfError } = await fetchAllPages((start, end) =>
+        supabase
+          .from('late_fines')
+          .select('*')
+          .eq('month', selectedMonth)
+          .range(start, end)
+      );
       if (lfError) throw lfError;
 
-      const { data: sfData, error: sfError } = await supabase
-        .from('special_fines')
-        .select('*')
-        .eq('month', selectedMonth)
-        .limit(5000);
+      const { data: sfData, error: sfError } = await fetchAllPages((start, end) =>
+        supabase
+          .from('special_fines')
+          .select('*')
+          .eq('month', selectedMonth)
+          .range(start, end)
+      );
       if (sfError) throw sfError;
 
       // Fetch approved leaves
-      const { data: leaveData, error: leaveError } = await supabase
-        .from('leave_requests')
-        .select('*')
-        .eq('status', 'approved')
-        .gte('date', firstDay)
-        .lte('date', lastDay)
-        .limit(5000);
+      const { data: leaveData, error: leaveError } = await fetchAllPages((start, end) =>
+        supabase
+          .from('leave_requests')
+          .select('*')
+          .eq('status', 'approved')
+          .gte('date', firstDay)
+          .lte('date', lastDay)
+          .range(start, end)
+      );
       if (leaveError) throw leaveError;
 
       if (staffData) setStaffList(staffData as unknown as Staff[]);
@@ -790,39 +796,47 @@ export default function MonthlyReportTab({
       const freshAtt = await fetchAllAttendance(supabase, firstDay, lastDay);
 
       // 4. Fetch fresh late fines
-      const { data: freshLateFines, error: lfErr } = await supabase
-        .from('late_fines')
-        .select('*')
-        .eq('month', selectedMonth)
-        .limit(5000);
+      const { data: freshLateFines, error: lfErr } = await fetchAllPages((start, end) =>
+        supabase
+          .from('late_fines')
+          .select('*')
+          .eq('month', selectedMonth)
+          .range(start, end)
+      );
       if (lfErr) throw lfErr;
 
       // 5. Fetch fresh special fines
-      const { data: freshSpecialFines, error: sfErr } = await supabase
-        .from('special_fines')
-        .select('*')
-        .eq('month', selectedMonth)
-        .limit(5000);
+      const { data: freshSpecialFines, error: sfErr } = await fetchAllPages((start, end) =>
+        supabase
+          .from('special_fines')
+          .select('*')
+          .eq('month', selectedMonth)
+          .range(start, end)
+      );
       if (sfErr) throw sfErr;
 
       // 6. Fetch fresh leave requests
-      const { data: freshLeaves, error: leaveErr } = await supabase
-        .from('leave_requests')
-        .select('*')
-        .eq('status', 'approved')
-        .gte('date', firstDay)
-        .lte('date', lastDay)
-        .limit(5000);
+      const { data: freshLeaves, error: leaveErr } = await fetchAllPages((start, end) =>
+        supabase
+          .from('leave_requests')
+          .select('*')
+          .eq('status', 'approved')
+          .gte('date', firstDay)
+          .lte('date', lastDay)
+          .range(start, end)
+      );
       if (leaveErr) throw leaveErr;
 
       // 7. Fetch fresh adjustments
-      const { data: freshAdjs, error: adjErr } = await supabase
-        .from('attendance_adjustments')
-        .select('*')
-        .eq('status', 'approved')
-        .gte('date', firstDay)
-        .lte('date', lastDay)
-        .limit(5000);
+      const { data: freshAdjs, error: adjErr } = await fetchAllPages((start, end) =>
+        supabase
+          .from('attendance_adjustments')
+          .select('*')
+          .eq('status', 'approved')
+          .gte('date', firstDay)
+          .lte('date', lastDay)
+          .range(start, end)
+      );
       if (adjErr) throw adjErr;
 
       const activeStaff = (freshStaff || []).filter((s: any) => s.active).sort((a: any, b: any) => a.name.localeCompare(b.name));

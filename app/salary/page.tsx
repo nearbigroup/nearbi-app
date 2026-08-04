@@ -7,7 +7,7 @@ import PayslipTab from '@/components/salary/PayslipTab';
 import PaymentTrackerTab from '@/components/salary/PaymentTrackerTab';
 import MonthlyReportTab from '@/components/salary/MonthlyReportTab';
 import { Lock, Calculator, User, Calendar, RefreshCw, ChevronLeft, ChevronRight, AlertCircle } from 'lucide-react';
-import { supabase } from '@/lib/supabase';
+import { supabase, fetchAllPages } from '@/lib/supabase';
 import { calculateSalary, getDaysInMonth, calculateEarlyLeaveDeduction, calculatePaidDays, calculateBonusDays, calculateHourlySalary, calculateEarlyInPay, calculateMinutesWorked, autoCloseCheckouts } from '@/lib/salary';
 import { formatCurrency, getPastMonths, formatMonthDisplay, getCurrentMonthStr } from '@/components/salary/utils';
 
@@ -319,13 +319,16 @@ export default function SalaryPage() {
 
   useEffect(() => {
     async function loadStaff() {
-      const { data } = await supabase
-        .from('staff')
-        .select('*, branch:branches(name), shift:shifts(*)')
-        .eq('active', true)
-        .eq('is_resigned', false)
-        .eq('is_trial', false)
-        .order('name');
+      const { data } = await fetchAllPages((start, end) =>
+        supabase
+          .from('staff')
+          .select('*, branch:branches(name), shift:shifts(*)')
+          .eq('active', true)
+          .eq('is_resigned', false)
+          .eq('is_trial', false)
+          .order('name')
+          .range(start, end)
+      );
       if (data) setStaffList(data);
     }
     loadStaff();

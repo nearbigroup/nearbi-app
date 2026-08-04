@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
-import { supabase } from '@/lib/supabase';
+import { supabase, fetchAllPages } from '@/lib/supabase';
 import { createNotification } from '@/lib/notifications';
 import { createAuditLog } from '@/lib/audit';
 import { calculateMinutesWorked } from '@/lib/salary';
@@ -569,12 +569,14 @@ export default function DashboardPage() {
       const endDate = `${yr}-${String(mo).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
 
       // A. Attendance issues this month
-      let monthAttQuery = supabase
-        .from('attendance')
-        .select('check_in_time, check_out_time, status, minutes_late, staff_id')
-        .gte('date', startDate)
-        .lte('date', endDate);
-      const { data: monthAttData } = await monthAttQuery;
+      const { data: monthAttData } = await fetchAllPages((start, end) =>
+        supabase
+          .from('attendance')
+          .select('check_in_time, check_out_time, status, minutes_late, staff_id')
+          .gte('date', startDate)
+          .lte('date', endDate)
+          .range(start, end)
+      );
 
       const activeStaffIds = new Set(verifiedStaff.map((s) => s.id));
       const branchMonthAtt = (monthAttData || []).filter((r) => activeStaffIds.has(r.staff_id));

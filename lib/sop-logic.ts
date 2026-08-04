@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { supabase, fetchAllPages } from './supabase';
 import { writeAuditLog } from './audit';
 
 export interface ActiveGuardianInfo {
@@ -83,18 +83,24 @@ export async function getActiveDutyInfo(branchId: string, dateStr: string): Prom
   }
 
   // 2. Fetch today's attendance for the branch
-  const { data: attRecords } = await supabase
-    .from('attendance')
-    .select('*')
-    .eq('date', dateStr);
+  const { data: attRecords } = await fetchAllPages((start, end) =>
+    supabase
+      .from('attendance')
+      .select('*')
+      .eq('date', dateStr)
+      .range(start, end)
+  );
 
   // 3. Fetch today's handoffs from audit_log
-  const { data: handoffs } = await supabase
-    .from('audit_log')
-    .select('*')
-    .eq('action_type', 'duty_handoff')
-    .gte('created_at', dateStr + 'T00:00:00.000Z')
-    .lte('created_at', dateStr + 'T23:59:59.999Z');
+  const { data: handoffs } = await fetchAllPages((start, end) =>
+    supabase
+      .from('audit_log')
+      .select('*')
+      .eq('action_type', 'duty_handoff')
+      .gte('created_at', dateStr + 'T00:00:00.000Z')
+      .lte('created_at', dateStr + 'T23:59:59.999Z')
+      .range(start, end)
+  );
 
   const resolveShift = async (shiftWindow: 'opening' | 'closing'): Promise<ActiveGuardianInfo> => {
     const primaryEntry = rosterEntries?.find(r => r.shift_window === shiftWindow && r.role_type === 'primary');
@@ -266,20 +272,26 @@ export async function handOffDuty(branchId: string, shiftWindow: 'opening' | 'cl
 export async function checkAndMarkMissedTasks(branchId: string, dateStr: string) {
   try {
     // 1. Fetch active tasks for this branch
-    const { data: tasks } = await supabase
-      .from('sop_tasks')
-      .select('*')
-      .eq('branch_id', branchId)
-      .eq('active', true);
+    const { data: tasks } = await fetchAllPages((start, end) =>
+      supabase
+        .from('sop_tasks')
+        .select('*')
+        .eq('branch_id', branchId)
+        .eq('active', true)
+        .range(start, end)
+    );
 
     if (!tasks || tasks.length === 0) return;
 
     // 2. Fetch completions for today
-    const { data: completions } = await supabase
-      .from('daily_task_completion')
-      .select('*')
-      .eq('branch_id', branchId)
-      .eq('task_date', dateStr);
+    const { data: completions } = await fetchAllPages((start, end) =>
+      supabase
+        .from('daily_task_completion')
+        .select('*')
+        .eq('branch_id', branchId)
+        .eq('task_date', dateStr)
+        .range(start, end)
+    );
 
     const now = new Date();
     const currentMins = now.getHours() * 60 + now.getMinutes();

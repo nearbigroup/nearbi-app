@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useMemo } from 'react';
 import { useAuth } from '@/lib/auth-context';
-import { supabase } from '@/lib/supabase';
+import { supabase, fetchAllPages } from '@/lib/supabase';
 import { Timer, ChevronLeft, ChevronRight, CheckCircle, Clock, XCircle, AlertCircle } from 'lucide-react';
 import { formatTime12hr } from '@/lib/utils';
 
@@ -46,23 +46,29 @@ export default function StaffOvertimePage() {
       setStaffInfo(sData);
 
       // 2. Fetch attendance logs with ot_minutes
-      const { data: attData, error: attErr } = await supabase
-        .from('attendance')
-        .select('*')
-        .eq('staff_id', user.staffId)
-        .gte('date', startOfMonth)
-        .lte('date', endOfMonth)
-        .gt('ot_minutes', 0);
+      const { data: attData, error: attErr } = await fetchAllPages((start, end) =>
+        supabase
+          .from('attendance')
+          .select('*')
+          .eq('staff_id', user.staffId)
+          .gte('date', startOfMonth)
+          .lte('date', endOfMonth)
+          .gt('ot_minutes', 0)
+          .range(start, end)
+      );
       if (attErr) throw attErr;
 
       // 3. Fetch adjustments for the month (to identify rejected OT)
-      const { data: adjData, error: adjErr } = await supabase
-        .from('attendance_adjustments')
-        .select('*')
-        .eq('staff_id', user.staffId)
-        .eq('type', 'ot')
-        .gte('date', startOfMonth)
-        .lte('date', endOfMonth);
+      const { data: adjData, error: adjErr } = await fetchAllPages((start, end) =>
+        supabase
+          .from('attendance_adjustments')
+          .select('*')
+          .eq('staff_id', user.staffId)
+          .eq('type', 'ot')
+          .gte('date', startOfMonth)
+          .lte('date', endOfMonth)
+          .range(start, end)
+      );
       if (adjErr) throw adjErr;
 
       // Merge records

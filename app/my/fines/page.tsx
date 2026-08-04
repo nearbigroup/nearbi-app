@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useMemo } from 'react';
 import { useAuth } from '@/lib/auth-context';
-import { supabase } from '@/lib/supabase';
+import { supabase, fetchAllPages } from '@/lib/supabase';
 import { AlertCircle, ChevronLeft, ChevronRight, CheckCircle, HelpCircle, XCircle, Clock } from 'lucide-react';
 import { calculateEarlyLeaveDeduction } from '@/lib/salary';
 
@@ -37,19 +37,25 @@ export default function StaffFinesPage() {
     setLoading(true);
     try {
       // 1. Fetch Late Fines
-      const { data: lfData, error: lfErr } = await supabase
-        .from('late_fines')
-        .select('*')
-        .eq('staff_id', user.staffId)
-        .eq('month', selectedMonth);
+      const { data: lfData, error: lfErr } = await fetchAllPages((start, end) =>
+        supabase
+          .from('late_fines')
+          .select('*')
+          .eq('staff_id', user.staffId)
+          .eq('month', selectedMonth)
+          .range(start, end)
+      );
       if (lfErr) throw lfErr;
 
       // 2. Fetch Special Fines
-      const { data: sfData, error: sfErr } = await supabase
-        .from('special_fines')
-        .select('*')
-        .eq('staff_id', user.staffId)
-        .eq('month', selectedMonth);
+      const { data: sfData, error: sfErr } = await fetchAllPages((start, end) =>
+        supabase
+          .from('special_fines')
+          .select('*')
+          .eq('staff_id', user.staffId)
+          .eq('month', selectedMonth)
+          .range(start, end)
+      );
       if (sfErr) throw sfErr;
 
       // 3. Fetch Staff info for early leave calculation
@@ -70,12 +76,15 @@ export default function StaffFinesPage() {
       const startDate = `${selectedMonth}-01`;
       const endDate = `${selectedMonth}-${calendarDays}`;
 
-      const { data: attData } = await supabase
-        .from('attendance')
-        .select('*')
-        .eq('staff_id', user.staffId)
-        .gte('date', startDate)
-        .lte('date', endDate);
+      const { data: attData } = await fetchAllPages((start, end) =>
+        supabase
+          .from('attendance')
+          .select('*')
+          .eq('staff_id', user.staffId)
+          .gte('date', startDate)
+          .lte('date', endDate)
+          .range(start, end)
+      );
 
       const combined: FineItem[] = [];
 

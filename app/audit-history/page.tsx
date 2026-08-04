@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
-import { supabase } from '@/lib/supabase';
+import { supabase, fetchAllPages } from '@/lib/supabase';
 import { 
   Lock, 
   History, 
@@ -107,10 +107,13 @@ export default function AuditHistoryPage() {
 
     const fetchStaff = async () => {
       try {
-        const { data, error: err } = await supabase
-          .from('staff')
-          .select('id, name, branch_id')
-          .order('name');
+        const { data, error: err } = await fetchAllPages((start, end) =>
+          supabase
+            .from('staff')
+            .select('id, name, branch_id')
+            .order('name')
+            .range(start, end)
+        );
         if (err) throw err;
         setStaffList(data || []);
       } catch (e) {

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
-import { supabase } from '@/lib/supabase';
+import { supabase, fetchAllPages } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
 import { Timer, Clock, Calendar, UserX, Bell, X, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { createAuditLog } from '@/lib/audit';
@@ -299,28 +299,22 @@ export default function NotificationsPage() {
 
   const fetchNotifications = async () => {
     try {
-      let query = supabase
-        .from('notifications')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      // Branch isolation for branch HR
-      if (userBranch) {
-        query = query.eq('branch_id', userBranch);
-      }
-
-      // Role filtering
-      if (user?.role === 'staff_executive') {
-        query = query.in('type', [
-          'late_fine',
-          'ot_pending',
-          'early_in_pending',
-          'leave_request',
-          'absent_alert',
-        ]);
-      }
-
-      const { data, error } = await query;
+      const { data, error } = await fetchAllPages((start, end) => {
+        let q = supabase.from('notifications').select('*');
+        if (userBranch) {
+          q = q.eq('branch_id', userBranch);
+        }
+        if (user?.role === 'staff_executive') {
+          q = q.in('type', [
+            'late_fine',
+            'overtime',
+            'announcement',
+            'resignation',
+            'security',
+          ]);
+        }
+        return q.order('created_at', { ascending: false }).range(start, end);
+      });
       if (error) throw error;
       setNotifications(data || []);
     } catch (err) {

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
+import { supabase, fetchAllPages } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth-context';
 import { Staff, SalaryConfirmation, SalaryPayment } from './types';
 import { formatCurrency, getCurrentMonthStr, formatMonthDisplay } from './utils';
@@ -54,17 +54,23 @@ export default function PaymentTrackerTab({ selectedMonth }: { selectedMonth?: s
       
       if (staffError) throw staffError;
 
-      const { data: confData, error: confError } = await supabase
-        .from('salary_confirmations')
-        .select('*')
-        .eq('month', month);
+      const { data: confData, error: confError } = await fetchAllPages((start, end) =>
+        supabase
+          .from('salary_confirmations')
+          .select('*')
+          .eq('month', month)
+          .range(start, end)
+      );
       
       if (confError) throw confError;
 
-      const { data: payData, error: payError } = await supabase
-        .from('salary_payments')
-        .select('*')
-        .eq('month', month);
+      const { data: payData, error: payError } = await fetchAllPages((start, end) =>
+        supabase
+          .from('salary_payments')
+          .select('*')
+          .eq('month', month)
+          .range(start, end)
+      );
       
       if (payError) throw payError;
 

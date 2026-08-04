@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
+import { supabase, fetchAllPages } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth-context';
 import { calculateSalary, calculateHourlySalary, calculateMinutesWorked, calculateBonusDays, fetchAllAttendance } from '@/lib/salary';
 import { Staff, SalaryConfirmation } from './types';
@@ -75,22 +75,24 @@ export default function BulkConfirmTab({
       setAttendanceRecords(attData || []);
 
       // Fetch approved leaves
-      const { data: leaveData, error: leaveError } = await supabase
-        .from('leave_requests')
-        .select('*')
-        .eq('status', 'approved')
-        .gte('date', startDate)
-        .lte('date', endDate);
+      const { data: leaveData, error: leaveError } = await fetchAllPages((start, end) =>
+        supabase
+          .from('leave_requests')
+          .select('*')
+          .eq('status', 'approved')
+          .gte('date', startDate)
+          .lte('date', endDate)
+          .range(start, end)
+      );
 
       if (leaveError) throw leaveError;
       setLeaveRequests(leaveData || []);
 
-      // Aggregate OT minutes
       const otMap: Record<string, number> = {};
       if (attData) {
         attData.forEach((r) => {
-          if (r.ot_approved === true) {
-            otMap[r.staff_id] = (otMap[r.staff_id] || 0) + (r.ot_minutes || 0);
+          if (r.ot_approved && r.ot_minutes) {
+            otMap[r.staff_id] = (otMap[r.staff_id] || 0) + r.ot_minutes;
           }
         });
       }
@@ -103,27 +105,36 @@ export default function BulkConfirmTab({
       setStaffList(staffWithOT as unknown as Staff[]);
 
       // 3. Fetch existing confirmations
-      const { data: confData, error: confError } = await supabase
-        .from('salary_confirmations')
-        .select('*')
-        .eq('month', month);
+      const { data: confData, error: confError } = await fetchAllPages((start, end) =>
+        supabase
+          .from('salary_confirmations')
+          .select('*')
+          .eq('month', month)
+          .range(start, end)
+      );
 
       if (confError) throw confError;
       if (confData) setConfirmations(confData);
 
       // 4. Fetch late fines
-      const { data: lfData, error: lfError } = await supabase
-        .from('late_fines')
-        .select('*')
-        .eq('month', month);
+      const { data: lfData, error: lfError } = await fetchAllPages((start, end) =>
+        supabase
+          .from('late_fines')
+          .select('*')
+          .eq('month', month)
+          .range(start, end)
+      );
       if (lfError) throw lfError;
       setLateFines(lfData || []);
 
       // 5. Fetch special fines
-      const { data: sfData, error: sfError } = await supabase
-        .from('special_fines')
-        .select('*')
-        .eq('month', month);
+      const { data: sfData, error: sfError } = await fetchAllPages((start, end) =>
+        supabase
+          .from('special_fines')
+          .select('*')
+          .eq('month', month)
+          .range(start, end)
+      );
       if (sfError) throw sfError;
       setSpecialFines(sfData || []);
 

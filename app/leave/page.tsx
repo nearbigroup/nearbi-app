@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
-import { supabase } from '@/lib/supabase';
+import { supabase, fetchAllPages } from '@/lib/supabase';
 import { createAuditLog } from '@/lib/audit';
 import { RefreshCw, Calendar, Check, X } from 'lucide-react';
 
@@ -51,16 +51,15 @@ export default function LeavePage() {
 
   const fetchRequests = async () => {
     try {
-      let query = supabase.from('leave_requests').select('*, staff:staff_id!inner(*)');
-      
-      // Branch isolation / Scoping
-      if (user?.role === 'nearbi_homes_supervisor') {
-        query = query.eq('staff.branch_id', 'hypermarket').eq('staff.department', 'Nearbi Homes');
-      } else if (userBranch) {
-        query = query.eq('staff.branch_id', userBranch);
-      }
-      
-      const { data, error } = await query.order('requested_at', { ascending: false });
+      const { data, error } = await fetchAllPages((start, end) => {
+        let q = supabase.from('leave_requests').select('*, staff:staff_id!inner(*)');
+        if (user?.role === 'nearbi_homes_supervisor') {
+          q = q.eq('staff.branch_id', 'hypermarket').eq('staff.department', 'Nearbi Homes');
+        } else if (userBranch) {
+          q = q.eq('staff.branch_id', userBranch);
+        }
+        return q.order('requested_at', { ascending: false }).range(start, end);
+      });
       if (error) throw error;
       setRequests((data || []) as unknown as LeaveRequest[]);
     } catch (err) {

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
-import { supabase } from '@/lib/supabase';
+import { supabase, fetchAllPages } from '@/lib/supabase';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { autoProcessResignations } from '@/lib/resignations';
@@ -66,12 +66,13 @@ export default function ResignationsPage() {
 
       await autoProcessResignations();
 
-      // Build query to fetch resignations left-joining staff details
-      let query = supabase
-        .from('resignations')
-        .select('*, staff:staff_id(name, branch_id, department)');
-
-      const { data, error } = await query.order('last_working_day', { ascending: true });
+      const { data, error } = await fetchAllPages((start, end) =>
+        supabase
+          .from('resignations')
+          .select('*, staff:staff_id(name, branch_id, department)')
+          .order('last_working_day', { ascending: true })
+          .range(start, end)
+      );
       if (error) throw error;
 
       let items = (data || []) as unknown as ResignationItem[];

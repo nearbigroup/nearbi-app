@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
-import { supabase } from '@/lib/supabase';
+import { supabase, fetchAllPages } from '@/lib/supabase';
 import { createAuditLog, writeAuditLog } from '@/lib/audit';
 import { Check, X, RefreshCw, CheckSquare, Edit2 } from 'lucide-react';
 import Link from 'next/link';
@@ -127,13 +127,16 @@ export default function ApprovalsPage() {
       const lastDayOfMonth = `${yr}-${String(mo).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
 
       // Auto-sync OT adjustments
-      const { data: attWithOT } = await supabase
-        .from('attendance')
-        .select('*, staff!inner(*)')
-        .gt('ot_minutes', 0)
-        .eq('ot_approved', false)
-        .gte('date', firstDayOfMonth)
-        .lte('date', lastDayOfMonth);
+      const { data: attWithOT } = await fetchAllPages((start, end) =>
+        supabase
+          .from('attendance')
+          .select('*, staff!inner(*)')
+          .gt('ot_minutes', 0)
+          .eq('ot_approved', false)
+          .gte('date', firstDayOfMonth)
+          .lte('date', lastDayOfMonth)
+          .range(start, end)
+      );
 
       for (const att of attWithOT || []) {
         if (!att.staff) continue;
@@ -207,11 +210,14 @@ export default function ApprovalsPage() {
         const dates = adjData.map((a) => a.date);
         const staffIds = adjData.map((a) => a.staff_id);
 
-        const { data: attData } = await supabase
-          .from('attendance')
-          .select('id, staff_id, date, check_in_time, check_out_time, actual_hours_worked, ot_minutes')
-          .in('date', dates)
-          .in('staff_id', staffIds);
+        const { data: attData } = await fetchAllPages((start, end) =>
+          supabase
+            .from('attendance')
+            .select('id, staff_id, date, check_in_time, check_out_time, actual_hours_worked, ot_minutes')
+            .in('date', dates)
+            .in('staff_id', staffIds)
+            .range(start, end)
+        );
 
         if (attData) {
           const map: Record<string, AttendanceRecord> = {};

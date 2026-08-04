@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '@/lib/auth-context';
-import { supabase } from '@/lib/supabase';
+import { supabase, fetchAllPages } from '@/lib/supabase';
 import { Calendar, ClipboardList, CheckCircle, XCircle, AlertCircle, Clock, ArrowRight } from 'lucide-react';
 
 interface LeaveRequest {
@@ -73,11 +73,14 @@ export default function StaffLeavePage() {
       setDaysWorkedThisMonth(worked);
 
       // 3. Fetch All Leave Requests
-      const { data: lData, error: lErr } = await supabase
-        .from('leave_requests')
-        .select('*')
-        .eq('staff_id', user.staffId)
-        .order('date', { ascending: false });
+      const { data: lData, error: lErr } = await fetchAllPages((start, end) =>
+        supabase
+          .from('leave_requests')
+          .select('*')
+          .eq('staff_id', user.staffId)
+          .order('date', { ascending: false })
+          .range(start, end)
+      );
       if (lErr) throw lErr;
       setLeaves(lData || []);
     } catch (err) {

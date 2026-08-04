@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { supabase } from '@/lib/supabase';
+import { supabase, fetchAllPages } from '@/lib/supabase';
 import { createAuditLog } from '@/lib/audit';
 import { useAuth } from '@/lib/auth-context';
 import { Edit2, Check, X, ShieldAlert, Trash2 } from 'lucide-react';
@@ -52,11 +52,14 @@ export default function SpecialFinesSection({
   const fetchFines = async () => {
     try {
       setLoading(true);
-      const { data, error } = await supabase
-        .from('special_fines')
-        .select('*')
-        .eq('staff_id', staffId)
-        .eq('month', month);
+      const { data, error } = await fetchAllPages((start, end) =>
+        supabase
+          .from('special_fines')
+          .select('*')
+          .eq('staff_id', staffId)
+          .eq('month', month)
+          .range(start, end)
+      );
 
       if (error) throw error;
       setFines(data || []);

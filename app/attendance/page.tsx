@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
-import { supabase } from '@/lib/supabase';
+import { supabase, fetchAllPages } from '@/lib/supabase';
 import { createAuditLog, writeAuditLog } from '@/lib/audit';
 import { Clock, RefreshCw, CircleCheck, CircleX, AlertTriangle, X, AlertCircle, Download, Upload, Check, List, LayoutGrid, MoreVertical, Plus, Camera, Flag, User } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
@@ -1602,23 +1602,29 @@ export default function AttendancePage() {
       const firstDayOfMonth = `${selectedMonth}-01`;
       const lastDayOfMonth = `${selectedMonth}-${String(daysInMonth).padStart(2, '0')}`;
       
-      const { data: yellowRecords } = await supabase
-        .from('attendance')
-        .select('staff_id, date')
-        .eq('color_code', 'yellow')
-        .gte('date', firstDayOfMonth)
-        .lte('date', lastDayOfMonth);
+      const { data: yellowRecords } = await fetchAllPages((start, end) =>
+        supabase
+          .from('attendance')
+          .select('staff_id, date')
+          .eq('color_code', 'yellow')
+          .gte('date', firstDayOfMonth)
+          .lte('date', lastDayOfMonth)
+          .range(start, end)
+      );
 
       const yellowCountsMap = new Map<string, number>();
       yellowRecords?.forEach(y => {
         yellowCountsMap.set(y.staff_id, (yellowCountsMap.get(y.staff_id) || 0) + 1);
       });
 
-      const { data: existingFines } = await supabase
-        .from('late_fines')
-        .select('staff_id, date')
-        .gte('date', firstDayOfMonth)
-        .lte('date', lastDayOfMonth);
+      const { data: existingFines } = await fetchAllPages((start, end) =>
+        supabase
+          .from('late_fines')
+          .select('staff_id, date')
+          .gte('date', firstDayOfMonth)
+          .lte('date', lastDayOfMonth)
+          .range(start, end)
+      );
       
       const existingFinesSet = new Set(existingFines?.map(f => `${f.staff_id}_${f.date}`) || []);
 

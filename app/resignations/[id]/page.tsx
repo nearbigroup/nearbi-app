@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
-import { supabase } from '@/lib/supabase';
+import { supabase, fetchAllPages } from '@/lib/supabase';
 import { useParams, useRouter } from 'next/navigation';
 import {
   ArrowLeft,
@@ -180,35 +180,44 @@ export default function ResignationDetailPage() {
       const firstDay = `${year}-${String(month).padStart(2, '0')}-01`;
 
       // 1. Fetch attendance records up to last_working_day
-      const { data: attRecords } = await supabase
-        .from('attendance')
-        .select('*')
-        .eq('staff_id', res.staff_id)
-        .gte('date', firstDay)
-        .lte('date', lwd);
+      const { data: attRecords } = await fetchAllPages((start, end) =>
+        supabase
+          .from('attendance')
+          .select('*')
+          .eq('staff_id', res.staff_id)
+          .gte('date', firstDay)
+          .lte('date', lwd)
+          .range(start, end)
+      );
 
       const attendanceList = attRecords || [];
 
       // 2. Fetch confirmed late fines up to last_working_day
       const monthStrFormatted = `${year}-${String(month).padStart(2, '0')}`;
-      const { data: lfData } = await supabase
-        .from('late_fines')
-        .select('*')
-        .eq('staff_id', res.staff_id)
-        .eq('month', monthStrFormatted)
-        .lte('date', lwd)
-        .eq('confirmed', true);
+      const { data: lfData } = await fetchAllPages((start, end) =>
+        supabase
+          .from('late_fines')
+          .select('*')
+          .eq('staff_id', res.staff_id)
+          .eq('month', monthStrFormatted)
+          .lte('date', lwd)
+          .eq('confirmed', true)
+          .range(start, end)
+      );
 
       const lateFines = lfData || [];
 
       // 3. Fetch confirmed special fines up to last_working_day
-      const { data: sfData } = await supabase
-        .from('special_fines')
-        .select('*')
-        .eq('staff_id', res.staff_id)
-        .eq('month', monthStrFormatted)
-        .lte('date', lwd)
-        .eq('confirmed', true);
+      const { data: sfData } = await fetchAllPages((start, end) =>
+        supabase
+          .from('special_fines')
+          .select('*')
+          .eq('staff_id', res.staff_id)
+          .eq('month', monthStrFormatted)
+          .lte('date', lwd)
+          .eq('confirmed', true)
+          .range(start, end)
+      );
 
       const specialFines = sfData || [];
 

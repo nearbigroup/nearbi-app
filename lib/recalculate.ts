@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { supabase, fetchAllPages } from './supabase';
 import {
   calculateLateMinutes,
   calculateOTMinutes,
@@ -84,12 +84,15 @@ export async function recalculateStaffAttendance(options: RecalculationOptions):
   const otThreshold = Number(staff.ot_threshold_minutes || 30);
 
   // Fetch all attendance records for this month
-  const { data: attRecords, error: attErr } = await supabase
-    .from('attendance')
-    .select('*')
-    .eq('staff_id', staffId)
-    .gte('date', firstDay)
-    .lte('date', lastDay);
+  const { data: attRecords, error: attErr } = await fetchAllPages((start, end) =>
+    supabase
+      .from('attendance')
+      .select('*')
+      .eq('staff_id', staffId)
+      .gte('date', firstDay)
+      .lte('date', lastDay)
+      .range(start, end)
+  );
 
   if (attErr) {
     throw new Error(`Failed to fetch attendance records: ${attErr.message}`);
@@ -260,25 +263,34 @@ export async function recalculateStaffAttendance(options: RecalculationOptions):
     salaryUpdated = false;
   } else {
     // Re-aggregate pending salary for the month
-    const { data: monthAtt } = await supabase
-      .from('attendance')
-      .select('*')
-      .eq('staff_id', staffId)
-      .gte('date', firstDay)
-      .lte('date', lastDay);
+    const { data: monthAtt } = await fetchAllPages((start, end) =>
+      supabase
+        .from('attendance')
+        .select('*')
+        .eq('staff_id', staffId)
+        .gte('date', firstDay)
+        .lte('date', lastDay)
+        .range(start, end)
+    );
 
-    const { data: monthFines } = await supabase
-      .from('late_fines')
-      .select('*')
-      .eq('staff_id', staffId)
-      .eq('month', monthStr);
+    const { data: monthFines } = await fetchAllPages((start, end) =>
+      supabase
+        .from('late_fines')
+        .select('*')
+        .eq('staff_id', staffId)
+        .eq('month', monthStr)
+        .range(start, end)
+    );
 
-    const { data: monthSpecialFines } = await supabase
-      .from('special_fines')
-      .select('*')
-      .eq('staff_id', staffId)
-      .gte('date', firstDay)
-      .lte('date', lastDay);
+    const { data: monthSpecialFines } = await fetchAllPages((start, end) =>
+      supabase
+        .from('special_fines')
+        .select('*')
+        .eq('staff_id', staffId)
+        .gte('date', firstDay)
+        .lte('date', lastDay)
+        .range(start, end)
+    );
 
     const daysActuallyWorked = (monthAtt || []).filter(a => a.status === 'present' || a.status === 'late').length;
     const confirmedLateFines = (monthFines || []).filter(f => f.confirmed === true || f.waived === false).reduce((sum, f) => sum + Number(f.fine_amount || 0), 0);

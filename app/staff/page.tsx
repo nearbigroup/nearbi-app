@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
-import { supabase } from '@/lib/supabase';
+import { supabase, fetchAllPages } from '@/lib/supabase';
 import { createAuditLog, writeAuditLog } from '@/lib/audit';
 import { Search, Plus, Trash2, Edit2, Eye, EyeOff, Lock, X, AlertTriangle, Users, AlertCircle, RefreshCw, Cake, Download, Upload, Check, Phone, FileText, Award, TrendingUp, TrendingDown, Calendar, Clock, DollarSign, Star, ChevronDown, ChevronUp, BarChart2 } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
@@ -1458,11 +1458,14 @@ export default function StaffPage() {
     setExpandedMetric(null);
     try {
       // 1. Fetch data
-      const { data: attData } = await supabase
-        .from('attendance')
-        .select('*')
-        .eq('staff_id', s.id)
-        .order('date', { ascending: false });
+      const { data: attData } = await fetchAllPages((start, end) =>
+        supabase
+          .from('attendance')
+          .select('*')
+          .eq('staff_id', s.id)
+          .order('date', { ascending: false })
+          .range(start, end)
+      );
 
       const { data: lfData } = await supabase
         .from('late_fines')
@@ -1813,12 +1816,15 @@ export default function StaffPage() {
         if (s.is_trial) continue;
         try {
           // Fetch attendance for this month
-          const { data: attRecords } = await supabase
-            .from('attendance')
-            .select('check_in_time, status, color_code, ot_minutes, ot_approved')
-            .eq('staff_id', s.id)
-            .gte('date', firstDay)
-            .lte('date', lastDay);
+          const { data: attRecords } = await fetchAllPages((start, end) =>
+            supabase
+              .from('attendance')
+              .select('check_in_time, status, color_code, ot_minutes, ot_approved')
+              .eq('staff_id', s.id)
+              .gte('date', firstDay)
+              .lte('date', lastDay)
+              .range(start, end)
+          );
 
           // Fetch confirmed fines
           const { data: lateFines } = await supabase
