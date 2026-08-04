@@ -135,8 +135,10 @@ export function calculateSalary(
   // Hourly rate = daily rate / shift hours
   const hourlyRate = dailyRate / shiftHours;
 
-  const paidDays = calculatePaidDays(daysActuallyWorked, offDaysPerMonth, calendarDays);
-  const missingDays = Math.max(0, calendarDays - paidDays);
+  const paidDaysBase = calculatePaidDays(daysActuallyWorked, offDaysPerMonth, calendarDays);
+  const baseMissingDays = Math.max(0, calendarDays - paidDaysBase);
+  const missingDays = attendance.missingDays !== undefined ? Math.max(baseMissingDays, attendance.missingDays) : baseMissingDays;
+  const paidDays = Math.max(0, calendarDays - missingDays);
 
   // Gross pay
   const grossPay = paidDays * dailyRate;

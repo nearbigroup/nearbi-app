@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth-context';
-import { calculateSalary, calculateHourlySalary, calculateMinutesWorked } from '@/lib/salary';
+import { calculateSalary, calculateHourlySalary, calculateMinutesWorked, calculateBonusDays } from '@/lib/salary';
 import { Staff, SalaryConfirmation } from './types';
 import { formatCurrency, getCurrentMonthStr, formatMonthDisplay } from './utils';
 import { Check, Search, AlertCircle, RefreshCw } from 'lucide-react';
@@ -214,53 +214,24 @@ export default function BulkConfirmTab({
           r.check_in_time !== ''
         ).length;
 
-        // Count genuine absent days and approved leave days
+        // Approved staff leaves
         const staffLeaves = leaveRequests.filter(l => l.staff_id === s.id && l.status === 'approved');
-        let genuineAbsentDays = 0;
 
-        for (let d = 1; d <= daysInMonth; d++) {
-          const dateStr = `${month}-${String(d).padStart(2, '0')}`;
-          const att = staffAtt.find(r => r.date === dateStr);
-          const hasLeave = staffLeaves.some(l => l.date === dateStr);
-
-          if (att) {
-            // If record exists, is it status absent, and not weekly off, not holiday, and no approved leave?
-            if (att.status === 'absent' && att.day_type !== 'weekly_off' && att.day_type !== 'holiday' && !hasLeave) {
-              genuineAbsentDays++;
-            }
-          } else {
-            // If no record exists, and no approved leave exists, it is absent
-            if (!hasLeave) {
-              genuineAbsentDays++;
-            }
-          }
-        }
+        // Count explicit absent records
+        const explicitAbsentCount = staffAtt.filter(r => r.status === 'absent').length;
 
         // Quota logic
         const offDaysPerMonth = s.off_days_per_month as 0 | 2 | 4;
-        let earnedQuota = 0;
-        if (offDaysPerMonth === 4) {
-          earnedQuota = Math.min(Math.floor(daysActuallyWorked / 6), 4);
-        } else if (offDaysPerMonth === 2) {
-          earnedQuota = Math.min(Math.floor(daysActuallyWorked / 12), 2);
-        }
+        const earnedQuota = calculateBonusDays(daysActuallyWorked, offDaysPerMonth);
 
-        // Weekly offs taken (unique dates marked as weekly off in attendance, or as a weekly off leave request)
-        const weeklyOffDates = new Set([
-          ...staffAtt.filter(r => r.day_type === 'weekly_off').map(r => r.date),
-          ...staffLeaves.filter(l => l.is_weekly_off === true).map(l => l.date)
-        ]);
-        const weeklyOffsTaken = weeklyOffDates.size;
-        const weeklyOffsUsed = Math.min(weeklyOffsTaken, earnedQuota);
-
-        // absences = calendarDays - daysActuallyWorked
+        // Non-worked days in month (absences)
         const absences = daysInMonth - daysActuallyWorked;
 
-        // deductedDays = absences - weeklyOffsUsed + manualExtraLeaves
-        const manualExtraLeaves = extraLeaves[s.id] || 0;
-        const deductedDays = Math.max(0, absences - weeklyOffsUsed) + manualExtraLeaves;
+        // Unpaid missing days: non-worked days exceeding earned quota, OR explicit unauthorized absent days
+        const unpaidAbsences = Math.max(explicitAbsentCount, absences - earnedQuota);
 
-        const missingDays = deductedDays;
+        const manualExtraLeaves = extraLeaves[s.id] || 0;
+        const missingDays = unpaidAbsences + manualExtraLeaves;
 
         // Approved OT minutes only
         const approvedOTMinutes = staffAtt

@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase';
 import { Staff, SalaryConfirmation, SalaryPayment } from './types';
 import { formatCurrency, getPastMonths, formatMonthDisplay } from './utils';
 import { Download } from 'lucide-react';
-import { calculateSalary, calculateLateSalaryDeduction } from '@/lib/salary';
+import { calculateSalary, calculateLateSalaryDeduction, calculateBonusDays } from '@/lib/salary';
 import XLSX from 'xlsx-js-style';
 import { useAuth } from '@/lib/auth-context';
 import { jsPDF } from 'jspdf';
@@ -196,51 +196,23 @@ export default function MonthlyReportTab({
         r.check_in_time !== ''
       ).length;
 
-      // Count genuine absent days and approved leave days
+      // Count explicit absent records and approved staff leaves
       const staffLeaves = leaveRequests.filter(l => l.staff_id === s.id && l.status === 'approved');
-      let genuineAbsentDays = 0;
-
-      for (let d = 1; d <= daysInMonth; d++) {
-        const dateStr = `${selectedMonth}-${String(d).padStart(2, '0')}`;
-        const att = staffAtt.find(r => r.date === dateStr);
-        const hasLeave = staffLeaves.some(l => l.date === dateStr);
-
-        if (att) {
-          if (att.status === 'absent' && att.day_type !== 'weekly_off' && att.day_type !== 'holiday' && !hasLeave) {
-            genuineAbsentDays++;
-          }
-        } else {
-          if (!hasLeave) {
-            genuineAbsentDays++;
-          }
-        }
-      }
+      const explicitAbsentCount = staffAtt.filter(r => r.status === 'absent').length;
 
       // Quota logic
       const offDaysPerMonth = s.off_days_per_month as 0 | 2 | 4;
-      let earnedQuota = 0;
-      if (offDaysPerMonth === 4) {
-        earnedQuota = Math.min(Math.floor(daysActuallyWorked / 6), 4);
-      } else if (offDaysPerMonth === 2) {
-        earnedQuota = Math.min(Math.floor(daysActuallyWorked / 12), 2);
-      }
+      const earnedQuota = calculateBonusDays(daysActuallyWorked, offDaysPerMonth);
 
-      // Weekly offs taken (unique dates marked as weekly off in attendance, or as a weekly off leave request)
-      const weeklyOffDates = new Set([
-        ...staffAtt.filter(r => r.day_type === 'weekly_off').map(r => r.date),
-        ...staffLeaves.filter(l => l.is_weekly_off === true).map(l => l.date)
-      ]);
-      const weeklyOffsTaken = weeklyOffDates.size;
-      const weeklyOffsUsed = Math.min(weeklyOffsTaken, earnedQuota);
-
-      // absences = calendarDays - daysActuallyWorked
+      // Non-worked days in month (absences)
       const absences = daysInMonth - daysActuallyWorked;
+      const weeklyOffsUsed = Math.min(absences, earnedQuota);
 
-      // deductedDays = absences - weeklyOffsUsed + manualExtraLeaves
+      // Unpaid missing days: non-worked days exceeding earned quota, OR explicit unauthorized absent days
+      const unpaidAbsences = Math.max(explicitAbsentCount, absences - earnedQuota);
+
       const manualExtraLeaves = c.extra_leave_days || 0;
-      const deductedDays = Math.max(0, absences - weeklyOffsUsed) + manualExtraLeaves;
-
-      const missingDays = deductedDays;
+      const missingDays = unpaidAbsences + manualExtraLeaves;
 
       const approvedOTMinutes = staffAtt
         .filter((r) => r.ot_approved === true)
@@ -907,42 +879,16 @@ export default function MonthlyReportTab({
             (r: any) => r.check_in_time !== null && r.check_in_time !== undefined && r.check_in_time !== ''
           ).length;
 
-          let genuineAbsentDays = 0;
-          for (let d = 1; d <= daysInMonth; d++) {
-            const dateStr = `${selectedMonth}-${String(d).padStart(2, '0')}`;
-            const att = staffAtt.find((r: any) => r.date === dateStr);
-            const hasLeave = staffLeaves.some((l: any) => l.date === dateStr);
-
-            if (att) {
-              if (att.status === 'absent' && att.day_type !== 'weekly_off' && att.day_type !== 'holiday' && !hasLeave) {
-                genuineAbsentDays++;
-              }
-            } else {
-              if (!hasLeave) {
-                genuineAbsentDays++;
-              }
-            }
-          }
-
+          const explicitAbsentCount = staffAtt.filter((r: any) => r.status === 'absent').length;
           const offDaysPerMonth = s.off_days_per_month as 0 | 2 | 4;
-          let earnedQuota = 0;
-          if (offDaysPerMonth === 4) {
-            earnedQuota = Math.min(Math.floor(daysActuallyWorked / 6), 4);
-          } else if (offDaysPerMonth === 2) {
-            earnedQuota = Math.min(Math.floor(daysActuallyWorked / 12), 2);
-          }
-
-          const weeklyOffDates = new Set([
-            ...staffAtt.filter((r: any) => r.day_type === 'weekly_off').map((r: any) => r.date),
-            ...staffLeaves.filter((l: any) => l.is_weekly_off === true).map((l: any) => l.date)
-          ]);
-          const weeklyOffsTaken = weeklyOffDates.size;
-          const weeklyOffsUsed = Math.min(weeklyOffsTaken, earnedQuota);
+          const earnedQuota = calculateBonusDays(daysActuallyWorked, offDaysPerMonth);
 
           const absences = daysInMonth - daysActuallyWorked;
+          const weeklyOffsUsed = Math.min(absences, earnedQuota);
+          const unpaidAbsences = Math.max(explicitAbsentCount, absences - earnedQuota);
+
           const manualExtraLeaves = conf?.extra_leave_days || 0;
-          const deductedDays = Math.max(0, absences - weeklyOffsUsed) + manualExtraLeaves;
-          const missingDays = deductedDays;
+          const missingDays = unpaidAbsences + manualExtraLeaves;
 
           const approvedOTMinutes = staffAtt
             .filter((r: any) => r.ot_approved === true)
@@ -1102,25 +1048,16 @@ export default function MonthlyReportTab({
           (r: any) => r.check_in_time !== null && r.check_in_time !== undefined && r.check_in_time !== ''
         ).length;
 
+        const explicitAbsentCount = staffAtt.filter((r: any) => r.status === 'absent').length;
         const offDaysPerMonth = s.off_days_per_month as 0 | 2 | 4;
-        let earnedQuota = 0;
-        if (offDaysPerMonth === 4) {
-          earnedQuota = Math.min(Math.floor(daysActuallyWorked / 6), 4);
-        } else if (offDaysPerMonth === 2) {
-          earnedQuota = Math.min(Math.floor(daysActuallyWorked / 12), 2);
-        }
-
-        const weeklyOffDates = new Set([
-          ...staffAtt.filter((r: any) => r.day_type === 'weekly_off').map((r: any) => r.date),
-          ...staffLeaves.filter((l: any) => l.is_weekly_off === true).map((l: any) => l.date)
-        ]);
-        const weeklyOffsTaken = weeklyOffDates.size;
-        const weeklyOffsUsed = Math.min(weeklyOffsTaken, earnedQuota);
+        const earnedQuota = calculateBonusDays(daysActuallyWorked, offDaysPerMonth);
 
         const absences = daysInMonth - daysActuallyWorked;
+        const weeklyOffsUsed = Math.min(absences, earnedQuota);
+        const unpaidAbsences = Math.max(explicitAbsentCount, absences - earnedQuota);
+
         const manualExtraLeaves = conf?.extra_leave_days || 0;
-        const deductedDays = Math.max(0, absences - weeklyOffsUsed) + manualExtraLeaves;
-        const missingDays = deductedDays;
+        const missingDays = unpaidAbsences + manualExtraLeaves;
 
         const approvedOTMinutes = staffAtt
           .filter((r: any) => r.ot_approved === true)
