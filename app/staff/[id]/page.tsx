@@ -35,7 +35,7 @@ import {
 } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import { formatTime12hr } from '@/lib/utils';
-import { calculateEarlyLeaveDeduction, calculateLateSalaryDeduction, calculateActualHours, calculateOTMinutes, calculateEarlyLeaveMinutes, calculateLateMinutes, calculateMinutesWorked, calculateHourlySalary, getDaysInMonth, calculateSalary } from '@/lib/salary';
+import { calculateEarlyLeaveDeduction, calculateLateSalaryDeduction, calculateActualHours, calculateOTMinutes, calculateEarlyLeaveMinutes, calculateLateMinutes, calculateMinutesWorked, calculateHourlySalary, getDaysInMonth, calculateSalary, calculateBonusDays } from '@/lib/salary';
 import { createAuditLog, writeAuditLog } from '@/lib/audit';
 import { recalculateStaffAttendance } from '@/lib/recalculate';
 
@@ -652,7 +652,7 @@ export default function StaffProfilePage() {
         ).length || 0;
 
         const offDaysPerMonth = staff.off_days_per_month !== undefined ? staff.off_days_per_month : 4;
-        const earned = offDaysPerMonth === 0 ? 0 : Math.min(Math.floor(daysWorked / 6), offDaysPerMonth);
+        const earned = calculateBonusDays(daysWorked, offDaysPerMonth);
 
         if (usedWeeklyOffs >= earned && !staff.is_trial) {
           alert(`${staff.name} has no weekly off balance remaining this month. Earned: ${earned} | Used: ${usedWeeklyOffs}`);
@@ -1587,7 +1587,7 @@ export default function StaffProfilePage() {
     const daysActuallyWorked = attendance.filter(a => a.check_in_time !== null && a.check_in_time !== undefined && a.check_in_time !== '').length;
     const offDaysPerMonth = staff.off_days_per_month ?? 4;
     
-    const earnedQuota = offDaysPerMonth === 0 ? 0 : Math.min(Math.floor(daysActuallyWorked / 6), offDaysPerMonth);
+    const earnedQuota = calculateBonusDays(daysActuallyWorked, offDaysPerMonth);
     const weeklyOffsUsed = attendance.filter(a => a.day_type === 'weekly_off').length;
     const weeklyOffsRemaining = Math.max(0, earnedQuota - weeklyOffsUsed);
 

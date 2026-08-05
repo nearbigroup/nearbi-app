@@ -38,7 +38,7 @@ interface ReadReceipt {
 }
 
 export default function AnnouncementsPage() {
-  const { user } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [staffList, setStaffList] = useState<Staff[]>([]);
   const [loading, setLoading] = useState(true);
@@ -376,7 +376,15 @@ export default function AnnouncementsPage() {
     return ann.target === 'daily' ? 'Daily branch' : 'Hypermarket branch';
   };
 
-  // Security check: Owner/Ops Manager/HR only
+  if (authLoading) {
+    return (
+      <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center select-none">
+        <div className="w-8 h-8 border-4 border-slate-200 border-t-[#1A1A1A] rounded-full animate-spin mb-3"></div>
+        <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">Loading Announcements...</p>
+      </div>
+    );
+  }
+
   const isAuthorized = user?.role === 'admin' || user?.role === 'ops_manager' || user?.role === 'staff_executive';
 
   if (!isAuthorized) {

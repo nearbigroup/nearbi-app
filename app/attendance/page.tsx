@@ -9,7 +9,7 @@ import { Clock, RefreshCw, CircleCheck, CircleX, AlertTriangle, X, AlertCircle, 
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import * as XLSX from 'xlsx';
 import { DEPARTMENTS } from '@/lib/data';
-import { calculateOTMinutes, calculateActualHours, calculateEarlyLeaveDeduction, calculateEarlyLeaveMinutes, calculateLateMinutes, autoCloseCheckouts } from '@/lib/salary';
+import { calculateOTMinutes, calculateActualHours, calculateEarlyLeaveDeduction, calculateEarlyLeaveMinutes, calculateLateMinutes, autoCloseCheckouts, calculateBonusDays } from '@/lib/salary';
 import { recalculateStaffAttendance } from '@/lib/recalculate';
 import { formatTime12hr } from '@/lib/utils';
 
@@ -508,7 +508,7 @@ export default function AttendancePage() {
       ).length || 0;
 
       const offDaysPerMonth = detailRecord.off_days_per_month !== undefined ? detailRecord.off_days_per_month : 4;
-      const earned = offDaysPerMonth === 0 ? 0 : Math.min(Math.floor(daysWorked / 6), offDaysPerMonth);
+      const earned = calculateBonusDays(daysWorked, offDaysPerMonth);
 
       if (usedWeeklyOffs >= earned && !detailRecord.is_trial) {
         alert(`${detailRecord.name} has no weekly off balance remaining this month. Earned: ${earned} | Used: ${usedWeeklyOffs}`);
@@ -1997,7 +1997,7 @@ export default function AttendancePage() {
 
           const used = staffAtt.filter(a => a.day_type === 'weekly_off').length;
           const offDaysPerMonth = s.off_days_per_month !== undefined ? s.off_days_per_month : 4;
-          const earned = offDaysPerMonth === 0 ? 0 : Math.min(Math.floor(daysWorked / 6), offDaysPerMonth);
+          const earned = calculateBonusDays(daysWorked, offDaysPerMonth);
           const remaining = Math.max(0, earned - used);
 
           balances[s.id] = { earned, used, remaining };

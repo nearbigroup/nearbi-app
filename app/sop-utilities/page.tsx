@@ -30,7 +30,7 @@ import {
 import Link from 'next/link';
 
 export default function SopUtilitiesDashboard() {
-  const { user } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
   
   // Navigation tabs
   const [activeTab, setActiveTab] = useState<'contacts' | 'lost_found' | 'renewals' | 'suggestions' | 'recognition'>('contacts');
@@ -126,7 +126,7 @@ export default function SopUtilitiesDashboard() {
       // 2. Load Lost & Found Items
       const { data: lfData } = await supabase
         .from('lost_and_found')
-        .select('*, found_by_staff:staff(name)')
+        .select('*, staff:found_by(name)')
         .order('found_date', { ascending: false });
       if (lfData) setLostFoundItems(lfData);
 
@@ -471,6 +471,15 @@ export default function SopUtilitiesDashboard() {
       alert('Failed to delete recognition.');
     }
   };
+
+  if (authLoading) {
+    return (
+      <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center select-none">
+        <div className="w-8 h-8 border-4 border-slate-200 border-t-[#1A1A1A] rounded-full animate-spin mb-3"></div>
+        <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">Loading Utilities Dashboard...</p>
+      </div>
+    );
+  }
 
   if (!user || (user.role !== 'admin' && user.role !== 'ops_manager')) {
     return (

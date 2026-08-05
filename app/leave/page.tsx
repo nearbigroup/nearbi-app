@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/auth-context';
 import { supabase, fetchAllPages } from '@/lib/supabase';
 import { createAuditLog } from '@/lib/audit';
 import { RefreshCw, Calendar, Check, X } from 'lucide-react';
+import { calculateBonusDays } from '@/lib/salary';
 
 type TabType = 'pending' | 'approved' | 'rejected';
 
@@ -331,7 +332,7 @@ export default function LeavePage() {
     const worked = daysWorked || 0;
     const offDays = staffData?.off_days_per_month || 0;
 
-    const earnedQuota = offDays === 0 ? 0 : Math.min(Math.floor(worked / 6), offDays);
+    const earnedQuota = calculateBonusDays(worked, offDays);
 
     const { count: usedWeeklyOffs } = await supabase
       .from('attendance')

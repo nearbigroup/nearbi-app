@@ -23,7 +23,6 @@ import {
   ChevronDown,
   ChevronUp
 } from 'lucide-react';
-import AppShell from '@/components/AppShell';
 
 interface MaintenanceTicket {
   id: string;
@@ -429,34 +428,29 @@ export default function MaintenanceTicketsPage() {
 
   if (authLoading) {
     return (
-      <AppShell>
-        <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center select-none">
-          <RefreshCw className="animate-spin text-slate-600 mb-3" size={32} />
-          <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">Loading Maintenance Tickets...</p>
-        </div>
-      </AppShell>
+      <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center select-none">
+        <RefreshCw className="animate-spin text-slate-600 mb-3" size={32} />
+        <p className="text-xs text-slate-500 font-bold uppercase tracking-wider">Loading Maintenance Tickets...</p>
+      </div>
     );
   }
 
   if (!user || (user.role !== 'admin' && user.role !== 'ops_manager')) {
     return (
-      <AppShell>
-        <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center select-none">
-          <div className="bg-white border border-[#E8E8E8] rounded-[18px] p-8 max-w-sm w-full flex flex-col items-center shadow-lg">
-            <Lock size={48} className="mb-4 text-slate-400" />
-            <h2 className="text-lg font-extrabold text-[#1A1A1A] mb-2 uppercase tracking-wide">Access Denied</h2>
-            <p className="text-[#666666] text-xs font-semibold leading-relaxed mb-6">
-              Only administrators and operations managers can access the maintenance module.
-            </p>
-          </div>
+      <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center select-none">
+        <div className="bg-white border border-[#E8E8E8] rounded-[18px] p-8 max-w-sm w-full flex flex-col items-center shadow-lg">
+          <Lock size={48} className="mb-4 text-slate-400" />
+          <h2 className="text-lg font-extrabold text-[#1A1A1A] mb-2 uppercase tracking-wide">Access Denied</h2>
+          <p className="text-[#666666] text-xs font-semibold leading-relaxed mb-6">
+            Only administrators and operations managers can access the maintenance module.
+          </p>
         </div>
-      </AppShell>
+      </div>
     );
   }
 
   return (
-    <AppShell>
-      <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">
+    <div className="max-w-4xl mx-auto px-4 py-8 space-y-6">
         
         {/* Header Block */}
         <div className="bg-gradient-to-br from-red-950 via-slate-900 to-red-950 rounded-[20px] p-6 text-white shadow-md flex flex-col md:flex-row justify-between items-start md:items-center gap-4 relative overflow-hidden">
@@ -1013,6 +1007,5 @@ export default function MaintenanceTicketsPage() {
         )}
 
       </div>
-    </AppShell>
   );
 }

@@ -155,12 +155,12 @@ export default function SettingsPage() {
         const { data: setD, error: setE } = await supabase
           .from('fine_settings')
           .select('*')
-          .limit(1)
-          .maybeSingle();
+          .order('updated_at', { ascending: false })
+          .limit(1);
 
         if (setE) throw setE;
-        if (setD) {
-          setSettings(setD);
+        if (setD && setD.length > 0) {
+          setSettings(setD[0]);
         }
       } catch (err: any) {
         console.error('Fine settings fetch error:', err);

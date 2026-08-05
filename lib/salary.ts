@@ -52,12 +52,13 @@ export function calculateLateSalaryDeduction(
 
 export function calculateBonusDays(
   daysWorked: number,
-  offDaysPerMonth: 0 | 2 | 4
+  offDaysPerMonth: number
 ): number {
-  if (offDaysPerMonth === 4) {
+  const off = Number(offDaysPerMonth);
+  if (off === 4) {
     return Math.min(Math.floor(daysWorked / 6), 4);
   }
-  if (offDaysPerMonth === 2) {
+  if (off === 2) {
     return Math.min(Math.floor(daysWorked / 12), 2);
   }
   return 0;
@@ -65,7 +66,7 @@ export function calculateBonusDays(
 
 export function calculatePaidDays(
   daysWorked: number,
-  offDaysPerMonth: 0 | 2 | 4,
+  offDaysPerMonth: number,
   calendarDays: number
 ): number {
   const bonusDays = calculateBonusDays(daysWorked, offDaysPerMonth);
@@ -73,7 +74,7 @@ export function calculatePaidDays(
 
   // SAFETY CAP — never exceed calendar days + off days
   // regardless of any data anomaly
-  const hardCap = calendarDays + offDaysPerMonth;
+  const hardCap = calendarDays + Number(offDaysPerMonth || 0);
   return Math.min(paidDays, hardCap);
 }
 
@@ -158,7 +159,7 @@ export function calculateSalary(
   const paidDaysBase = calculatePaidDays(daysActuallyWorked, offDaysPerMonth, calendarDays);
   const baseMissingDays = Math.max(0, calendarDays - paidDaysBase);
   const missingDays = attendance.missingDays !== undefined ? Math.max(baseMissingDays, attendance.missingDays) : baseMissingDays;
-  const paidDays = Math.max(0, calendarDays - missingDays);
+  const paidDays = Math.max(0, paidDaysBase - (missingDays - baseMissingDays));
 
   // Gross pay
   const grossPay = paidDays * dailyRate;
@@ -196,7 +197,7 @@ export function calculateSalary(
     dailyRate: Math.round(dailyRate * 100) / 100,
     hourlyRate: Math.round(hourlyRate * 100) / 100,
     requiredWorkingDays: calendarDays - offDaysPerMonth,
-    maxPaidDays: calendarDays,
+    maxPaidDays: calendarDays + Number(offDaysPerMonth || 0),
     daysActuallyWorked,
     extraDaysWorked: 0,
     missingDays,

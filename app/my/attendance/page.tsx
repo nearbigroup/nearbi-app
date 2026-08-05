@@ -6,7 +6,7 @@ import { supabase, fetchAllPages } from '@/lib/supabase';
 import { ChevronLeft, ChevronRight, X, Clock, AlertTriangle, AlertCircle, CheckCircle, Calendar, Sparkles } from 'lucide-react';
 import { HOLIDAYS } from '@/lib/data';
 import { formatTime12hr } from '@/lib/utils';
-import { calculateEarlyLeaveDeduction } from '@/lib/salary';
+import { calculateEarlyLeaveDeduction, calculateBonusDays } from '@/lib/salary';
 
 interface AttendanceRecord {
   id: string;
@@ -250,7 +250,7 @@ export default function StaffAttendancePage() {
     const daysActuallyWorked = attendance.filter(a => a.check_in_time !== null && a.check_in_time !== undefined && a.check_in_time !== '').length;
     const offDaysPerMonth = staff.off_days_per_month ?? 4;
     
-    const earnedQuota = offDaysPerMonth === 0 ? 0 : Math.min(Math.floor(daysActuallyWorked / 6), offDaysPerMonth);
+    const earnedQuota = calculateBonusDays(daysActuallyWorked, offDaysPerMonth);
     const weeklyOffsUsed = attendance.filter(a => a.day_type === 'weekly_off').length;
     const weeklyOffsRemaining = Math.max(0, earnedQuota - weeklyOffsUsed);
 

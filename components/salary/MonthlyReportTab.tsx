@@ -988,7 +988,7 @@ export default function MonthlyReportTab({
             s.department || '',
             Number(daysActuallyWorked),
             Number(weeklyOffsUsed),
-            Number(Math.floor(daysActuallyWorked / 6)), // bonus days earned
+            Number(earnedQuota), // bonus days earned
             Number(paidDays),
             Number(s.monthly_salary),
             Number(Math.round((s.monthly_salary / daysInMonth) * 100) / 100),
@@ -1093,7 +1093,7 @@ export default function MonthlyReportTab({
 
         const dailyRate = s.monthly_salary / daysInMonth;
         const hourlyRateInd = dailyRate / shiftHours;
-        const bonusDaysEarned = Math.floor(daysActuallyWorked / 6);
+        const bonusDaysEarned = calculateBonusDays(daysActuallyWorked, offDaysPerMonth);
 
         let liveNetSalary = 0;
         let grossPay = 0;
