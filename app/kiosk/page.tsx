@@ -7,6 +7,7 @@ import { createNotification } from '@/lib/notifications';
 import { useRouter } from 'next/navigation';
 import { Check, LogOut, Camera, AlertCircle, UserCheck, Timer, AlertTriangle, Coffee, RotateCcw, CircleCheck, Users } from 'lucide-react';
 import { calculateOTMinutes, calculateActualHours, calculateActualHoursWithBreaks, calculateEarlyLeaveMinutes, calculateLateMinutes, calculateMinutesWorked } from '@/lib/salary';
+import { getFineSettings } from '@/lib/fineSettings';
 import { DEPARTMENTS } from '@/lib/data';
 
 const getMinutes = (timeStr: string) => {
@@ -991,19 +992,8 @@ export default function KioskPage() {
         let fineAmount = 0;
 
         if (colorCode !== 'green' && !isExempt) {
-          // Read fine settings
-          const { data: fineSettings } = await supabase
-            .from('fine_settings')
-            .select('*')
-            .limit(1)
-            .maybeSingle();
-
-          const settings = fineSettings || {
-            yellow_fine: 50,
-            orange_fine: 100,
-            red_fine: 200,
-            yellow_free_passes: 4
-          };
+          // Read fine settings using shared helper
+          const settings = await getFineSettings(supabase);
 
           if (colorCode === 'yellow') {
             // Count yellow passes

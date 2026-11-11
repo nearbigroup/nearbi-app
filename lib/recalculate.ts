@@ -7,6 +7,7 @@ import {
   getDaysInMonth
 } from './salary';
 import { writeAuditLog } from './audit';
+import { getFineSettings } from './fineSettings';
 
 export interface RecalculationOptions {
   staffId: string;
@@ -99,18 +100,7 @@ export async function recalculateStaffAttendance(options: RecalculationOptions):
   }
 
   // Fetch fine settings
-  const { data: fineSettings } = await supabase
-    .from('fine_settings')
-    .select('*')
-    .limit(1)
-    .maybeSingle();
-
-  const settings = fineSettings || {
-    yellow_fine: 50,
-    orange_fine: 100,
-    red_fine: 200,
-    yellow_free_passes: 4
-  };
+  const settings = await getFineSettings(supabase);
 
   // Check fine exemption
   const { data: exemption } = await supabase

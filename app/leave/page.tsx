@@ -200,7 +200,6 @@ export default function LeavePage() {
         .update({
           status: 'approved',
           approved_by: approverName,
-          is_quota_leave: false,
           is_weekly_off: isWeeklyOff
         })
         .eq('id', id);
@@ -243,7 +242,7 @@ export default function LeavePage() {
         action: 'approve_leave',
         table_name: 'leave_requests',
         record_id: id,
-        new_value: { status: 'approved', approved_by: approverName, is_quota_leave: false, is_weekly_off: isWeeklyOff },
+        new_value: { status: 'approved', approved_by: approverName, is_weekly_off: isWeeklyOff },
         performed_by: user?.email || 'admin',
         performed_by_role: user?.role || 'admin',
         reason: isWeeklyOff ? 'Approved as Weekly Off' : 'Approved (Standard Unpaid Leave)'

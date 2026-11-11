@@ -11,6 +11,7 @@ import * as XLSX from 'xlsx';
 import { DEPARTMENTS } from '@/lib/data';
 import { calculateLateMinutes, calculateOTMinutes, calculateEarlyLeaveMinutes } from '@/lib/salary';
 import { recalculateStaffAttendance } from '@/lib/recalculate';
+import { getFineSettings } from '@/lib/fineSettings';
 
 
 interface Shift {
@@ -255,18 +256,7 @@ export default function StaffPage() {
     if (attErr) throw attErr;
 
     // Fetch fine settings
-    const { data: fineSettings } = await supabase
-      .from('fine_settings')
-      .select('*')
-      .limit(1)
-      .maybeSingle();
-
-    const settings = fineSettings || {
-      yellow_fine: 50,
-      orange_fine: 100,
-      red_fine: 200,
-      yellow_free_passes: 4
-    };
+    const settings = await getFineSettings(supabase);
 
     // Keep track of yellow passes
     let yellowPassCount = 0;

@@ -2,16 +2,18 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
 import { supabase, fetchAllPages } from '@/lib/supabase';
 import { createAuditLog, writeAuditLog } from '@/lib/audit';
-import { Clock, RefreshCw, CircleCheck, CircleX, AlertTriangle, X, AlertCircle, Download, Upload, Check, List, LayoutGrid, MoreVertical, Plus, Camera, Flag, User } from 'lucide-react';
+import { Clock, RefreshCw, CircleCheck, CircleX, AlertTriangle, X, AlertCircle, Download, Upload, Check, List, LayoutGrid, MoreVertical, Plus, Camera, Flag, User, Calendar } from 'lucide-react';
 import SpecialFineBottomSheet from '@/components/SpecialFineBottomSheet';
 import * as XLSX from 'xlsx';
 import { DEPARTMENTS } from '@/lib/data';
 import { calculateOTMinutes, calculateActualHours, calculateEarlyLeaveDeduction, calculateEarlyLeaveMinutes, calculateLateMinutes, autoCloseCheckouts, calculateBonusDays } from '@/lib/salary';
 import { recalculateStaffAttendance } from '@/lib/recalculate';
 import { formatTime12hr } from '@/lib/utils';
+import { getFineSettings, DEFAULT_FINE_SETTINGS } from '@/lib/fineSettings';
 
 
 
@@ -239,12 +241,7 @@ export default function AttendancePage() {
   const [addStatus, setAddStatus] = useState<'present' | 'late' | 'absent'>('present');
   const [addReason, setAddReason] = useState('');
 
-  const [fineSettings, setFineSettings] = useState<any>({
-    yellow_fine: 25,
-    orange_fine: 50,
-    red_fine: 100,
-    yellow_free_passes: 4
-  });
+  const [fineSettings, setFineSettings] = useState<any>({ ...DEFAULT_FINE_SETTINGS });
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('All');
   const [branchFilter, setBranchFilter] = useState<BranchFilter>('All');
@@ -328,9 +325,9 @@ export default function AttendancePage() {
       return;
     }
     let amt = 0;
-    if (liveColorCode === 'yellow') amt = Number(fineSettings?.yellow_fine || 25);
-    else if (liveColorCode === 'orange') amt = Number(fineSettings?.orange_fine || 50);
-    else if (liveColorCode === 'red') amt = Number(fineSettings?.red_fine || 100);
+    if (liveColorCode === 'yellow') amt = Number(fineSettings?.yellow_fine || 20);
+    else if (liveColorCode === 'orange') amt = Number(fineSettings?.orange_fine || 30);
+    else if (liveColorCode === 'red') amt = Number(fineSettings?.red_fine || 50);
 
     if (detailRecord?.fine && detailRecord.fine.color_code === liveColorCode) {
       setEditFineAmount(Number(detailRecord.fine.fine_amount));
@@ -1589,13 +1586,7 @@ export default function AttendancePage() {
       const { data: exemptions } = await supabase.from('staff_fine_exemptions').select('staff_id');
       const exemptStaffIds = new Set(exemptions?.map(e => e.staff_id) || []);
 
-      const { data: fineSettings } = await supabase.from('fine_settings').select('*').limit(1).maybeSingle();
-      const settings = fineSettings || {
-        yellow_fine: 25,
-        orange_fine: 50,
-        red_fine: 100,
-        yellow_free_passes: 4
-      };
+      const settings = await getFineSettings(supabase);
 
       const [yearStr, monthStr] = selectedMonth.split('-');
       const daysInMonth = new Date(Number(yearStr), Number(monthStr), 0).getDate();
@@ -1965,10 +1956,8 @@ export default function AttendancePage() {
 
       // 6. Fetch fine settings
       try {
-        const { data: fsData } = await supabase.from('fine_settings').select('*').limit(1).maybeSingle();
-        if (fsData) {
-          setFineSettings(fsData);
-        }
+        const fsData = await getFineSettings(supabase);
+        setFineSettings(fsData);
       } catch (err) {
         console.error('Exception fetching fine settings:', err);
       }
@@ -2649,6 +2638,14 @@ export default function AttendancePage() {
               <span>Floor</span>
             </button>
           </div>
+          <Link
+            href="/attendance/in-time-grid"
+            className="px-[12px] py-[6px] text-[13px] flex items-center gap-1.5 transition-all duration-200 bg-white border border-[#E8E8E8] hover:bg-[#F8F8F8] text-[#1A1A1A] font-semibold rounded-[10px] shadow-sm cursor-pointer"
+            title="Monthly In-Time Grid View"
+          >
+            <Calendar size={15} className="text-slate-500" />
+            <span>In-Time Grid</span>
+          </Link>
           {/* Add Record & Import/Export */}
           <div className="attendance-actions flex items-center space-x-2">
             {canEdit && (

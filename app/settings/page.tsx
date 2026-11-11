@@ -8,6 +8,7 @@ import { useRouter } from 'next/navigation';
 import { Lock, Plus, Trash2, CheckCircle2, Circle, Search, X } from 'lucide-react';
 import { writeAuditLog } from '@/lib/audit';
 import { calculateLateMinutes } from '@/lib/salary';
+import { getFineSettings, DEFAULT_FINE_SETTINGS } from '@/lib/fineSettings';
 
 interface FineSettings {
   id: string;
@@ -80,10 +81,7 @@ export default function SettingsPage() {
 
   const [settings, setSettings] = useState<FineSettings>({
     id: 'default',
-    yellow_fine: 25,
-    orange_fine: 50,
-    red_fine: 100,
-    yellow_free_passes: 4,
+    ...DEFAULT_FINE_SETTINGS,
   });
 
   const [exemptions, setExemptions] = useState<Exemption[]>([]);
@@ -152,16 +150,14 @@ export default function SettingsPage() {
     try {
       // 1. Fetch fine settings section: independent try/catch
       try {
-        const { data: setD, error: setE } = await supabase
-          .from('fine_settings')
-          .select('*')
-          .order('updated_at', { ascending: false })
-          .limit(1);
-
-        if (setE) throw setE;
-        if (setD && setD.length > 0) {
-          setSettings(setD[0]);
-        }
+        const fsData = await getFineSettings(supabase);
+        setSettings({
+          id: fsData.id || 'default',
+          yellow_fine: fsData.yellow_fine,
+          orange_fine: fsData.orange_fine,
+          red_fine: fsData.red_fine,
+          yellow_free_passes: fsData.yellow_free_passes,
+        });
       } catch (err: any) {
         console.error('Fine settings fetch error:', err);
       }
@@ -553,29 +549,33 @@ export default function SettingsPage() {
     e.preventDefault();
     setSavingSettings(true);
     try {
-      if (settings?.id && settings.id !== 'default') {
+      let targetId = settings?.id && settings.id !== 'default' ? settings.id : null;
+      if (!targetId) {
+        const latest = await getFineSettings(supabase);
+        if (latest.id) {
+          targetId = latest.id;
+        }
+      }
+
+      const payload = {
+        yellow_fine: Number(settings.yellow_fine),
+        orange_fine: Number(settings.orange_fine),
+        red_fine: Number(settings.red_fine),
+        yellow_free_passes: Number(settings.yellow_free_passes),
+        updated_by: user?.email || 'admin',
+        updated_at: new Date().toISOString()
+      };
+
+      if (targetId) {
         const { error } = await supabase
           .from('fine_settings')
-          .update({
-            yellow_fine: Number(settings.yellow_fine),
-            orange_fine: Number(settings.orange_fine),
-            red_fine: Number(settings.red_fine),
-            yellow_free_passes: Number(settings.yellow_free_passes),
-            updated_by: user?.email || 'admin',
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', settings.id);
+          .update(payload)
+          .eq('id', targetId);
         if (error) throw error;
       } else {
         const { error } = await supabase
           .from('fine_settings')
-          .insert({
-            yellow_fine: Number(settings.yellow_fine),
-            orange_fine: Number(settings.orange_fine),
-            red_fine: Number(settings.red_fine),
-            yellow_free_passes: Number(settings.yellow_free_passes),
-            updated_by: user?.email || 'admin'
-          });
+          .insert(payload);
         if (error) throw error;
       }
 
@@ -1048,8 +1048,7 @@ export default function SettingsPage() {
       });
 
       // Fetch fine settings
-      const { data: fSettings } = await supabase.from('fine_settings').select('*').limit(1).maybeSingle();
-      const fs = fSettings || { yellow_fine: 50, orange_fine: 100, red_fine: 200, yellow_free_passes: 4 };
+      const fs = await getFineSettings(supabase);
 
       // Fetch exemptions
       const { data: exemptions } = await supabase.from('staff_fine_exemptions').select('staff_id');

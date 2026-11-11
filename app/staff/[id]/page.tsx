@@ -4,6 +4,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
+import { getFineSettings } from '@/lib/fineSettings';
 import { 
   ArrowLeft, 
   Calendar as CalendarIcon, 
@@ -366,6 +367,7 @@ export default function StaffProfilePage() {
     reason?: string;
   } | null>(null);
   const [waivedAmountInput, setWaivedAmountInput] = useState('');
+  const [waiveReasonInput, setWaiveReasonInput] = useState('');
   const [isSavingWaive, setIsSavingWaive] = useState(false);
 
   // Resignation states
@@ -465,6 +467,11 @@ export default function StaffProfilePage() {
       return;
     }
 
+    if (!waiveReasonInput.trim() || waiveReasonInput.trim().length < 3) {
+      alert('Please enter a reason for waiving (at least 3 characters).');
+      return;
+    }
+
     setIsSavingWaive(true);
     try {
       const isFullyWaived = inputVal === selectedFineForWaive.originalAmount;
@@ -476,7 +483,8 @@ export default function StaffProfilePage() {
           .update({
             waived: isFullyWaived,
             waived_amount: inputVal,
-            waived_by: waivedBy
+            waived_by: waivedBy,
+            waived_reason: waiveReasonInput.trim()
           })
           .eq('id', selectedFineForWaive.id);
 
@@ -497,6 +505,7 @@ export default function StaffProfilePage() {
       showToast('Fine waiver updated ✓');
       setWaiveModalOpen(false);
       setSelectedFineForWaive(null);
+      setWaiveReasonInput('');
       fetchMonthData(); // Reload fines list
     } catch (err: any) {
       console.error(err);
@@ -755,13 +764,7 @@ export default function StaffProfilePage() {
           .maybeSingle();
 
         if (!exemption) {
-          const { data: fineSettings } = await supabase.from('fine_settings').select('*').limit(1).maybeSingle();
-          const settings = fineSettings || {
-            yellow_fine: 50,
-            orange_fine: 100,
-            red_fine: 200,
-            yellow_free_passes: 4
-          };
+          const settings = await getFineSettings(supabase);
 
           if (colorCode === 'yellow') {
             const [y, m] = dateStr.split('-');
@@ -1748,6 +1751,7 @@ export default function StaffProfilePage() {
                             waivedAmount: lf.waived_amount || 0
                           });
                           setWaivedAmountInput(String(lf.waived_amount || 0));
+                          setWaiveReasonInput('');
                           setWaiveModalOpen(true);
                         }}
                         className="h-8 min-h-0 px-3 bg-[#FBBF24]/10 border border-[#FBBF24]/20 text-[#FBBF24] font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
@@ -1783,6 +1787,7 @@ export default function StaffProfilePage() {
                             reason: sf.reason
                           });
                           setWaivedAmountInput(String(sf.waived_amount || 0));
+                          setWaiveReasonInput('');
                           setWaiveModalOpen(true);
                         }}
                         className="h-8 min-h-0 px-3 bg-[#FBBF24]/10 border border-[#FBBF24]/20 text-[#FBBF24] font-bold rounded-lg text-[10px] active:scale-95 transition-all cursor-pointer"
@@ -2265,6 +2270,7 @@ export default function StaffProfilePage() {
                         waivedAmount: fine.waived_amount || 0
                       });
                       setWaivedAmountInput(String(fine.waived_amount || 0));
+                      setWaiveReasonInput('');
                       setWaiveModalOpen(true);
                     }}
                     className={`bg-[var(--bg-surface)] border border-[var(--border)] rounded-xl p-3 flex justify-between items-center ${user?.role !== 'staff_executive' ? 'cursor-pointer hover:border-white/20 hover:bg-white/5 active:scale-99' : ''} transition-all`}
@@ -2320,6 +2326,7 @@ export default function StaffProfilePage() {
                         reason: fine.reason
                       });
                       setWaivedAmountInput(String(fine.waived_amount || 0));
+                      setWaiveReasonInput('');
                       setWaiveModalOpen(true);
                     }}
                     className={`bg-[var(--bg-surface)] border border-[var(--border)] rounded-xl p-3 flex justify-between items-start ${user?.role !== 'staff_executive' ? 'cursor-pointer hover:border-white/20 hover:bg-white/5 active:scale-99' : ''} transition-all`}
@@ -3864,6 +3871,21 @@ export default function StaffProfilePage() {
                 />
               </div>
 
+              <div>
+                <label className="block text-[10px] font-black uppercase text-[var(--text-secondary)] tracking-wider mb-1.5">
+                  Reason for waiving <span className="text-red-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={waiveReasonInput}
+                  onChange={(e) => setWaiveReasonInput(e.target.value)}
+                  placeholder="Reason for waiving (min 3 chars)"
+                  className="w-full bg-[var(--bg-input)] border border-[var(--border)] rounded-xl p-3.5 text-xs text-white focus:outline-none focus:border-white/30 font-bold"
+                  required
+                  minLength={3}
+                />
+              </div>
+
               {/* Deduction Summary display */}
               {(() => {
                 const amt = Number(waivedAmountInput) || 0;
@@ -3888,8 +3910,12 @@ export default function StaffProfilePage() {
 
               <button 
                 type="submit" 
-                disabled={isSavingWaive}
-                className="w-full min-h-[44px] bg-white text-[#1E2028] hover:bg-white/95 font-bold text-xs rounded-xl active:scale-95 transition-all flex items-center justify-center cursor-pointer"
+                disabled={isSavingWaive || waiveReasonInput.trim().length < 3}
+                className={`w-full min-h-[44px] font-bold text-xs rounded-xl active:scale-95 transition-all flex items-center justify-center ${
+                  isSavingWaive || waiveReasonInput.trim().length < 3
+                    ? 'bg-white/20 text-white/40 cursor-not-allowed'
+                    : 'bg-white text-[#1E2028] hover:bg-white/95 cursor-pointer'
+                }`}
               >
                 {isSavingWaive ? 'Saving...' : 'Save Waiver'}
               </button>
