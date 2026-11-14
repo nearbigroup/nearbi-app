@@ -104,9 +104,7 @@ export default function InTimeGridPage() {
       // 1. Fetch staff with shift join
       let staffQuery = supabase
         .from('staff')
-        .select('id, name, branch_id, department, pay_type, shift_id, off_days_per_month, shift:shifts(id, label, start_time, end_time, hours)')
-        .eq('active', true)
-        .eq('is_resigned', false);
+        .select('id, name, branch_id, department, pay_type, shift_id, off_days_per_month, join_date, active, is_resigned, shift:shifts(id, label, start_time, end_time, hours)');
 
       if (user?.role === 'nearbi_homes_supervisor') {
         staffQuery = staffQuery.eq('branch_id', 'hypermarket').eq('department', 'Nearbi Homes');
@@ -123,6 +121,29 @@ export default function InTimeGridPage() {
         startDate,
         endDate
       );
+
+      // Filter staff list:
+      // Active staff are kept as normal.
+      // Left/resigned staff (is_resigned === true or active === false) are included ONLY IF they have attendance rows in this month, marked "(left)".
+      // New staff (joined during this month) are marked with is_new.
+      const attStaffIds = new Set((rawAttendance || []).map((a) => a.staff_id));
+      const processedStaffList = (staffData || [])
+        .filter((st: any) => {
+          const isLeft = st.is_resigned || st.active === false;
+          if (isLeft) {
+            return attStaffIds.has(st.id);
+          }
+          return true;
+        })
+        .map((st: any) => {
+          const isLeft = st.is_resigned || st.active === false;
+          const isNew = !isLeft && !!(st.join_date && st.join_date.startsWith(monthStr));
+          return {
+            ...st,
+            is_left: isLeft,
+            is_new: isNew,
+          };
+        });
 
       // 3. Fetch late_fines with pagination
       const rawFines: LateFineRawRecord[] = await fetchAllLateFines(
@@ -151,7 +172,7 @@ export default function InTimeGridPage() {
 
       // 7. Build model
       const builtModel = buildInTimeGridModel(
-        (staffData || []) as StaffRawRecord[],
+        (processedStaffList || []) as StaffRawRecord[],
         rawAttendance || [],
         rawFines || [],
         rawLeaves || [],
@@ -229,7 +250,7 @@ export default function InTimeGridPage() {
             <span>Back to Daily Attendance</span>
           </Link>
           <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-black text-white tracking-tight">In-Time Grid</h1>
+            <h1 className="text-2xl font-black text-slate-900 tracking-tight">In-Time Grid</h1>
             <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/30">
               Monthly Overview
             </span>

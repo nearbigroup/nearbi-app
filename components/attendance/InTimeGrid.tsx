@@ -1,12 +1,15 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { useAuth } from '@/lib/auth-context';
 import {
   StaffGridRow,
   DayCellData,
   InTimeGridModel,
   sortStaffRows,
 } from '@/lib/inTimeGrid';
+import { IN_TIME_COLORS } from '@/lib/inTimeColors';
+import { exportInTimePDF, exportInTimeExcel } from '@/lib/inTimeExport';
 import {
   Calendar,
   Filter,
@@ -19,6 +22,9 @@ import {
   Building,
   ArrowUpDown,
   Shield,
+  Download,
+  FileText,
+  FileSpreadsheet,
 } from 'lucide-react';
 
 interface InTimeGridProps {
@@ -38,10 +44,68 @@ export default function InTimeGrid({
   allowedDepartment,
   isLoading = false,
 }: InTimeGridProps) {
+  const { user } = useAuth();
   const [branchFilter, setBranchFilter] = useState<string>(allowedBranch || 'all');
   const [deptFilter, setDeptFilter] = useState<string>(allowedDepartment || 'all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [sortBy, setSortBy] = useState<'place' | 'name'>('place');
+
+  // View mode: 'cards' | 'lines'. Default on phone is cards, on desktop lines.
+  const [viewMode, setViewMode] = useState<'cards' | 'lines'>('cards');
+  // Zoom levels: 50%, 75%, 100%, 150%, 200%
+  const [zoomLevel, setZoomLevel] = useState<number>(100);
+
+  // Initialize view mode and zoom from localStorage inside useEffect
+  useEffect(() => {
+    try {
+      const savedMode = localStorage.getItem('nearbi_intime_view_mode');
+      if (savedMode === 'cards' || savedMode === 'lines') {
+        setViewMode(savedMode);
+      } else if (typeof window !== 'undefined' && window.innerWidth >= 768) {
+        setViewMode('lines');
+      } else {
+        setViewMode('cards');
+      }
+
+      const savedZoom = localStorage.getItem('nearbi_intime_zoom');
+      if (savedZoom && [50, 75, 100, 150, 200].includes(Number(savedZoom))) {
+        setZoomLevel(Number(savedZoom));
+      } else if (typeof window !== 'undefined' && window.innerWidth < 768) {
+        setZoomLevel(50);
+      }
+    } catch {}
+  }, []);
+
+  const handleViewModeChange = (mode: 'cards' | 'lines') => {
+    setViewMode(mode);
+    try {
+      localStorage.setItem('nearbi_intime_view_mode', mode);
+    } catch {}
+  };
+
+  const handleZoomIn = () => {
+    const ZOOM_LEVELS = [50, 75, 100, 150, 200];
+    const currentIndex = ZOOM_LEVELS.indexOf(zoomLevel);
+    if (currentIndex < ZOOM_LEVELS.length - 1) {
+      const nextZoom = ZOOM_LEVELS[currentIndex + 1];
+      setZoomLevel(nextZoom);
+      try {
+        localStorage.setItem('nearbi_intime_zoom', String(nextZoom));
+      } catch {}
+    }
+  };
+
+  const handleZoomOut = () => {
+    const ZOOM_LEVELS = [50, 75, 100, 150, 200];
+    const currentIndex = ZOOM_LEVELS.indexOf(zoomLevel);
+    if (currentIndex > 0) {
+      const prevZoom = ZOOM_LEVELS[currentIndex - 1];
+      setZoomLevel(prevZoom);
+      try {
+        localStorage.setItem('nearbi_intime_zoom', String(prevZoom));
+      } catch {}
+    }
+  };
 
   // Staff selected for Slide-over Panel (Desktop) or Bottom Sheet (Mobile)
   const [selectedStaff, setSelectedStaff] = useState<StaffGridRow | null>(null);
@@ -51,6 +115,50 @@ export default function InTimeGrid({
     staff: StaffGridRow;
     cell: DayCellData;
   } | null>(null);
+
+  // Export Modal State
+  const [showExportModal, setShowExportModal] = useState<boolean>(false);
+  const [exportFormat, setExportFormat] = useState<'pdf' | 'excel'>('pdf');
+  const [exportBranch, setExportBranch] = useState<'both' | 'daily' | 'hypermarket'>(
+    allowedBranch === 'daily' ? 'daily' : allowedBranch === 'hypermarket' ? 'hypermarket' : 'both'
+  );
+  const [includeSummary, setIncludeSummary] = useState<boolean>(true);
+  const [includeColourGrid, setIncludeColourGrid] = useState<boolean>(true);
+  const [includeFines, setIncludeFines] = useState<boolean>(false);
+  const [finesOnlyWithFines, setFinesOnlyWithFines] = useState<boolean>(true);
+  const [isExporting, setIsExporting] = useState<boolean>(false);
+  const [exportError, setExportError] = useState<string>('');
+
+  const handleRunExport = async () => {
+    if (!includeSummary && !includeColourGrid && !includeFines) {
+      setExportError('Please select at least one section to export.');
+      return;
+    }
+    setExportError('');
+    setIsExporting(true);
+    try {
+      const options = {
+        branch: exportBranch,
+        includeSummary,
+        includeColourGrid,
+        includeFines,
+        finesOnlyWithFines,
+        user,
+      };
+
+      if (exportFormat === 'pdf') {
+        await exportInTimePDF(model, options);
+      } else {
+        await exportInTimeExcel(model, options);
+      }
+      setShowExportModal(false);
+    } catch (err: any) {
+      console.error('Export failed:', err);
+      setExportError(err?.message || 'Failed to generate export file.');
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   // Filtered rows for the grid
   const filteredRows = useMemo(() => {
@@ -102,6 +210,88 @@ export default function InTimeGrid({
     return dt.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
   }, [selectedMonth]);
 
+  // Zoom styles helper for Lines view
+  const zoomStyles = useMemo(() => {
+    switch (zoomLevel) {
+      case 50:
+        return {
+          nameColWidth: 'w-[88px] min-w-[88px] max-w-[88px]',
+          nameFont: 'text-[8.5px]',
+          placeFont: 'text-[7.5px]',
+          subHidden: true,
+          dayColWidth: 'w-[9px] min-w-[9px] max-w-[9px]',
+          dayHeight: 'h-6',
+          dayPadding: 'p-0',
+          dayFont: 'text-[7px]',
+          daySubFont: 'text-[6px]',
+          showTimeText: false,
+          summaryColWidth: 'min-w-[32px]',
+          summaryFont: 'text-[8px]',
+        };
+      case 75:
+        return {
+          nameColWidth: 'w-[130px] min-w-[130px] max-w-[130px]',
+          nameFont: 'text-[10px]',
+          placeFont: 'text-[8.5px]',
+          subHidden: false,
+          dayColWidth: 'w-[20px] min-w-[20px] max-w-[20px]',
+          dayHeight: 'h-6',
+          dayPadding: 'p-0.5',
+          dayFont: 'text-[9px]',
+          daySubFont: 'text-[7px]',
+          showTimeText: false,
+          summaryColWidth: 'min-w-[38px]',
+          summaryFont: 'text-[9px]',
+        };
+      case 150:
+        return {
+          nameColWidth: 'w-[240px] min-w-[240px] max-w-[240px]',
+          nameFont: 'text-sm',
+          placeFont: 'text-xs',
+          subHidden: false,
+          dayColWidth: 'w-[74px] min-w-[74px] max-w-[74px]',
+          dayHeight: 'h-9',
+          dayPadding: 'p-1.5',
+          dayFont: 'text-xs',
+          daySubFont: 'text-[10px]',
+          showTimeText: true,
+          summaryColWidth: 'min-w-[56px]',
+          summaryFont: 'text-xs',
+        };
+      case 200:
+        return {
+          nameColWidth: 'w-[300px] min-w-[300px] max-w-[300px]',
+          nameFont: 'text-base',
+          placeFont: 'text-sm',
+          subHidden: false,
+          dayColWidth: 'w-[96px] min-w-[96px] max-w-[96px]',
+          dayHeight: 'h-11',
+          dayPadding: 'p-2',
+          dayFont: 'text-sm',
+          daySubFont: 'text-xs',
+          showTimeText: true,
+          summaryColWidth: 'min-w-[64px]',
+          summaryFont: 'text-sm',
+        };
+      case 100:
+      default:
+        return {
+          nameColWidth: 'w-[180px] min-w-[180px] max-w-[180px]',
+          nameFont: 'text-xs',
+          placeFont: 'text-[10px]',
+          subHidden: false,
+          dayColWidth: 'w-[52px] min-w-[52px] max-w-[52px]',
+          dayHeight: 'h-7',
+          dayPadding: 'p-1',
+          dayFont: 'text-[11px]',
+          daySubFont: 'text-[9px]',
+          showTimeText: true,
+          summaryColWidth: 'min-w-[42px]',
+          summaryFont: 'text-xs',
+        };
+    }
+  }, [zoomLevel]);
+
   // Helper for desktop table cell background & text color
   const getCellClasses = (cell: DayCellData) => {
     if (cell.isHourly) {
@@ -109,13 +299,13 @@ export default function InTimeGrid({
     }
     switch (cell.colorCode) {
       case 'green':
-        return 'bg-emerald-950/70 border border-emerald-500/40 text-emerald-300';
+        return 'bg-emerald-950/80 border border-emerald-500/50 text-emerald-300';
       case 'yellow':
-        return 'bg-amber-950/70 border border-amber-500/40 text-amber-300';
+        return 'bg-amber-950/80 border border-amber-500/50 text-amber-300';
       case 'orange':
-        return 'bg-orange-950/70 border border-orange-500/40 text-orange-300';
+        return 'bg-orange-950/80 border border-orange-500/50 text-orange-300';
       case 'red':
-        return 'bg-rose-950/70 border border-rose-500/40 text-rose-300';
+        return 'bg-rose-950/80 border border-rose-500/50 text-rose-300';
       default:
         return 'bg-slate-800/60 border border-white/10 text-slate-200';
     }
@@ -126,36 +316,37 @@ export default function InTimeGrid({
     if (cell.hasPunch) {
       switch (cell.colorCode) {
         case 'green':
-          return 'bg-emerald-400 shadow-sm shadow-emerald-500/30';
+          return 'bg-[#3CC24A] text-slate-950 font-black shadow-sm';
         case 'yellow':
-          return 'bg-amber-400 shadow-sm shadow-amber-500/30';
+          return 'bg-[#FFFF00] text-slate-950 font-black shadow-sm';
         case 'orange':
-          return 'bg-orange-400 shadow-sm shadow-orange-500/30';
+          return 'bg-[#FFA500] text-slate-950 font-black shadow-sm';
         case 'red':
-          return 'bg-rose-500 shadow-sm shadow-rose-500/30';
+          return 'bg-[#FF0000] text-white font-black shadow-sm';
         default:
-          return 'bg-slate-500';
+          return 'bg-slate-600 text-white font-bold';
       }
     }
     // Future or past approved leave
     if (cell.isApprovedLeave) {
-      return 'bg-slate-700 ring-1 ring-emerald-400/80 text-emerald-300 font-bold';
+      return 'bg-slate-800 ring-1 ring-emerald-400 text-emerald-300 font-black';
     }
     // Future blank
     if (cell.isFuture) {
-      return 'border border-white/15 bg-transparent';
+      return 'border border-white/10 bg-transparent text-slate-600 font-semibold';
     }
     // Past day with no punch
-    return 'bg-slate-800/80 border border-white/5';
+    return 'bg-[#BFBFBF] text-slate-900 font-black';
   };
 
   return (
     <div className="space-y-6">
       {/* Top Filter & Control Bar */}
-      <div className="bg-[#161820] border border-white/10 rounded-2xl p-4 md:p-5 shadow-xl">
-        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+      <div className="bg-[#161820] border border-white/10 rounded-2xl p-3 sm:p-4 md:p-5 shadow-xl space-y-3 sm:space-y-4">
+        {/* Row 1: Month Selector (Left) + Prominent Export Button (Right) */}
+        <div className="flex items-center justify-between gap-2 w-full">
           {/* Month selector */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2">
             <button
               onClick={handlePrevMonth}
               className="h-9 w-9 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl flex items-center justify-center text-slate-300 hover:text-white transition-all active:scale-95"
@@ -163,9 +354,9 @@ export default function InTimeGrid({
             >
               <ChevronLeft size={18} />
             </button>
-            <div className="flex items-center gap-2 px-3.5 py-1.5 bg-black/40 border border-white/10 rounded-xl">
-              <Calendar size={16} className="text-amber-400" />
-              <span className="text-sm font-bold text-white tracking-wide">{monthLabel}</span>
+            <div className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3.5 py-1.5 bg-black/40 border border-white/10 rounded-xl">
+              <Calendar size={15} className="text-amber-400 shrink-0" />
+              <span className="text-xs sm:text-sm font-bold text-white tracking-wide whitespace-nowrap">{monthLabel}</span>
             </div>
             <button
               onClick={handleNextMonth}
@@ -176,83 +367,157 @@ export default function InTimeGrid({
             </button>
           </div>
 
-          {/* Filters: Branch, Department, Search, Sort Toggle */}
-          <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto">
-            {/* Sort Toggle Button */}
+          {/* Export Button - clearly visible on phone & desktop */}
+          <button
+            onClick={() => {
+              setExportError('');
+              setShowExportModal(true);
+            }}
+            disabled={model.rows.length === 0}
+            className={`flex items-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all border shrink-0 active:scale-95 shadow-md ${
+              model.rows.length === 0
+                ? 'bg-white/5 border-white/5 text-slate-500 cursor-not-allowed'
+                : 'bg-amber-500/20 hover:bg-amber-500/30 border-amber-500/40 text-amber-300 hover:text-white shadow-amber-500/10'
+            }`}
+            title={
+              model.rows.length === 0
+                ? 'No staff data available to export for this month'
+                : 'Export In-Time Grid (PDF / Excel)'
+            }
+          >
+            <Download size={15} className={model.rows.length === 0 ? 'text-slate-500' : 'text-amber-400'} />
+            <span className="font-bold">Export</span>
+          </button>
+        </div>
+
+        {/* Row 2: View Mode (Cards | Lines), Zoom Controls, Sort, Branch, Dept, Search */}
+        <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-white/5 w-full">
+          {/* View Mode Toggle */}
+          <div className="inline-flex items-center p-0.5 bg-black/40 border border-white/10 rounded-xl shrink-0">
             <button
-              onClick={() => setSortBy(sortBy === 'place' ? 'name' : 'place')}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all bg-black/40 border border-white/10 hover:border-white/20 text-slate-300 hover:text-white active:scale-95"
-              title="Toggle sorting between Rank / Place and Staff Name"
+              type="button"
+              onClick={() => handleViewModeChange('cards')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                viewMode === 'cards'
+                  ? 'bg-amber-500 text-slate-950 shadow-sm'
+                  : 'text-slate-400 hover:text-white'
+              }`}
             >
-              <ArrowUpDown size={14} className="text-amber-400" />
-              <span>Sort: {sortBy === 'place' ? 'Place / Rank' : 'Name (A–Z)'}</span>
+              Cards
             </button>
+            <button
+              type="button"
+              onClick={() => handleViewModeChange('lines')}
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                viewMode === 'lines'
+                  ? 'bg-amber-500 text-slate-950 shadow-sm'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              Lines
+            </button>
+          </div>
 
-            {/* Branch Filter */}
-            {!allowedBranch && (
-              <div className="flex items-center gap-1.5 bg-black/30 border border-white/10 rounded-xl px-2.5 py-1">
-                <Building size={14} className="text-slate-400" />
-                <select
-                  value={branchFilter}
-                  onChange={(e) => setBranchFilter(e.target.value)}
-                  className="bg-transparent text-xs text-white font-semibold focus:outline-none cursor-pointer py-1"
-                >
-                  <option value="all" className="bg-[#1A1D26] text-white">All Branches</option>
-                  <option value="daily" className="bg-[#1A1D26] text-white">Daily</option>
-                  <option value="hypermarket" className="bg-[#1A1D26] text-white">Hypermarket</option>
-                </select>
-              </div>
-            )}
+          {/* Zoom Controls (- 100% +) */}
+          <div className="inline-flex items-center gap-1 bg-black/40 border border-white/10 rounded-xl px-1.5 py-1 shrink-0" title="Zoom in / out on Lines view">
+            <button
+              type="button"
+              onClick={handleZoomOut}
+              disabled={zoomLevel === 50}
+              className="w-6 h-6 rounded flex items-center justify-center text-slate-300 hover:text-white hover:bg-white/10 disabled:opacity-30 disabled:hover:bg-transparent font-bold text-xs active:scale-95 transition-all"
+              title="Zoom out"
+            >
+              -
+            </button>
+            <span className="font-mono text-xs font-bold text-amber-400 w-10 text-center select-none">
+              {zoomLevel}%
+            </span>
+            <button
+              type="button"
+              onClick={handleZoomIn}
+              disabled={zoomLevel === 200}
+              className="w-6 h-6 rounded flex items-center justify-center text-slate-300 hover:text-white hover:bg-white/10 disabled:opacity-30 disabled:hover:bg-transparent font-bold text-xs active:scale-95 transition-all"
+              title="Zoom in"
+            >
+              +
+            </button>
+          </div>
 
-            {/* Department Filter */}
-            {!allowedDepartment && (
-              <div className="flex items-center gap-1.5 bg-black/30 border border-white/10 rounded-xl px-2.5 py-1">
-                <Filter size={14} className="text-slate-400" />
-                <select
-                  value={deptFilter}
-                  onChange={(e) => setDeptFilter(e.target.value)}
-                  className="bg-transparent text-xs text-white font-semibold focus:outline-none cursor-pointer py-1"
-                >
-                  <option value="all" className="bg-[#1A1D26] text-white">All Depts</option>
-                  {model.departments.map((dept) => (
-                    <option key={dept} value={dept} className="bg-[#1A1D26] text-white">
-                      {dept}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+          {/* Sort Toggle Button */}
+          <button
+            type="button"
+            onClick={() => setSortBy(sortBy === 'place' ? 'name' : 'place')}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all bg-black/40 border border-white/10 hover:border-white/20 text-slate-300 hover:text-white active:scale-95 shrink-0"
+            title="Toggle sorting between Rank / Place and Staff Name"
+          >
+            <ArrowUpDown size={13} className="text-amber-400" />
+            <span>Sort: {sortBy === 'place' ? 'Place / Rank' : 'Name (A–Z)'}</span>
+          </button>
 
-            {/* Search Input */}
-            <div className="flex-1 sm:flex-none">
-              <input
-                type="text"
-                placeholder="Search staff name..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full sm:w-44 bg-black/30 border border-white/10 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-white/30"
-              />
+          {/* Branch Filter */}
+          {!allowedBranch && (
+            <div className="flex items-center gap-1.5 bg-black/30 border border-white/10 rounded-xl px-2 py-1 shrink-0">
+              <Building size={13} className="text-slate-400" />
+              <select
+                value={branchFilter}
+                onChange={(e) => setBranchFilter(e.target.value)}
+                className="bg-transparent text-xs text-white font-semibold focus:outline-none cursor-pointer py-0.5"
+              >
+                <option value="all" className="bg-[#1A1D26] text-white">All Branches</option>
+                <option value="daily" className="bg-[#1A1D26] text-white">Daily</option>
+                <option value="hypermarket" className="bg-[#1A1D26] text-white">Hypermarket</option>
+              </select>
             </div>
+          )}
+
+          {/* Department Filter */}
+          {!allowedDepartment && (
+            <div className="flex items-center gap-1.5 bg-black/30 border border-white/10 rounded-xl px-2 py-1 shrink-0">
+              <Filter size={13} className="text-slate-400" />
+              <select
+                value={deptFilter}
+                onChange={(e) => setDeptFilter(e.target.value)}
+                className="bg-transparent text-xs text-white font-semibold focus:outline-none cursor-pointer py-0.5"
+              >
+                <option value="all" className="bg-[#1A1D26] text-white">All Depts</option>
+                {model.departments.map((dept) => (
+                  <option key={dept} value={dept} className="bg-[#1A1D26] text-white">
+                    {dept}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Search Input - Clean placeholder "Search staff" */}
+          <div className="flex-1 min-w-[130px]">
+            <input
+              type="text"
+              placeholder="Search staff"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full bg-black/30 border border-white/10 rounded-xl px-2.5 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-white/30"
+            />
           </div>
         </div>
 
         {/* Legend */}
-        <div className="flex flex-wrap items-center gap-3 pt-3.5 mt-3.5 border-t border-white/5 text-[11px] text-slate-400">
+        <div className="flex flex-wrap items-center gap-3 pt-2.5 border-t border-white/5 text-[11px] text-slate-400">
           <span className="font-semibold text-slate-300">Legend:</span>
           <span className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
+            <span className="w-2.5 h-2.5 rounded-full bg-[#3CC24A]"></span>
             <span>On Time (Green)</span>
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
+            <span className="w-2.5 h-2.5 rounded-full bg-[#FFFF00]"></span>
             <span>1-15m Late (Yellow)</span>
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-orange-400"></span>
+            <span className="w-2.5 h-2.5 rounded-full bg-[#FFA500]"></span>
             <span>16-30m Late (Orange)</span>
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+            <span className="w-2.5 h-2.5 rounded-full bg-[#FF0000]"></span>
             <span>&gt;30m Late (Red)</span>
           </span>
           <span className="flex items-center gap-1.5">
@@ -262,7 +527,7 @@ export default function InTimeGrid({
             <span>Approved Leave</span>
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-sm bg-slate-800 border border-white/10"></span>
+            <span className="w-2.5 h-2.5 rounded-sm bg-[#BFBFBF]"></span>
             <span>Past No Punch</span>
           </span>
           <span className="flex items-center gap-1.5">
@@ -271,7 +536,6 @@ export default function InTimeGrid({
           </span>
         </div>
       </div>
-
       {/* Loading Overlay */}
       {isLoading && (
         <div className="bg-[#12141C] border border-white/10 rounded-2xl p-8 flex flex-col items-center justify-center gap-2">
@@ -282,423 +546,462 @@ export default function InTimeGrid({
         </div>
       )}
 
-      {/* DESKTOP TABLE VIEW (Screens >= 768px) */}
-      <div className="hidden md:block bg-[#12141C] border border-white/10 rounded-2xl shadow-2xl overflow-hidden relative">
-        <div className="overflow-x-auto max-h-[74vh] overflow-y-auto relative scrollbar-thin scrollbar-thumb-white/10">
-          <table className="w-full text-left border-collapse select-none">
-            {/* Table Header */}
-            <thead>
-              <tr className="bg-[#181B26] border-b border-white/10 sticky top-0 z-20">
-                {/* Sticky Left Column: Staff Info */}
-                <th className="sticky left-0 z-30 bg-[#181B26] p-3 text-xs font-black uppercase text-slate-300 tracking-wider min-w-[240px] max-w-[260px] border-r border-white/10 shadow-[4px_0_8px_-2px_rgba(0,0,0,0.5)]">
-                  <div className="flex items-center justify-between">
-                    <span>Staff Member</span>
-                    <span className="text-[10px] text-slate-500 font-semibold lowercase">
-                      ({filteredRows.length})
-                    </span>
-                  </div>
-                </th>
-
-                {/* Day Header Cells (1..calendarDays) */}
-                {model.dayColumns.map((col) => (
+      {/* VIEW: LINES (TABLE) or CARDS */}
+      {viewMode === 'lines' ? (
+        /* LINES (TABLE) VIEW - Usable on Phone with Zoom & Desktop */
+        <div className="bg-[#12141C] border border-white/10 rounded-2xl shadow-2xl overflow-hidden relative">
+          <div className="overflow-x-auto max-h-[74vh] overflow-y-auto relative scrollbar-thin scrollbar-thumb-white/10">
+            <table className="w-full text-left border-collapse select-none">
+              {/* Table Header */}
+              <thead>
+                <tr className="bg-[#181B26] border-b border-white/10 sticky top-0 z-20">
+                  {/* Sticky Left Column: Staff Info */}
                   <th
-                    key={col.dayNumber}
-                    className={`p-1.5 text-center min-w-[60px] max-w-[65px] border-r border-white/5 ${
-                      col.isSunday ? 'bg-red-950/20' : ''
-                    } ${col.isToday ? 'ring-1 ring-amber-400/40 bg-amber-950/10' : ''}`}
+                    className={`sticky left-0 z-30 bg-[#181B26] p-2 text-xs font-black uppercase text-slate-300 tracking-wider ${zoomStyles.nameColWidth} border-r border-white/10 shadow-[4px_0_8px_-2px_rgba(0,0,0,0.5)]`}
                   >
-                    <div className="text-[11px] font-black text-white">{col.dayNumber}</div>
-                    <div
-                      className={`text-[9px] font-bold uppercase tracking-wider ${
-                        col.isSunday ? 'text-red-400 font-black' : 'text-slate-500'
-                      }`}
-                    >
-                      {col.dayOfWeek}
+                    <div className="flex items-center justify-between">
+                      <span className={zoomStyles.nameFont}>Staff</span>
+                      {!zoomStyles.subHidden && (
+                        <span className="text-[10px] text-slate-500 font-semibold lowercase">
+                          ({filteredRows.length})
+                        </span>
+                      )}
                     </div>
                   </th>
-                ))}
 
-                {/* Right Summary Columns */}
-                <th className="p-2 text-center min-w-[42px] border-r border-white/10 text-[10px] font-black text-emerald-400 uppercase tracking-wider bg-[#181B26]" title="On-time green punches">
-                  G
-                </th>
-                <th className="p-2 text-center min-w-[42px] border-r border-white/10 text-[10px] font-black text-amber-400 uppercase tracking-wider bg-[#181B26]" title="1-15 min late punches">
-                  Y
-                </th>
-                <th className="p-2 text-center min-w-[42px] border-r border-white/10 text-[10px] font-black text-orange-400 uppercase tracking-wider bg-[#181B26]" title="16-30 min late punches">
-                  O
-                </th>
-                <th className="p-2 text-center min-w-[42px] border-r border-white/10 text-[10px] font-black text-rose-400 uppercase tracking-wider bg-[#181B26]" title=">30 min late punches">
-                  R
-                </th>
-                <th className="p-2 text-center min-w-[64px] border-r border-white/10 text-[10px] font-black text-slate-300 uppercase tracking-wider bg-[#181B26]" title="No-punch past days">
-                  No-Punch
-                </th>
-                <th className="p-2 text-center min-w-[68px] border-r border-white/10 text-[10px] font-black text-slate-300 uppercase tracking-wider bg-[#181B26]" title="Weekly offs used">
-                  Offs Used
-                </th>
-                <th className="p-2 text-center min-w-[56px] border-r border-white/10 text-[10px] font-black text-slate-300 uppercase tracking-wider bg-[#181B26]" title="Unpaid leave days">
-                  Leave
-                </th>
-                <th className="p-2 text-center min-w-[56px] border-r border-white/10 text-[10px] font-black text-slate-300 uppercase tracking-wider bg-[#181B26]" title="Monthly target days">
-                  Target
-                </th>
-                <th className="p-2 text-center min-w-[100px] border-r border-white/10 text-[10px] font-black text-slate-300 uppercase tracking-wider bg-[#181B26]">
-                  Status
-                </th>
-                <th className="p-2 text-center min-w-[76px] border-r border-white/10 text-[10px] font-black text-amber-300 uppercase tracking-wider bg-[#181B26]" title="Fines issued (Rs)">
-                  Fines (₹)
-                </th>
-                <th className="p-2 text-center min-w-[76px] border-r border-white/10 text-[10px] font-black text-sky-300 uppercase tracking-wider bg-[#181B26]" title="Fines waived (Rs)">
-                  Waived (₹)
-                </th>
-                <th className="p-2 text-center min-w-[64px] text-[10px] font-black text-amber-400 uppercase tracking-wider bg-[#181B26]" title="Free passes left">
-                  Passes
-                </th>
-              </tr>
-            </thead>
+                  {/* Day Header Cells (1..calendarDays) */}
+                  {model.dayColumns.map((col) => (
+                    <th
+                      key={col.dayNumber}
+                      className={`${zoomStyles.dayPadding} text-center ${zoomStyles.dayColWidth} border-r border-white/5 ${
+                        col.isSunday ? 'bg-red-950/20' : ''
+                      } ${col.isToday ? 'ring-1 ring-amber-400/40 bg-amber-950/10' : ''}`}
+                    >
+                      <div className={`${zoomStyles.dayFont} font-black text-white`}>{col.dayNumber}</div>
+                      <div
+                        className={`${zoomStyles.daySubFont} font-bold uppercase tracking-wider ${
+                          col.isSunday ? 'text-red-400 font-black' : 'text-slate-500'
+                        }`}
+                      >
+                        {zoomStyles.showTimeText ? col.dayOfWeek : col.dayOfWeek[0]}
+                      </div>
+                    </th>
+                  ))}
 
-            {/* Table Body */}
-            <tbody className="divide-y divide-white/5 text-xs">
-              {filteredRows.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={model.calendarDays + 13}
-                    className="p-12 text-center text-slate-500 text-xs font-bold italic"
-                  >
-                    No staff records found for this month with attendance punches.
-                  </td>
+                  {/* Right Summary Columns */}
+                  <th className={`p-1.5 text-center ${zoomStyles.summaryColWidth} border-r border-white/10 text-[10px] font-black text-emerald-400 uppercase tracking-wider bg-[#181B26]`} title="On-time green punches">
+                    G
+                  </th>
+                  <th className={`p-1.5 text-center ${zoomStyles.summaryColWidth} border-r border-white/10 text-[10px] font-black text-amber-400 uppercase tracking-wider bg-[#181B26]`} title="1-15 min late punches">
+                    Y
+                  </th>
+                  <th className={`p-1.5 text-center ${zoomStyles.summaryColWidth} border-r border-white/10 text-[10px] font-black text-orange-400 uppercase tracking-wider bg-[#181B26]`} title="16-30 min late punches">
+                    O
+                  </th>
+                  <th className={`p-1.5 text-center ${zoomStyles.summaryColWidth} border-r border-white/10 text-[10px] font-black text-rose-400 uppercase tracking-wider bg-[#181B26]`} title=">30 min late punches">
+                    R
+                  </th>
+                  <th className="p-1.5 text-center min-w-[56px] border-r border-white/10 text-[10px] font-black text-slate-300 uppercase tracking-wider bg-[#181B26]" title="No-punch past days">
+                    No-Punch
+                  </th>
+                  <th className="p-1.5 text-center min-w-[58px] border-r border-white/10 text-[10px] font-black text-slate-300 uppercase tracking-wider bg-[#181B26]" title="Weekly offs used">
+                    Offs
+                  </th>
+                  <th className="p-1.5 text-center min-w-[48px] border-r border-white/10 text-[10px] font-black text-slate-300 uppercase tracking-wider bg-[#181B26]" title="Unpaid leave days">
+                    Leave
+                  </th>
+                  <th className="p-1.5 text-center min-w-[48px] border-r border-white/10 text-[10px] font-black text-slate-300 uppercase tracking-wider bg-[#181B26]" title="Monthly target days">
+                    Target
+                  </th>
+                  <th className="p-1.5 text-center min-w-[85px] border-r border-white/10 text-[10px] font-black text-slate-300 uppercase tracking-wider bg-[#181B26]">
+                    Status
+                  </th>
+                  <th className="p-1.5 text-center min-w-[65px] border-r border-white/10 text-[10px] font-black text-amber-300 uppercase tracking-wider bg-[#181B26]" title="Fines issued (Rs)">
+                    Fines (₹)
+                  </th>
+                  <th className="p-1.5 text-center min-w-[65px] border-r border-white/10 text-[10px] font-black text-sky-300 uppercase tracking-wider bg-[#181B26]" title="Fines waived (Rs)">
+                    Waived (₹)
+                  </th>
+                  <th className="p-1.5 text-center min-w-[52px] text-[10px] font-black text-amber-400 uppercase tracking-wider bg-[#181B26]" title="Free passes left">
+                    Passes
+                  </th>
                 </tr>
-              ) : (
-                filteredRows.map((row) => (
-                  <tr
-                    key={row.staffId}
-                    className="hover:bg-white/[0.03] transition-colors group cursor-pointer"
-                    onClick={() => setSelectedStaff(row)}
-                  >
-                    {/* Sticky Staff Info Cell */}
-                    <td className="sticky left-0 z-10 bg-[#141620] group-hover:bg-[#181B26] p-2.5 border-r border-white/10 min-w-[240px] max-w-[260px] shadow-[4px_0_8px_-2px_rgba(0,0,0,0.5)] transition-colors">
-                      <div className="flex flex-col gap-1">
-                        <div className="flex items-baseline justify-between gap-1">
-                          <div className="flex items-center gap-1.5 min-w-0">
+              </thead>
+
+              {/* Table Body */}
+              <tbody className="divide-y divide-white/5 text-xs">
+                {filteredRows.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={model.calendarDays + 13}
+                      className="p-12 text-center text-slate-500 text-xs font-bold italic"
+                    >
+                      No staff records found for this month with attendance punches.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredRows.map((row) => (
+                    <tr
+                      key={row.staffId}
+                      className="hover:bg-white/[0.03] transition-colors group cursor-pointer"
+                      onClick={() => setSelectedStaff(row)}
+                    >
+                      {/* Sticky Staff Info Cell */}
+                      <td
+                        className={`sticky left-0 z-10 bg-[#141620] group-hover:bg-[#181B26] p-1.5 sm:p-2 border-r border-white/10 ${zoomStyles.nameColWidth} shadow-[4px_0_8px_-2px_rgba(0,0,0,0.5)] transition-colors`}
+                      >
+                        <div className="flex flex-col gap-0.5 min-w-0">
+                          <div className="flex items-center gap-1 min-w-0">
                             {/* Place Badge */}
                             <span
-                              className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-black shrink-0 ${
+                              className={`px-1 py-0.5 rounded font-mono font-black shrink-0 ${zoomStyles.placeFont} ${
                                 row.place === 1
                                   ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                                   : row.place !== null
                                   ? 'bg-white/10 text-slate-300 border border-white/10'
-                                  : 'bg-black/30 text-slate-500 border border-white/5 text-[9px]'
+                                  : 'bg-black/30 text-slate-500 border border-white/5'
                               }`}
-                              title={row.place !== null ? `Rank #${row.place}` : 'Hourly / No Shift (Not ranked)'}
+                              title={row.place !== null ? `Rank #${row.place}` : 'Hourly / Left / New (Not ranked)'}
                             >
                               {row.place !== null ? `#${row.place}` : '—'}
                             </span>
-                            <span className="text-xs font-bold text-white truncate" title={row.name}>
+                            <span className={`font-bold text-white truncate ${zoomStyles.nameFont}`} title={row.name}>
                               {row.name}
                             </span>
                           </div>
-                          <span className="text-[9px] uppercase px-1.5 py-0.5 rounded font-bold bg-white/5 text-slate-400 shrink-0">
-                            {row.branchId === 'daily' ? 'Daily' : 'Hyper'}
-                          </span>
-                        </div>
 
-                        <div className="flex items-center justify-between text-[10px] text-slate-400">
-                          <span className="truncate max-w-[130px]" title={row.department}>
-                            {row.department}
-                          </span>
-                          <span className="font-mono text-slate-500 text-[9px]">
-                            {row.shiftLabel}
-                          </span>
-                        </div>
-                      </div>
-                    </td>
-
-                    {/* Day Cells */}
-                    {model.dayColumns.map((col) => {
-                      const cell = row.days[col.dayNumber];
-                      if (!cell) {
-                        return (
-                          <td key={col.dayNumber} className="p-1 border-r border-white/5 text-center text-slate-700">
-                            —
-                          </td>
-                        );
-                      }
-
-                      // Day with punch
-                      if (cell.hasPunch) {
-                        return (
-                          <td
-                            key={col.dayNumber}
-                            className={`p-1 border-r border-white/5 text-center transition-all cursor-pointer hover:brightness-125 ${
-                              col.isSunday ? 'bg-red-950/10' : ''
-                            }`}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedCell({ staff: row, cell });
-                            }}
-                          >
-                            <div
-                              className={`rounded-lg py-1 px-0.5 flex flex-col items-center justify-center transition-all shadow-sm ${getCellClasses(
-                                cell
-                              )}`}
-                            >
-                              {/* IN time */}
-                              <span className="text-[10px] font-black leading-tight tracking-tight">
-                                {cell.formattedIn}
+                          {!zoomStyles.subHidden && (
+                            <div className="flex items-center justify-between text-[9px] text-slate-400">
+                              <span className="truncate max-w-[110px]" title={row.department}>
+                                {row.department}
                               </span>
-                              {/* OUT time small uncolored */}
-                              <span className="text-[8.5px] font-medium text-slate-400 leading-tight mt-0.5">
-                                {cell.formattedOut}
+                              <span className="font-mono text-slate-500 text-[8.5px]">
+                                {row.shiftLabel}
                               </span>
                             </div>
-                          </td>
-                        );
-                      }
+                          )}
+                        </div>
+                      </td>
 
-                      // FIX 2: Approved leave (both past and future!)
-                      if (cell.isApprovedLeave) {
+                      {/* Day Cells */}
+                      {model.dayColumns.map((col) => {
+                        const cell = row.days[col.dayNumber];
+                        if (!cell) {
+                          return (
+                            <td key={col.dayNumber} className={`${zoomStyles.dayPadding} border-r border-white/5 text-center text-slate-700 ${zoomStyles.dayColWidth}`}>
+                              —
+                            </td>
+                          );
+                        }
+
+                        // Day with punch
+                        if (cell.hasPunch) {
+                          return (
+                            <td
+                              key={col.dayNumber}
+                              className={`${zoomStyles.dayPadding} border-r border-white/5 text-center transition-all cursor-pointer hover:brightness-125 ${zoomStyles.dayColWidth} ${
+                                col.isSunday ? 'bg-red-950/10' : ''
+                              }`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedCell({ staff: row, cell });
+                              }}
+                            >
+                              {zoomStyles.showTimeText ? (
+                                <div
+                                  className={`rounded-lg py-1 px-0.5 flex flex-col items-center justify-center transition-all shadow-sm ${getCellClasses(
+                                    cell
+                                  )}`}
+                                >
+                                  {/* IN time */}
+                                  <span className="text-[10px] font-black leading-tight tracking-tight">
+                                    {cell.formattedIn}
+                                  </span>
+                                  {/* OUT time */}
+                                  <span className="text-[8.5px] font-medium text-slate-400 leading-tight mt-0.5">
+                                    {cell.formattedOut}
+                                  </span>
+                                </div>
+                              ) : (
+                                <div
+                                  className={`w-full ${zoomStyles.dayHeight} rounded-sm transition-all shadow-sm ${
+                                    cell.isHourly
+                                      ? 'bg-slate-600'
+                                      : cell.colorCode === 'green'
+                                      ? 'bg-[#3CC24A]'
+                                      : cell.colorCode === 'yellow'
+                                      ? 'bg-[#FFFF00]'
+                                      : cell.colorCode === 'orange'
+                                      ? 'bg-[#FFA500]'
+                                      : 'bg-[#FF0000]'
+                                  }`}
+                                  title={`Day ${col.dayNumber}: ${cell.formattedIn} (${cell.colorCode})`}
+                                />
+                              )}
+                            </td>
+                          );
+                        }
+
+                        // Approved leave
+                        if (cell.isApprovedLeave) {
+                          return (
+                            <td
+                              key={col.dayNumber}
+                              className={`${zoomStyles.dayPadding} border-r border-white/5 text-center ${zoomStyles.dayColWidth} ${
+                                col.isSunday ? 'bg-red-950/10' : ''
+                              }`}
+                            >
+                              {zoomStyles.showTimeText ? (
+                                <div
+                                  className="rounded-lg py-1 px-0.5 bg-slate-800/80 border border-slate-700/60 text-slate-300 font-black text-[9px] flex items-center justify-center gap-0.5 shadow-sm"
+                                  title="Approved Leave"
+                                >
+                                  <span>L</span>
+                                  <Check size={10} className="text-emerald-400 stroke-[3]" />
+                                </div>
+                              ) : (
+                                <div
+                                  className={`w-full ${zoomStyles.dayHeight} rounded-sm bg-slate-800 border border-slate-700 text-emerald-400 font-black flex items-center justify-center ${zoomStyles.dayFont}`}
+                                  title="Approved Leave"
+                                >
+                                  L
+                                </div>
+                              )}
+                            </td>
+                          );
+                        }
+
+                        // Future day without punch or leave: stays blank
+                        if (cell.isFuture) {
+                          return (
+                            <td
+                              key={col.dayNumber}
+                              className={`${zoomStyles.dayPadding} border-r border-white/5 text-center ${zoomStyles.dayColWidth} ${
+                                col.isSunday ? 'bg-red-950/5' : ''
+                              }`}
+                            >
+                              <div className={`w-full ${zoomStyles.dayHeight}`} />
+                            </td>
+                          );
+                        }
+
+                        // Past day with no punch
                         return (
                           <td
                             key={col.dayNumber}
-                            className={`p-1 border-r border-white/5 text-center ${
+                            className={`${zoomStyles.dayPadding} border-r border-white/5 text-center ${zoomStyles.dayColWidth} ${
                               col.isSunday ? 'bg-red-950/10' : ''
                             }`}
                           >
-                            <div
-                              className="rounded-lg py-1 px-0.5 bg-slate-800/80 border border-slate-700/60 text-slate-300 font-black text-[9px] flex items-center justify-center gap-0.5 shadow-sm"
-                              title="Approved Leave"
-                            >
-                              <span>L</span>
-                              <Check size={10} className="text-emerald-400 stroke-[3]" />
-                            </div>
+                            {zoomStyles.showTimeText ? (
+                              <div
+                                className="rounded-lg h-7 bg-slate-800/40 border border-white/5 flex items-center justify-center text-[9px] text-slate-600 font-bold"
+                                title="No Punch"
+                              >
+                                —
+                              </div>
+                            ) : (
+                              <div
+                                className={`w-full ${zoomStyles.dayHeight} rounded-sm bg-[#BFBFBF]/40 border border-white/5`}
+                                title="No Punch"
+                              />
+                            )}
                           </td>
                         );
-                      }
+                      })}
 
-                      // Future day without punch or leave: stays blank
-                      if (cell.isFuture) {
-                        return (
-                          <td
-                            key={col.dayNumber}
-                            className={`p-1 border-r border-white/5 text-center ${
-                              col.isSunday ? 'bg-red-950/5' : ''
+                      {/* Right Summary Columns */}
+                      <td className={`p-1.5 text-center border-r border-white/10 font-mono font-black text-emerald-400 ${zoomStyles.summaryFont}`}>
+                        {row.counts.green}
+                      </td>
+                      <td className={`p-1.5 text-center border-r border-white/10 font-mono font-black text-amber-400 ${zoomStyles.summaryFont}`}>
+                        {row.counts.yellow}
+                      </td>
+                      <td className={`p-1.5 text-center border-r border-white/10 font-mono font-black text-orange-400 ${zoomStyles.summaryFont}`}>
+                        {row.counts.orange}
+                      </td>
+                      <td className={`p-1.5 text-center border-r border-white/10 font-mono font-black text-rose-400 ${zoomStyles.summaryFont}`}>
+                        {row.counts.red}
+                      </td>
+                      <td className={`p-1.5 text-center border-r border-white/10 font-mono text-slate-400 font-bold ${zoomStyles.summaryFont}`}>
+                        {row.noPunchPastDays}
+                      </td>
+                      <td className={`p-1.5 text-center border-r border-white/10 font-mono text-slate-400 font-bold ${zoomStyles.summaryFont}`}>
+                        {row.weeklyOffsUsed}
+                      </td>
+                      <td className={`p-1.5 text-center border-r border-white/10 font-mono text-slate-400 font-bold ${zoomStyles.summaryFont}`}>
+                        {row.leaveDays}
+                      </td>
+                      <td className={`p-1.5 text-center border-r border-white/10 font-mono font-bold text-white ${zoomStyles.summaryFont}`}>
+                        {!row.hasShift || row.isNew ? '—' : row.targetDays}
+                      </td>
+                      <td className="p-1.5 text-center border-r border-white/10">
+                        <div className="flex flex-col items-center justify-center gap-0.5">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-tight whitespace-nowrap ${
+                              row.statusBadge === 'FULL TARGET' || row.statusBadge === 'ON TRACK'
+                                ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30'
+                                : row.statusBadge === 'NO SHIFT SET'
+                                ? 'bg-slate-800 text-slate-400 border border-slate-700/50'
+                                : 'bg-rose-950 text-rose-400 border border-rose-500/30'
                             }`}
                           >
-                            <div className="h-7 w-full"></div>
-                          </td>
-                        );
-                      }
-
-                      // Past day with no punch
-                      return (
-                        <td
-                          key={col.dayNumber}
-                          className={`p-1 border-r border-white/5 text-center ${
-                            col.isSunday ? 'bg-red-950/10' : ''
-                          }`}
-                        >
-                          <div
-                            className="rounded-lg h-7 bg-slate-800/40 border border-white/5 flex items-center justify-center text-[9px] text-slate-600 font-bold"
-                            title="No Punch"
-                          >
-                            —
-                          </div>
-                        </td>
-                      );
-                    })}
-
-                    {/* Right Summary Columns */}
-                    <td className="p-1.5 text-center border-r border-white/10 font-mono font-black text-emerald-400">
-                      {row.counts.green}
-                    </td>
-                    <td className="p-1.5 text-center border-r border-white/10 font-mono font-black text-amber-400">
-                      {row.counts.yellow}
-                    </td>
-                    <td className="p-1.5 text-center border-r border-white/10 font-mono font-black text-orange-400">
-                      {row.counts.orange}
-                    </td>
-                    <td className="p-1.5 text-center border-r border-white/10 font-mono font-black text-rose-400">
-                      {row.counts.red}
-                    </td>
-                    <td className="p-1.5 text-center border-r border-white/10 font-mono text-slate-400 font-bold">
-                      {row.noPunchPastDays}
-                    </td>
-                    <td className="p-1.5 text-center border-r border-white/10 font-mono text-slate-400 font-bold">
-                      {row.weeklyOffsUsed}
-                    </td>
-                    <td className="p-1.5 text-center border-r border-white/10 font-mono text-slate-400 font-bold">
-                      {row.leaveDays}
-                    </td>
-                    <td className="p-1.5 text-center border-r border-white/10 font-mono font-bold text-white">
-                      {!row.hasShift ? '—' : row.targetDays}
-                    </td>
-                    <td className="p-1.5 text-center border-r border-white/10">
-                      <div className="flex flex-col items-center justify-center gap-0.5">
-                        <span
-                          className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-tight whitespace-nowrap ${
-                            row.statusBadge === 'FULL TARGET' || row.statusBadge === 'ON TRACK'
-                              ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30'
-                              : row.statusBadge === 'NO SHIFT SET'
-                              ? 'bg-slate-800 text-slate-400 border border-slate-700/50'
-                              : 'bg-rose-950 text-rose-400 border border-rose-500/30'
-                          }`}
-                        >
-                          {row.statusBadge}
-                        </span>
-                        {row.isCurrentMonth && row.progressText && row.hasShift && (
-                          <span className="text-[8.5px] font-mono text-slate-400 font-semibold whitespace-nowrap">
-                            {row.progressText}
+                            {row.statusBadge}
                           </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="p-1.5 text-center border-r border-white/10 font-mono font-bold text-amber-300">
-                      ₹{row.finesIssued}
-                    </td>
-                    <td className="p-1.5 text-center border-r border-white/10 font-mono font-bold text-sky-300">
-                      ₹{row.finesWaived}
-                    </td>
-                    <td className="p-1.5 text-center font-mono font-black text-amber-400">
-                      {row.freePassesLeft}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* MOBILE COMPACT CARDS VIEW (Screens < 768px) */}
-      <div className="block md:hidden space-y-3.5">
-        {filteredRows.length === 0 ? (
-          <div className="bg-[#12141C] border border-white/10 rounded-2xl p-8 text-center text-slate-500 text-xs font-bold italic">
-            No staff records found for this month with attendance punches.
+                          {row.isCurrentMonth && row.progressText && row.hasShift && (
+                            <span className="text-[8.5px] font-mono text-slate-400 font-semibold whitespace-nowrap">
+                              {row.progressText}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className={`p-1.5 text-center border-r border-white/10 font-mono font-bold text-amber-300 ${zoomStyles.summaryFont}`}>
+                        ₹{row.finesIssued}
+                      </td>
+                      <td className={`p-1.5 text-center border-r border-white/10 font-mono font-bold text-sky-300 ${zoomStyles.summaryFont}`}>
+                        ₹{row.finesWaived}
+                      </td>
+                      <td className={`p-1.5 text-center font-mono font-black text-amber-400 ${zoomStyles.summaryFont}`}>
+                        {row.freePassesLeft}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
-        ) : (
-          filteredRows.map((row) => (
-            <div
-              key={row.staffId}
-              onClick={() => setSelectedStaff(row)}
-              className="bg-[#141620] border border-white/10 hover:border-white/20 rounded-2xl p-3.5 shadow-lg space-y-3 cursor-pointer transition-all active:scale-[0.99]"
-            >
-              {/* Card Header: Name, Rank, Shift, Status */}
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-black shrink-0 ${
-                        row.place === 1
-                          ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-                          : row.place !== null
-                          ? 'bg-white/10 text-slate-300 border border-white/10'
-                          : 'bg-black/30 text-slate-500 border border-white/5 text-[9px]'
-                      }`}
-                    >
-                      {row.place !== null ? `#${row.place}` : 'Unranked'}
-                    </span>
-                    <h4 className="text-sm font-bold text-white truncate">{row.name}</h4>
-                  </div>
-                  <p className="text-[10px] text-slate-400 mt-0.5">
-                    {row.branchId === 'daily' ? 'Daily' : 'Hyper'} • {row.department} •{' '}
-                    <span className="font-mono text-slate-500">{row.shiftLabel}</span>
-                  </p>
-                </div>
-
-                {/* Status Badge */}
-                <div className="flex flex-col items-end gap-1 shrink-0">
-                  <span
-                    className={`px-2 py-0.5 rounded text-[9.5px] font-black uppercase tracking-tight ${
-                      row.statusBadge === 'FULL TARGET' || row.statusBadge === 'ON TRACK'
-                        ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30'
-                        : row.statusBadge === 'NO SHIFT SET'
-                        ? 'bg-slate-800 text-slate-400 border border-slate-700/50'
-                        : 'bg-rose-950 text-rose-400 border border-rose-500/30'
-                    }`}
-                  >
-                    {row.statusBadge}
-                  </span>
-                  {row.isCurrentMonth && row.progressText && row.hasShift && (
-                    <span className="text-[9px] font-mono text-slate-400 font-semibold">
-                      {row.progressText}
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Compact Strip of 28-31 Colored Dots */}
-              <div className="bg-black/40 border border-white/5 rounded-xl p-2.5">
-                <div className="flex items-center justify-between text-[9px] text-slate-500 font-bold mb-1.5 px-0.5">
-                  <span>Day 1</span>
-                  <span>Days of Month</span>
-                  <span>Day {model.calendarDays}</span>
-                </div>
-                <div className="grid grid-cols-11 sm:grid-cols-16 gap-1.5">
-                  {model.dayColumns.map((col) => {
-                    const cell = row.days[col.dayNumber];
-                    if (!cell) return null;
-                    return (
-                      <button
-                        key={col.dayNumber}
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          if (cell.hasPunch) {
-                            setSelectedCell({ staff: row, cell });
-                          }
-                        }}
-                        className={`h-4 rounded-md flex items-center justify-center text-[7.5px] font-bold transition-all ${getDotClasses(
-                          cell
-                        )} ${cell.hasPunch ? 'cursor-pointer active:scale-90 text-black font-black' : ''}`}
-                        title={`Day ${col.dayNumber}: ${
-                          cell.hasPunch
-                            ? `${cell.formattedIn} - ${cell.formattedOut} (${cell.colorCode})`
-                            : cell.isApprovedLeave
-                            ? 'Approved Leave'
-                            : cell.isFuture
-                            ? 'Future'
-                            : 'No Punch'
+        </div>
+      ) : (
+        /* CARDS VIEW - Responsive Phone & Desktop Cards */
+        <div className="space-y-3.5">
+          {filteredRows.length === 0 ? (
+            <div className="bg-[#12141C] border border-white/10 rounded-2xl p-8 text-center text-slate-500 text-xs font-bold italic">
+              No staff records found for this month with attendance punches.
+            </div>
+          ) : (
+            filteredRows.map((row) => (
+              <div
+                key={row.staffId}
+                onClick={() => setSelectedStaff(row)}
+                className="bg-[#141620] border border-white/10 hover:border-white/20 rounded-2xl p-3.5 shadow-lg space-y-3 cursor-pointer transition-all active:scale-[0.99]"
+              >
+                {/* Card Header: Name, Rank, Shift, Status */}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-mono font-black shrink-0 ${
+                          row.place === 1
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                            : row.place !== null
+                            ? 'bg-white/10 text-slate-300 border border-white/10'
+                            : 'bg-black/30 text-slate-500 border border-white/5 text-[9px]'
                         }`}
                       >
-                        {cell.isApprovedLeave ? 'L' : ''}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
+                        {row.place !== null ? `#${row.place}` : '—'}
+                      </span>
+                      <h4 className="text-sm font-bold text-white truncate">{row.name}</h4>
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      {row.branchId === 'daily' ? 'Daily' : 'Hyper'} • {row.department} •{' '}
+                      <span className="font-mono text-slate-500">{row.shiftLabel}</span>
+                    </p>
+                  </div>
 
-              {/* Summary Numbers Row: Green / Late / Leave / Fines */}
-              <div className="grid grid-cols-4 gap-2 pt-1 border-t border-white/5 text-center">
-                <div className="bg-emerald-950/30 border border-emerald-500/20 rounded-lg p-1.5">
-                  <div className="text-[9px] text-emerald-400 font-bold uppercase">On Time</div>
-                  <div className="text-xs font-black text-emerald-300 font-mono">
-                    {row.counts.green}
+                  {/* Status Badge */}
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <span
+                      className={`px-2 py-0.5 rounded text-[9.5px] font-black uppercase tracking-tight ${
+                        row.statusBadge === 'FULL TARGET' || row.statusBadge === 'ON TRACK'
+                          ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30'
+                          : row.statusBadge === 'NO SHIFT SET'
+                          ? 'bg-slate-800 text-slate-400 border border-slate-700/50'
+                          : 'bg-rose-950 text-rose-400 border border-rose-500/30'
+                      }`}
+                    >
+                      {row.statusBadge}
+                    </span>
+                    {row.isCurrentMonth && row.progressText && row.hasShift && (
+                      <span className="text-[9px] font-mono text-slate-400 font-semibold">
+                        {row.progressText}
+                      </span>
+                    )}
                   </div>
                 </div>
-                <div className="bg-amber-950/30 border border-amber-500/20 rounded-lg p-1.5">
-                  <div className="text-[9px] text-amber-400 font-bold uppercase">Late</div>
-                  <div className="text-xs font-black text-amber-300 font-mono">
-                    {row.counts.yellow + row.counts.orange + row.counts.red}
+
+                {/* Compact Strip of 28-31 Colored Dots with Date Number Inside */}
+                <div className="bg-black/40 border border-white/5 rounded-xl p-2.5">
+                  <div className="flex items-center justify-between text-[9px] text-slate-500 font-bold mb-1.5 px-0.5">
+                    <span>Day 1</span>
+                    <span>Days of Month</span>
+                    <span>Day {model.calendarDays}</span>
+                  </div>
+                  <div className="grid grid-cols-11 sm:grid-cols-16 gap-1.5">
+                    {model.dayColumns.map((col) => {
+                      const cell = row.days[col.dayNumber];
+                      if (!cell) return null;
+                      return (
+                        <button
+                          key={col.dayNumber}
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (cell.hasPunch) {
+                              setSelectedCell({ staff: row, cell });
+                            }
+                          }}
+                          className={`h-5 rounded flex items-center justify-center text-[10px] font-black transition-all ${getDotClasses(
+                            cell
+                          )} ${cell.hasPunch ? 'cursor-pointer active:scale-90' : ''}`}
+                          title={`Day ${col.dayNumber}: ${
+                            cell.hasPunch
+                              ? `${cell.formattedIn} - ${cell.formattedOut} (${cell.colorCode})`
+                              : cell.isApprovedLeave
+                              ? 'Approved Leave'
+                              : cell.isFuture
+                              ? 'Future'
+                              : 'No Punch'
+                          }`}
+                        >
+                          {cell.isApprovedLeave ? 'L' : col.dayNumber}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
-                <div className="bg-slate-800/40 border border-white/10 rounded-lg p-1.5">
-                  <div className="text-[9px] text-slate-400 font-bold uppercase">Leave</div>
-                  <div className="text-xs font-black text-white font-mono">
-                    {row.leaveDays}d
+
+                {/* Summary Numbers Row: Green / Late / Leave / Fines */}
+                <div className="grid grid-cols-4 gap-2 pt-1 border-t border-white/5 text-center">
+                  <div className="bg-emerald-950/30 border border-emerald-500/20 rounded-lg p-1.5">
+                    <div className="text-[9px] text-emerald-400 font-bold uppercase">On Time</div>
+                    <div className="text-xs font-black text-emerald-300 font-mono">
+                      {row.counts.green}
+                    </div>
                   </div>
-                </div>
-                <div className="bg-rose-950/30 border border-rose-500/20 rounded-lg p-1.5">
-                  <div className="text-[9px] text-rose-400 font-bold uppercase">Fines</div>
-                  <div className="text-xs font-black text-rose-300 font-mono">
-                    ₹{row.finesIssued}
+                  <div className="bg-amber-950/30 border border-amber-500/20 rounded-lg p-1.5">
+                    <div className="text-[9px] text-amber-400 font-bold uppercase">Late</div>
+                    <div className="text-xs font-black text-amber-300 font-mono">
+                      {row.counts.yellow + row.counts.orange + row.counts.red}
+                    </div>
+                  </div>
+                  <div className="bg-slate-800/40 border border-white/10 rounded-lg p-1.5">
+                    <div className="text-[9px] text-slate-400 font-bold uppercase">Leave</div>
+                    <div className="text-xs font-black text-white font-mono">
+                      {row.leaveDays}d
+                    </div>
+                  </div>
+                  <div className="bg-rose-950/30 border border-rose-500/20 rounded-lg p-1.5">
+                    <div className="text-[9px] text-rose-400 font-bold uppercase">Fines</div>
+                    <div className="text-xs font-black text-rose-300 font-mono">
+                      ₹{row.finesIssued}
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
-          ))
-        )}
-      </div>
+            ))
+          )}
+        </div>
+      )}
 
       {/* STAFF SIDE-OVER PANEL (Desktop) / BOTTOM SHEET (Phone) */}
       {activeStaffDetail && (
@@ -1067,6 +1370,229 @@ export default function InTimeGrid({
             >
               Close
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* EXPORT OPTIONS MODAL */}
+      {showExportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="bg-[#161824] border border-white/10 rounded-2xl w-full max-w-[420px] shadow-2xl p-4 sm:p-5 text-white space-y-4 max-h-[92vh] overflow-y-auto">
+            {/* Modal Header */}
+            <div className="flex items-start justify-between gap-3 pb-3 border-b border-white/10">
+              <div>
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <Download size={18} className="text-amber-400" />
+                  <span>Export In-Time Grid</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Month: <span className="font-semibold text-slate-200">{monthLabel}</span>
+                </p>
+              </div>
+              <button
+                onClick={() => setShowExportModal(false)}
+                disabled={isExporting}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/5 transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Format Selection */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-slate-300 uppercase tracking-wider">
+                1. Format
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setExportFormat('pdf')}
+                  disabled={isExporting}
+                  className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl border text-xs font-bold transition-all ${
+                    exportFormat === 'pdf'
+                      ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
+                      : 'bg-black/30 border-white/10 text-slate-400 hover:text-white hover:border-white/20'
+                  }`}
+                >
+                  <FileText size={16} />
+                  <span>PDF (Landscape A4)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setExportFormat('excel')}
+                  disabled={isExporting}
+                  className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl border text-xs font-bold transition-all ${
+                    exportFormat === 'excel'
+                      ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
+                      : 'bg-black/30 border-white/10 text-slate-400 hover:text-white hover:border-white/20'
+                  }`}
+                >
+                  <FileSpreadsheet size={16} />
+                  <span>Excel (.xlsx)</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Branch Selection */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-slate-300 uppercase tracking-wider">
+                  2. Branch Scope
+                </label>
+                {allowedBranch && (
+                  <span className="text-[10px] text-amber-400 font-semibold">
+                    (Role restricted)
+                  </span>
+                )}
+              </div>
+              {allowedBranch ? (
+                <div className="px-3 py-2 bg-black/40 border border-white/10 rounded-xl text-xs font-semibold text-slate-300">
+                  {allowedBranch === 'daily' ? 'Daily Only' : 'Hypermarket Only'}
+                </div>
+              ) : (
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setExportBranch('both')}
+                    disabled={isExporting}
+                    className={`py-2 px-2 rounded-xl border text-xs font-bold text-center transition-all ${
+                      exportBranch === 'both'
+                        ? 'bg-white/15 border-white/40 text-white'
+                        : 'bg-black/30 border-white/10 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Both
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setExportBranch('daily')}
+                    disabled={isExporting}
+                    className={`py-2 px-2 rounded-xl border text-xs font-bold text-center transition-all ${
+                      exportBranch === 'daily'
+                        ? 'bg-white/15 border-white/40 text-white'
+                        : 'bg-black/30 border-white/10 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Daily
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setExportBranch('hypermarket')}
+                    disabled={isExporting}
+                    className={`py-2 px-2 rounded-xl border text-xs font-bold text-center transition-all ${
+                      exportBranch === 'hypermarket'
+                        ? 'bg-white/15 border-white/40 text-white'
+                        : 'bg-black/30 border-white/10 text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Hypermarket
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Sections To Include */}
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-slate-300 uppercase tracking-wider">
+                3. Sections
+              </label>
+              <div className="space-y-2 bg-black/30 border border-white/10 rounded-xl p-3">
+                {/* Summary page */}
+                <label className="flex items-center gap-2.5 text-xs text-white cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={includeSummary}
+                    onChange={(e) => setIncludeSummary(e.target.checked)}
+                    disabled={isExporting}
+                    className="w-4 h-4 rounded border-white/20 bg-slate-800 text-amber-500 focus:ring-0 focus:ring-offset-0 cursor-pointer"
+                  />
+                  <span>Summary page (rankings, counts, fines)</span>
+                </label>
+
+                {/* Colour grid */}
+                <label className="flex items-center gap-2.5 text-xs text-white cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={includeColourGrid}
+                    onChange={(e) => setIncludeColourGrid(e.target.checked)}
+                    disabled={isExporting}
+                    className="w-4 h-4 rounded border-white/20 bg-slate-800 text-amber-500 focus:ring-0 focus:ring-offset-0 cursor-pointer"
+                  />
+                  <span>Colour grid (all days with IN/OUT punches)</span>
+                </label>
+
+                {/* Per-staff fines */}
+                <div className="space-y-1.5 pt-1 border-t border-white/5">
+                  <label className="flex items-center gap-2.5 text-xs text-white cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={includeFines}
+                      onChange={(e) => setIncludeFines(e.target.checked)}
+                      disabled={isExporting}
+                      className="w-4 h-4 rounded border-white/20 bg-slate-800 text-amber-500 focus:ring-0 focus:ring-offset-0 cursor-pointer"
+                    />
+                    <span>Per-staff fines pages (late days detail)</span>
+                  </label>
+
+                  {/* Sub-tick: Only staff who have fines */}
+                  <label
+                    className={`flex items-center gap-2 text-xs ml-6 cursor-pointer select-none ${
+                      includeFines ? 'text-slate-300' : 'text-slate-600 cursor-not-allowed'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={finesOnlyWithFines}
+                      onChange={(e) => setFinesOnlyWithFines(e.target.checked)}
+                      disabled={!includeFines || isExporting}
+                      className="w-3.5 h-3.5 rounded border-white/20 bg-slate-800 text-amber-500 focus:ring-0 focus:ring-offset-0 cursor-pointer disabled:opacity-40"
+                    />
+                    <span className="text-[11px]">Only staff who have fines</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            {/* Error Message */}
+            {exportError && (
+              <p className="text-xs text-rose-400 font-semibold bg-rose-950/40 border border-rose-500/30 rounded-xl p-2.5">
+                {exportError}
+              </p>
+            )}
+
+            {/* Modal Actions */}
+            <div className="flex items-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowExportModal(false)}
+                disabled={isExporting}
+                className="w-1/3 py-2.5 bg-white/5 hover:bg-white/10 text-slate-300 font-bold rounded-xl text-xs transition-all active:scale-95 border border-white/10"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleRunExport}
+                disabled={isExporting || (!includeSummary && !includeColourGrid && !includeFines)}
+                className={`w-2/3 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 shadow-lg active:scale-95 ${
+                  isExporting || (!includeSummary && !includeColourGrid && !includeFines)
+                    ? 'bg-amber-600/40 text-slate-400 cursor-not-allowed'
+                    : 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-amber-500/20'
+                }`}
+              >
+                {isExporting ? (
+                  <>
+                    <Clock size={14} className="animate-spin" />
+                    <span>Generating...</span>
+                  </>
+                ) : (
+                  <>
+                    <Download size={14} />
+                    <span>Download {exportFormat.toUpperCase()}</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

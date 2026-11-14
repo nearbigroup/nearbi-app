@@ -25,6 +25,11 @@ export interface StaffRawRecord {
   pay_type?: string | null;
   shift_id?: string | null;
   off_days_per_month?: number | null;
+  join_date?: string | null;
+  active?: boolean | null;
+  is_resigned?: boolean | null;
+  is_left?: boolean | null;
+  is_new?: boolean | null;
   shift?: {
     id?: string;
     label?: string;
@@ -122,7 +127,11 @@ export interface StaffGridRow {
   progressText?: string;
   isCurrentMonth: boolean;
   shortfall: number;
-  place: number | null; // null for hourly/no-shift
+  paceBehind: number;
+  place: number | null; // null for hourly/no-shift/left/new
+  isLeft: boolean;
+  isNew: boolean;
+  joinDate?: string | null;
   counts: {
     green: number;
     yellow: number;
@@ -245,6 +254,15 @@ export function buildInTimeGridModel(
     const offDays = Number(st.off_days_per_month || 0);
     const isExempt = exemptStaffIds.has(st.id);
 
+    // Left staff check
+    const isLeft = !!(st.is_resigned || st.active === false || st.is_left || st.name.endsWith('(left)'));
+
+    // New staff check: joined during this month (based on join_date)
+    const isNew = !isLeft && !!(st.is_new || (st.join_date && st.join_date.startsWith(monthPrefix)) || st.name.endsWith('(new)'));
+
+    const cleanBaseName = st.name.replace(/\s*\((left|new)\)\s*$/i, '').trim();
+    const displayName = isLeft ? `${cleanBaseName} (left)` : isNew ? `${cleanBaseName} (new)` : cleanBaseName;
+
     let daysWorked = 0;
     let noPunchPastDays = 0;
     let approvedLeaveDays = 0;
@@ -256,6 +274,7 @@ export function buildInTimeGridModel(
       const dt = new Date(year, month - 1, d);
       const dayOfWeek = WEEKDAYS[dt.getDay()];
       const isFuture = dateStr > todayStr;
+      const isToday = dateStr === todayStr;
       const key = `${st.id}_${dateStr}`;
       const att = attMap.get(key);
       const hasApprovedLeave = leaveMap.has(key);
@@ -269,8 +288,8 @@ export function buildInTimeGridModel(
 
       if (hasCheckIn) {
         daysWorked++;
-      } else if (!isFuture) {
-        // Only past days count as no-punch
+      } else if (!isFuture && !isToday) {
+        // Today does not count as no-punch until day is over; only past days strictly before today count
         noPunchPastDays++;
       }
 
@@ -298,6 +317,9 @@ export function buildInTimeGridModel(
         formattedOut = '—';
       }
 
+      // If today has no punch, today's cell is blank like future days
+      const isBlank = isFuture || (isToday && !hasCheckIn);
+
       days[d] = {
         date: dateStr,
         dayNumber: d,
@@ -313,7 +335,7 @@ export function buildInTimeGridModel(
         overrideShiftStart: att?.override_shift_start || null,
         isHourly,
         hasPunch: hasCheckIn,
-        isFuture,
+        isFuture: isBlank,
         isApprovedLeave: !hasCheckIn && hasApprovedLeave,
       };
     }
@@ -329,15 +351,19 @@ export function buildInTimeGridModel(
     const leaveDays = Math.max(0, noPunchPastDays - weeklyOffsUsed);
 
     // Full-month TARGET = calendar days - off_days_per_month - approvedLeaveDays
-    const targetDays = !hasShift ? 0 : Math.max(0, calendarDays - offDays - approvedLeaveDays);
+    // For new staff: do not invent a pro-rated target, show counts only (target 0)
+    const targetDays = (!hasShift || isNew) ? 0 : Math.max(0, calendarDays - offDays - approvedLeaveDays);
 
-    // Shortfall based on green days vs full-month target (used for ranking)
-    const shortfall = !hasShift ? 9999 : Math.max(0, targetDays - counts.green);
+    // Shortfall based on green days vs full-month target (used for past months ranking)
+    const shortfall = (!hasShift || isNew) ? 9999 : Math.max(0, targetDays - counts.green);
 
     // PART B: Mid-month wording for current month in progress
-    // days passed = calendar days up to and including today
+    // If staff member has punched today, today is counted in days so far.
+    // If not punched today, today is NOT counted in days so far.
+    const todayDayNumber = parseInt(todayStr.split('-')[2], 10);
+    const hasPunchedToday = !!days[todayDayNumber]?.hasPunch;
     const daysPassed = isCurrentMonth
-      ? Math.min(calendarDays, parseInt(todayStr.split('-')[2], 10))
+      ? Math.min(calendarDays, hasPunchedToday ? todayDayNumber : Math.max(0, todayDayNumber - 1))
       : calendarDays;
 
     let approvedLeaveDaysPassed = 0;
@@ -355,19 +381,26 @@ export function buildInTimeGridModel(
     let statusText = '';
     let statusBadge = '';
     let progressText = '';
+    let paceBehind = 0;
 
     if (!hasShift) {
       statusText = 'NO SHIFT SET';
       statusBadge = 'NO SHIFT SET';
+    } else if (isNew) {
+      statusText = 'NEW';
+      statusBadge = 'NEW';
+      paceBehind = 9999;
     } else if (isCurrentMonth) {
       progressText = `${X} of ${Y} days so far`;
       if (X >= Y) {
         statusBadge = 'ON TRACK';
         statusText = 'ON TRACK';
+        paceBehind = 0;
       } else {
         const behind = Y - X;
         statusBadge = `${behind} BEHIND`;
         statusText = `${behind} BEHIND`;
+        paceBehind = behind;
       }
     } else {
       // Past months: keep FULL TARGET / N DAYS SHORT
@@ -376,8 +409,9 @@ export function buildInTimeGridModel(
         statusText = 'FULL TARGET';
       } else {
         const short = targetDays - counts.green;
-        statusBadge = `${short} DAYS SHORT`;
-        statusText = `${short} DAYS SHORT`;
+        const shortWord = short === 1 ? '1 DAY SHORT' : `${short} DAYS SHORT`;
+        statusBadge = shortWord;
+        statusText = shortWord;
       }
     }
 
@@ -454,7 +488,7 @@ export function buildInTimeGridModel(
 
     rows.push({
       staffId: st.id,
-      name: st.name,
+      name: displayName,
       branchId: st.branch_id,
       department: st.department || 'General',
       payType: st.pay_type || 'monthly',
@@ -477,7 +511,11 @@ export function buildInTimeGridModel(
       progressText,
       isCurrentMonth,
       shortfall,
+      paceBehind,
       place: null, // Assigned below in ranking pass
+      isLeft,
+      isNew,
+      joinDate: st.join_date || null,
       counts,
       finesIssued,
       finesWaived,
@@ -488,17 +526,36 @@ export function buildInTimeGridModel(
     });
   }
 
-  // Dense ranking pass across all staff with a shift
-  const eligibleForRanking = rows.filter((r) => r.hasShift && !r.isHourly);
-  const uniqueShortfalls = Array.from(
-    new Set(eligibleForRanking.map((r) => r.shortfall))
-  ).sort((a, b) => a - b);
+  // Dense ranking pass across all staff with a shift who have not left and are not new
+  const eligibleForRanking = rows.filter(
+    (r) => r.hasShift && !r.isHourly && !r.isLeft && !r.isNew
+  );
 
-  for (const r of rows) {
-    if (r.hasShift && !r.isHourly) {
-      r.place = uniqueShortfalls.indexOf(r.shortfall) + 1;
-    } else {
-      r.place = null; // not ranked (e.g. SINAN, Hanoon)
+  if (isCurrentMonth) {
+    // Current month: rank by paceBehind ascending (ON TRACK = 0 behind = 1st, ties share place)
+    const uniqueBehind = Array.from(
+      new Set(eligibleForRanking.map((r) => r.paceBehind))
+    ).sort((a, b) => a - b);
+
+    for (const r of rows) {
+      if (r.hasShift && !r.isHourly && !r.isLeft && !r.isNew) {
+        r.place = uniqueBehind.indexOf(r.paceBehind) + 1;
+      } else {
+        r.place = null; // not ranked (left, new, hourly, no-shift)
+      }
+    }
+  } else {
+    // Past months: rank by shortfall to full target ascending
+    const uniqueShortfalls = Array.from(
+      new Set(eligibleForRanking.map((r) => r.shortfall))
+    ).sort((a, b) => a - b);
+
+    for (const r of rows) {
+      if (r.hasShift && !r.isHourly && !r.isLeft && !r.isNew) {
+        r.place = uniqueShortfalls.indexOf(r.shortfall) + 1;
+      } else {
+        r.place = null; // not ranked (left, new, hourly, no-shift)
+      }
     }
   }
 
