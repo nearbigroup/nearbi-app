@@ -608,14 +608,57 @@ export default function ApprovalsPage() {
     setBulkProgress({ current: 0, total: selectedCount });
 
     try {
-      const updateField = action === 'waived' ? { waived: true } : { confirmed: true };
       let currentCount = 0;
+      let actualUpdatedCount = 0;
+      const updatedRecordIds: string[] = [];
 
       for (const fine of selectedFines) {
-        await supabase
-          .from('late_fines')
-          .update(updateField)
-          .eq('id', fine.id);
+        currentCount++;
+        setBulkProgress({ current: currentCount, total: selectedCount });
+
+        // Guard: if confirming, strictly leave already-waived or already-confirmed fines alone
+        if (action === 'confirmed') {
+          if (fine.waived || fine.confirmed) {
+            continue;
+          }
+
+          const { error: updateErr, data } = await supabase
+            .from('late_fines')
+            .update({
+              confirmed: true,
+              confirmed_by: user?.email || 'admin'
+            })
+            .eq('id', fine.id)
+            .eq('confirmed', false)
+            .eq('waived', false)
+            .select('id');
+
+          if (updateErr || !data || data.length === 0) {
+            continue;
+          }
+          actualUpdatedCount++;
+          updatedRecordIds.push(fine.id);
+        } else {
+          // action === 'waived'
+          if (fine.waived) continue;
+
+          const { error: updateErr, data } = await supabase
+            .from('late_fines')
+            .update({
+              waived: true,
+              waived_by: user?.email || 'admin',
+              waived_reason: waiverReason
+            })
+            .eq('id', fine.id)
+            .eq('waived', false)
+            .select('id');
+
+          if (updateErr || !data || data.length === 0) {
+            continue;
+          }
+          actualUpdatedCount++;
+          updatedRecordIds.push(fine.id);
+        }
 
         try {
           await supabase.from('wall_events').insert({
@@ -638,22 +681,21 @@ export default function ApprovalsPage() {
           new_value: action === 'confirmed' ? 'confirmed' : 'waived',
           notes: action === 'waived' ? `Bulk: Late fine ₹${fine.fine_amount} waived. Reason: ${waiverReason}` : `Bulk: Late fine ₹${fine.fine_amount} confirmed`
         });
-
-        currentCount++;
-        setBulkProgress({ current: currentCount, total: selectedCount });
       }
 
-      await createAuditLog({
-        action: actionName,
-        table_name: 'late_fines',
-        record_id: selectedIds.join(','),
-        new_value: { affected_count: selectedCount },
-        performed_by: user?.email || 'admin',
-        performed_by_role: user?.role || 'admin',
-        reason: action === 'waived' ? waiverReason : 'Bulk confirmed late fines'
-      });
+      if (updatedRecordIds.length > 0) {
+        await createAuditLog({
+          action: actionName,
+          table_name: 'late_fines',
+          record_id: updatedRecordIds.join(','),
+          new_value: { affected_count: actualUpdatedCount },
+          performed_by: user?.email || 'admin',
+          performed_by_role: user?.role || 'admin',
+          reason: action === 'waived' ? waiverReason : 'Bulk confirmed late fines'
+        });
+      }
 
-      showToast(`${selectedCount} items ${action === 'confirmed' ? 'confirmed' : 'waived'} ✓`);
+      showToast(`${actualUpdatedCount} items ${action === 'confirmed' ? 'confirmed' : 'waived'} ✓`);
       setSelectedIds([]);
       fetchApprovals();
     } catch (err) {
@@ -687,6 +729,14 @@ export default function ApprovalsPage() {
   // Late fines actions handlers
   const handleFineAction = async (fine: LateFine, action: 'waived' | 'confirmed') => {
     if (user?.role === 'partner_viewer') return;
+    if (action === 'confirmed' && (fine.waived || fine.confirmed)) {
+      showToast('Cannot confirm an already waived or confirmed fine.');
+      return;
+    }
+    if (action === 'waived' && fine.waived) {
+      showToast('Fine is already waived.');
+      return;
+    }
     let waiverReason = '';
     if (action === 'waived') {
       const reason = window.prompt(`Please enter a reason for waiving this fine of ₹${fine.fine_amount} for ${fine.staff?.name}:`);
@@ -698,14 +748,24 @@ export default function ApprovalsPage() {
     }
 
     try {
-      const updateField = action === 'waived' ? { waived: true } : { confirmed: true };
+      const updateField = action === 'waived'
+        ? { waived: true, waived_by: user?.email || 'admin', waived_reason: waiverReason }
+        : { confirmed: true, confirmed_by: user?.email || 'admin' };
       
-      const { error } = await supabase
-        .from('late_fines')
-        .update(updateField)
-        .eq('id', fine.id);
+      let query = supabase.from('late_fines').update(updateField).eq('id', fine.id);
+      if (action === 'confirmed') {
+        query = query.eq('confirmed', false).eq('waived', false);
+      } else {
+        query = query.eq('waived', false);
+      }
 
+      const { data, error } = await query.select('id');
       if (error) throw error;
+      if (!data || data.length === 0) {
+        showToast('Fine was already processed or locked.');
+        fetchApprovals();
+        return;
+      }
 
       try {
         await supabase.from('wall_events').insert({

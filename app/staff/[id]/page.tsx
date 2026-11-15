@@ -963,12 +963,16 @@ export default function StaffProfilePage() {
     if (pendingLateFines.length === 0 && pendingSpecialFines.length === 0) return;
     try {
       if (pendingLateFines.length > 0) {
-        const lfIds = pendingLateFines.map(lf => lf.id);
-        const { error } = await supabase
-          .from('late_fines')
-          .update({ confirmed: true })
-          .in('id', lfIds);
-        if (error) throw error;
+        const lfIds = pendingLateFines.filter(lf => !lf.waived && !lf.confirmed).map(lf => lf.id);
+        if (lfIds.length > 0) {
+          const { error } = await supabase
+            .from('late_fines')
+            .update({ confirmed: true, confirmed_by: user?.email || 'admin' })
+            .in('id', lfIds)
+            .eq('confirmed', false)
+            .eq('waived', false);
+          if (error) throw error;
+        }
 
         for (const lf of pendingLateFines) {
           await createAuditLog({
@@ -1086,11 +1090,17 @@ export default function StaffProfilePage() {
 
   const handleConfirmLateFine = async (fine: LateFine) => {
     if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(50);
+    if (fine.waived || fine.confirmed) {
+      showToast('Cannot confirm an already waived or confirmed fine.');
+      return;
+    }
     try {
       const { error } = await supabase
         .from('late_fines')
-        .update({ confirmed: true })
-        .eq('id', fine.id);
+        .update({ confirmed: true, confirmed_by: user?.email || 'admin' })
+        .eq('id', fine.id)
+        .eq('confirmed', false)
+        .eq('waived', false);
       if (error) throw error;
 
       await createAuditLog({
