@@ -92,8 +92,8 @@ export async function exportInTimePDF(
       { label: 'Yellow: 1 - 15 mins late', rgb: IN_TIME_COLORS.yellow.rgb, textRgb: IN_TIME_COLORS.yellow.textRgb },
       { label: 'Orange: 16 - 30 mins late', rgb: IN_TIME_COLORS.orange.rgb, textRgb: IN_TIME_COLORS.orange.textRgb },
       { label: 'Red: > 30 mins late', rgb: IN_TIME_COLORS.red.rgb, textRgb: IN_TIME_COLORS.red.textRgb },
-      { label: 'Grey: No punch / Leave (L \u2713)', rgb: IN_TIME_COLORS.grey.rgb, textRgb: IN_TIME_COLORS.grey.textRgb },
-      { label: 'White: No shift set', rgb: [240, 240, 240] as [number, number, number], textRgb: [0, 0, 0] as [number, number, number] },
+      { label: 'Grey: No punch (L = approved leave)', rgb: IN_TIME_COLORS.grey.rgb, textRgb: IN_TIME_COLORS.grey.textRgb },
+      { label: 'White: Hourly / No shift', rgb: [255, 255, 255] as [number, number, number], textRgb: [0, 0, 0] as [number, number, number] },
     ];
 
     let currX = 10;
@@ -118,16 +118,16 @@ export async function exportInTimePDF(
       doc.text(
         `Nearbi In-Time Report - ${monthName} ${model.year} - ${branchLabel}`,
         10,
-        10.5
+        9.5
       );
 
       doc.setFontSize(7.5);
       doc.setFont('helvetica', 'normal');
       doc.setTextColor(80, 80, 80);
       const fineRulesStr = `Fine Rules: Yellow Rs ${model.fineSettings.yellow_fine} (${model.fineSettings.yellow_free_passes} free passes), Orange Rs ${model.fineSettings.orange_fine}, Red Rs ${model.fineSettings.red_fine}`;
-      doc.text(fineRulesStr, 10, 15);
+      doc.text(fineRulesStr, 10, 13.5);
 
-      drawLegend(20);
+      drawLegend(18);
     };
 
     // Summary Table headers
@@ -151,7 +151,7 @@ export async function exportInTimePDF(
     ];
 
     const tableRows = sortedRows.map((r) => {
-      const placeStr = r.place !== null ? `#${r.place}` : 'not ranked';
+      const placeStr = r.place !== null ? `#${r.place}` : '-';
       let statusStr = r.statusText;
       if (model.isCurrentMonth && r.hasShift && !r.isHourly && !r.isNew && r.progressText) {
         statusStr = `${r.progressText} / ${r.statusText}`;
@@ -171,19 +171,21 @@ export async function exportInTimePDF(
         r.approvedLeaveDays,
         r.hasShift && !r.isNew ? r.targetDays : '—',
         statusStr,
-        `Rs ${r.finesIssued}`,
-        `Rs ${r.finesWaived}`,
+        r.finesIssued > 0 ? `Rs ${r.finesIssued.toLocaleString('en-IN')}` : 'Rs 0',
+        r.finesWaived > 0 ? `Rs ${r.finesWaived.toLocaleString('en-IN')}` : 'Rs 0',
         r.freePassesLeft,
       ];
     });
 
     autoTable(doc, {
-      startY: 24.5,
+      startY: 22,
+      margin: { top: 22, bottom: 8, left: 10, right: 10 },
       head: [tableHeaders],
       body: tableRows,
       theme: 'grid',
       tableWidth: 277,
       showHead: 'everyPage',
+      rowPageBreak: 'avoid',
       didDrawPage: () => {
         drawSummaryHeader();
       },
@@ -193,34 +195,34 @@ export async function exportInTimePDF(
         fontSize: 7,
         fontStyle: 'bold',
         halign: 'center',
-        cellPadding: 0.8,
+        cellPadding: 0.5,
       },
       alternateRowStyles: {
         fillColor: [248, 250, 252],
       },
       bodyStyles: {
-        fontSize: 6.5,
-        cellPadding: 0.7,
+        fontSize: 7,
+        cellPadding: [0.5, 0.4, 0.5, 0.4],
         textColor: [30, 30, 30],
         halign: 'center',
       },
       columnStyles: {
-        0: { halign: 'center', cellWidth: 10 },                                      // Place
+        0: { halign: 'center', cellWidth: 8 },                                       // Place
         1: { halign: 'left', cellWidth: 38, fontStyle: 'bold', overflow: 'linebreak' }, // Name (NEVER CUT OFF)
-        2: { halign: 'left', cellWidth: 26 },                                        // Dept
-        3: { halign: 'left', cellWidth: 24 },                                        // Shift
-        4: { halign: 'center', cellWidth: 10 },                                      // Off days
-        5: { halign: 'center', cellWidth: 8 },                                       // G
-        6: { halign: 'center', cellWidth: 8 },                                       // Y
-        7: { halign: 'center', cellWidth: 8 },                                       // O
-        8: { halign: 'center', cellWidth: 8 },                                       // R
-        9: { halign: 'center', cellWidth: 13 },                                      // No punch
-        10: { halign: 'center', cellWidth: 11 },                                     // Leave
-        11: { halign: 'center', cellWidth: 11 },                                     // Target
-        12: { halign: 'left', cellWidth: 49 },                                       // Status
-        13: { halign: 'right', cellWidth: 19 },                                      // Fines issued
-        14: { halign: 'right', cellWidth: 19 },                                      // Fines waived
-        15: { halign: 'center', cellWidth: 15 },                                     // Free passes left
+        2: { halign: 'left', cellWidth: 22 },                                        // Dept
+        3: { halign: 'left', cellWidth: 44 },                                        // Shift
+        4: { halign: 'center', cellWidth: 8 },                                       // Off days
+        5: { halign: 'center', cellWidth: 7 },                                       // G
+        6: { halign: 'center', cellWidth: 7 },                                       // Y
+        7: { halign: 'center', cellWidth: 7 },                                       // O
+        8: { halign: 'center', cellWidth: 7 },                                       // R
+        9: { halign: 'center', cellWidth: 11 },                                      // No punch
+        10: { halign: 'center', cellWidth: 9 },                                      // Leave
+        11: { halign: 'center', cellWidth: 9 },                                      // Target
+        12: { halign: 'left', cellWidth: 52 },                                       // Status
+        13: { halign: 'right', cellWidth: 18 },                                      // Fines issued
+        14: { halign: 'right', cellWidth: 18 },                                      // Fines waived
+        15: { halign: 'center', cellWidth: 12 },                                     // Free passes left
       },
       didParseCell: (data: any) => {
         if (data.section === 'body') {
@@ -250,7 +252,6 @@ export async function exportInTimePDF(
           }
         }
       },
-      margin: { top: 24.5, left: 10, right: 10, bottom: 14 },
     });
   }
 
@@ -272,7 +273,8 @@ export async function exportInTimePDF(
     };
 
     const gridRows = sortedRows.map((r) => {
-      const rowData: string[] = [r.name];
+      const shiftSubtext = r.isHourly || !r.hasShift ? 'Hourly' : r.standardShiftRange;
+      const rowData: string[] = [`${r.name}\n${shiftSubtext}`];
       for (let d = 1; d <= daysCount; d++) {
         const cell = r.days[d];
         if (!cell) {
@@ -285,12 +287,12 @@ export async function exportInTimePDF(
           const outT = cleanTime(cell.formattedOut);
           rowData.push(outT && outT !== '—' ? `${inT}\n${outT}` : inT);
         } else if (cell.isApprovedLeave) {
-          rowData.push('L \u2713');
-        } else if (cell.isFuture || cell.isHourly) {
+          rowData.push('L');
+        } else if (cell.isFuture) {
           rowData.push('');
         } else {
           // Past no punch
-          rowData.push('—');
+          rowData.push(cell.isHourly ? '' : '—');
         }
       }
       return rowData;
@@ -313,6 +315,7 @@ export async function exportInTimePDF(
       theme: 'grid',
       tableWidth: 277,
       showHead: 'everyPage',
+      rowPageBreak: 'avoid',
       didDrawPage: () => {
         // Repeated header and legend on every colour grid page
         doc.setFontSize(11);
@@ -376,8 +379,6 @@ export async function exportInTimePDF(
         }
       },
       didDrawCell: (data: any) => {
-        // Custom draw for punch cells with both IN and OUT times:
-        // Render IN time at 6pt bold, OUT time at 4.5pt normal
         if (data.section === 'body' && data.column.index > 0) {
           const staffIndex = data.row.index;
           const dayNumber = data.column.index;
@@ -388,9 +389,32 @@ export async function exportInTimePDF(
 
           const inT = cleanTime(cell.formattedIn);
           const outT = cleanTime(cell.formattedOut);
-          if (inT && outT && outT !== '—') {
-            // Fill cell background
-            const band = cell.colorCode ? IN_TIME_COLORS[cell.colorCode] : null;
+          const hasOut = outT && outT !== '—';
+
+          if (cell.isHourly) {
+            // Part 4 item 2: plain white cell, dark text, no band colour
+            doc.setFillColor(255, 255, 255);
+            doc.rect(data.cell.x, data.cell.y, data.cell.width, data.cell.height, 'F');
+            doc.setDrawColor(220, 220, 220);
+            doc.rect(data.cell.x, data.cell.y, data.cell.width, data.cell.height, 'S');
+
+            const centerX = data.cell.x + data.cell.width / 2;
+            const textY1 = data.cell.y + (hasOut ? 2.8 : 4.2);
+
+            doc.setFontSize(6);
+            doc.setFont('helvetica', 'bold');
+            doc.setTextColor(20, 20, 20);
+            doc.text(inT, centerX, textY1, { align: 'center' });
+
+            if (hasOut) {
+              const textY2 = data.cell.y + 5.8;
+              doc.setFontSize(4.5);
+              doc.setFont('helvetica', 'normal');
+              doc.setTextColor(80, 80, 80);
+              doc.text(outT, centerX, textY2, { align: 'center' });
+            }
+          } else if (cell.colorCode) {
+            const band = IN_TIME_COLORS[cell.colorCode];
             if (band) {
               doc.setFillColor(band.rgb[0], band.rgb[1], band.rgb[2]);
               doc.rect(data.cell.x, data.cell.y, data.cell.width, data.cell.height, 'F');
@@ -398,8 +422,7 @@ export async function exportInTimePDF(
               doc.rect(data.cell.x, data.cell.y, data.cell.width, data.cell.height, 'S');
 
               const centerX = data.cell.x + data.cell.width / 2;
-              const textY1 = data.cell.y + 2.8;
-              const textY2 = data.cell.y + 5.8;
+              const textY1 = data.cell.y + (hasOut ? 2.8 : 4.2);
 
               // Line 1: IN time at 6pt bold
               doc.setFontSize(6);
@@ -408,20 +431,22 @@ export async function exportInTimePDF(
               doc.text(inT, centerX, textY1, { align: 'center' });
 
               // Line 2: OUT time at 4.5pt normal (readable, smaller, no overflow)
-              doc.setFontSize(4.5);
-              doc.setFont('helvetica', 'normal');
-              // Contrasting color: dark gray on light, light gray on red
-              if (band.textHex === '#FFFFFF') {
-                doc.setTextColor(240, 240, 240);
-              } else {
-                doc.setTextColor(50, 50, 50);
+              if (hasOut) {
+                const textY2 = data.cell.y + 5.8;
+                doc.setFontSize(4.5);
+                doc.setFont('helvetica', 'normal');
+                if (band.textHex === '#FFFFFF') {
+                  doc.setTextColor(240, 240, 240);
+                } else {
+                  doc.setTextColor(50, 50, 50);
+                }
+                doc.text(outT, centerX, textY2, { align: 'center' });
               }
-              doc.text(outT, centerX, textY2, { align: 'center' });
             }
           }
         }
       },
-      margin: { top: 21, left: 10, right: 10, bottom: 14 },
+      margin: { top: 21, left: 10, right: 10, bottom: 12 },
     });
   }
 
@@ -479,9 +504,9 @@ export async function exportInTimePDF(
         doc.setFont('helvetica', 'bold');
         doc.setTextColor(20, 25, 40);
 
-        const placeStr = r.place !== null ? `#${r.place}` : 'not ranked';
+        const placeStr = r.place !== null ? `#${r.place}` : '-';
         const bannerLeft = `${r.name} (${r.department}) | Shift: ${r.shiftLabel} | Target: ${r.targetDays} | Status: ${r.statusText} | Rank: ${placeStr}`;
-        const bannerRight = `Fines: Rs ${r.finesIssued} | Waived: Rs ${r.finesWaived} | Passes: ${r.freePassesUsed} used, ${r.freePassesLeft} left`;
+        const bannerRight = `Fines: Rs ${r.finesIssued.toLocaleString('en-IN')} | Waived: Rs ${r.finesWaived.toLocaleString('en-IN')} | Passes: ${r.freePassesUsed} used, ${r.freePassesLeft} left`;
 
         doc.text(bannerLeft, 13, currentY + 4.5);
         doc.setFont('helvetica', 'normal');
@@ -690,7 +715,7 @@ export async function exportInTimeExcel(
 
     // Data rows
     sortedRows.forEach((r) => {
-      const placeStr = r.place !== null ? `#${r.place}` : 'not ranked';
+      const placeStr = r.place !== null ? `#${r.place}` : '-';
       let statusStr = r.statusText;
       if (model.isCurrentMonth && r.hasShift && !r.isHourly && !r.isNew && r.progressText) {
         statusStr = `${r.progressText} / ${r.statusText}`;
@@ -711,8 +736,8 @@ export async function exportInTimeExcel(
         r.approvedLeaveDays,
         r.hasShift && !r.isNew ? r.targetDays : '—',
         statusStr,
-        r.finesIssued,
-        r.finesWaived,
+        r.finesIssued > 0 ? `Rs ${r.finesIssued.toLocaleString('en-IN')}` : 'Rs 0',
+        r.finesWaived > 0 ? `Rs ${r.finesWaived.toLocaleString('en-IN')}` : 'Rs 0',
         r.freePassesLeft,
       ];
 
@@ -766,7 +791,7 @@ export async function exportInTimeExcel(
     r1.font = { italic: true, size: 9, color: { argb: '555555' } };
 
     // Row 2: Legend / Instructions
-    const legendStr = `Green: On Time/Early (${IN_TIME_COLORS.green.hashHex}) | Yellow: 1-15m (${IN_TIME_COLORS.yellow.hashHex}) | Orange: 16-30m (${IN_TIME_COLORS.orange.hashHex}) | Red: >30m (${IN_TIME_COLORS.red.hashHex}) | Grey: No Punch / Leave (L ✓)`;
+    const legendStr = `Green: On Time/Early (${IN_TIME_COLORS.green.hashHex}) | Yellow: 1-15m (${IN_TIME_COLORS.yellow.hashHex}) | Orange: 16-30m (${IN_TIME_COLORS.orange.hashHex}) | Red: >30m (${IN_TIME_COLORS.red.hashHex}) | Grey: No punch | L = approved leave | White: Hourly / No shift`;
     gridSheet.addRow([legendStr]);
     gridSheet.mergeCells('A2:AI2');
     const r2 = gridSheet.getRow(2);
@@ -801,7 +826,9 @@ export async function exportInTimeExcel(
 
     // 2 rows per staff (Row 1: IN with colour fill, Row 2: OUT uncoloured)
     sortedRows.forEach((r) => {
-      const inRowValues: any[] = [r.name, 'IN'];
+      const shiftSubtext = r.isHourly || !r.hasShift ? 'Hourly' : r.standardShiftRange;
+      const nameWithShift = `${r.name}\n${shiftSubtext}`;
+      const inRowValues: any[] = [nameWithShift, 'IN'];
       const outRowValues: any[] = ['', 'OUT'];
 
       for (let d = 1; d <= daysCount; d++) {
@@ -816,21 +843,21 @@ export async function exportInTimeExcel(
           inRowValues.push(cell.formattedIn);
           outRowValues.push(cell.formattedOut && cell.formattedOut !== '—' ? cell.formattedOut : '');
         } else if (cell.isApprovedLeave) {
-          inRowValues.push('L ✓');
+          inRowValues.push('L');
           outRowValues.push('');
-        } else if (cell.isFuture || cell.isHourly) {
+        } else if (cell.isFuture) {
           inRowValues.push('');
           outRowValues.push('');
         } else {
           // Past no punch
-          inRowValues.push('—');
+          inRowValues.push(cell.isHourly ? '' : '—');
           outRowValues.push('');
         }
       }
 
       const inRow = gridSheet.addRow(inRowValues);
       inRow.alignment = { horizontal: 'center', vertical: 'middle' };
-      inRow.getCell(1).alignment = { horizontal: 'left', vertical: 'middle' };
+      inRow.getCell(1).alignment = { horizontal: 'left', vertical: 'middle', wrapText: true };
       inRow.getCell(1).font = { bold: true };
 
       // Apply fill colors to IN row
@@ -848,6 +875,7 @@ export async function exportInTimeExcel(
         if (!cell || cell.isHourly) {
           // White
           xlCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFFFFF' } };
+          xlCell.font = { bold: true, color: { argb: 'FF000000' } };
         } else if (cell.hasPunch && cell.colorCode) {
           const band = IN_TIME_COLORS[cell.colorCode];
           if (band) {
@@ -965,7 +993,7 @@ export async function exportInTimeExcel(
           dayName,
           ld.colorCode.toUpperCase(),
           ld.minutesLate,
-          ld.fineAmount !== undefined ? ld.fineAmount : '—',
+          ld.fineAmount !== undefined ? `Rs ${ld.fineAmount.toLocaleString('en-IN')}` : '—',
           ld.statusText,
           ld.waivedBy || '—',
           ld.waivedReason || '—',

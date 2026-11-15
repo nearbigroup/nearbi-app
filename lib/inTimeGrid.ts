@@ -1,5 +1,22 @@
 import { getDaysInMonth, calculateBonusDays } from './salary';
-import { formatTime12hr } from './utils';
+
+export function formatTime24hr(time: string | null | undefined): string {
+  if (!time) return '';
+  const trimmed = time.trim();
+  if (!trimmed) return '';
+  const parts = trimmed.split(':');
+  if (parts.length >= 2) {
+    const hh = parts[0].padStart(2, '0');
+    const mm = parts[1].padStart(2, '0');
+    return `${hh}:${mm}`;
+  }
+  return trimmed;
+}
+
+export function formatMoneyRs(amount: number): string {
+  const rounded = Math.round(Number(amount) || 0);
+  return `Rs ${rounded.toLocaleString('en-IN')}`;
+}
 
 export type ColorBand = 'green' | 'yellow' | 'orange' | 'red' | null;
 
@@ -96,6 +113,7 @@ export interface DayCellData {
   status: string | null;
   dayType: string | null;
   overrideShiftStart: string | null;
+  overrideShiftEnd: string | null;
   isHourly: boolean;
   hasPunch: boolean;
   isFuture: boolean;
@@ -112,6 +130,7 @@ export interface StaffGridRow {
   hasShift: boolean;
   offDaysPerMonth: number;
   shiftLabel: string;
+  standardShiftRange: string;
   shiftStart: string | null;
   shiftEnd: string | null;
   days: Record<number, DayCellData>;
@@ -300,19 +319,20 @@ export function buildInTimeGridModel(
         else if (att?.color_code === 'orange') colorCode = 'orange';
         else if (att?.color_code === 'red') colorCode = 'red';
 
-        if (colorCode) {
+        // Keep hourly staff out of G/Y/O/R counts
+        if (!isHourly && hasShift && colorCode) {
           counts[colorCode]++;
         }
       }
 
       let formattedIn = '';
       if (hasCheckIn) {
-        formattedIn = formatTime12hr(att!.check_in_time);
+        formattedIn = formatTime24hr(att!.check_in_time);
       }
 
       let formattedOut = '';
       if (att && att.check_out_time && att.check_out_time.trim()) {
-        formattedOut = formatTime12hr(att.check_out_time);
+        formattedOut = formatTime24hr(att.check_out_time);
       } else if (hasCheckIn) {
         formattedOut = '—';
       }
@@ -328,11 +348,12 @@ export function buildInTimeGridModel(
         checkOutTime: att?.check_out_time || null,
         formattedIn,
         formattedOut,
-        colorCode,
+        colorCode: isHourly ? null : colorCode,
         minutesLate: Number(att?.minutes_late || 0),
         status: att?.status || null,
         dayType: att?.day_type || null,
         overrideShiftStart: att?.override_shift_start || null,
+        overrideShiftEnd: att?.override_shift_end || null,
         isHourly,
         hasPunch: hasCheckIn,
         isFuture: isBlank,
@@ -351,11 +372,11 @@ export function buildInTimeGridModel(
     const leaveDays = Math.max(0, noPunchPastDays - weeklyOffsUsed);
 
     // Full-month TARGET = calendar days - off_days_per_month - approvedLeaveDays
-    // For new staff: do not invent a pro-rated target, show counts only (target 0)
-    const targetDays = (!hasShift || isNew) ? 0 : Math.max(0, calendarDays - offDays - approvedLeaveDays);
+    // For new staff or hourly staff: do not invent a pro-rated target, show counts only (target 0)
+    const targetDays = (!hasShift || isHourly || isNew) ? 0 : Math.max(0, calendarDays - offDays - approvedLeaveDays);
 
     // Shortfall based on green days vs full-month target (used for past months ranking)
-    const shortfall = (!hasShift || isNew) ? 9999 : Math.max(0, targetDays - counts.green);
+    const shortfall = (!hasShift || isHourly || isNew) ? 9999 : Math.max(0, targetDays - counts.green);
 
     // PART B: Mid-month wording for current month in progress
     // If staff member has punched today, today is counted in days so far.
@@ -383,9 +404,18 @@ export function buildInTimeGridModel(
     let progressText = '';
     let paceBehind = 0;
 
-    if (!hasShift) {
+    if (isHourly) {
+      statusText = '-';
+      statusBadge = '-';
+      paceBehind = 9999;
+    } else if (!hasShift) {
       statusText = 'NO SHIFT SET';
       statusBadge = 'NO SHIFT SET';
+      paceBehind = 9999;
+    } else if (isLeft) {
+      statusText = `LEFT (${daysWorked}d worked)`;
+      statusBadge = 'LEFT';
+      paceBehind = 9999;
     } else if (isNew) {
       statusText = 'NEW';
       statusBadge = 'NEW';
@@ -456,7 +486,7 @@ export function buildInTimeGridModel(
             const reason = fineRow.waived_reason ? `: ${fineRow.waived_reason}` : ': no reason recorded';
             statusStr = `Waived by ${waivedBy}${reason}`;
           } else {
-            statusStr = `Rs ${fineRow.fine_amount} charged`;
+            statusStr = `Rs ${fineRow.fine_amount.toLocaleString('en-IN')} charged`;
           }
         } else if (cell.colorCode === 'yellow') {
           freePassesUsed++;
@@ -486,6 +516,29 @@ export function buildInTimeGridModel(
 
     const freePassesLeft = Math.max(0, fineSettings.yellow_free_passes - freePassesUsed);
 
+    let standardShiftRange = '';
+    let shiftLabel = '';
+
+    if (isHourly) {
+      standardShiftRange = 'Hourly';
+      shiftLabel = 'Hourly';
+    } else if (hasShift) {
+      const sStart = formatTime24hr(st.shift?.start_time);
+      const sEnd = formatTime24hr(st.shift?.end_time);
+      const sName = st.shift?.label ? st.shift.label.trim() : '';
+
+      if (sStart && sEnd) {
+        standardShiftRange = `${sStart}-${sEnd}`;
+        shiftLabel = sName ? `${standardShiftRange} (${sName})` : standardShiftRange;
+      } else {
+        standardShiftRange = 'no shift time';
+        shiftLabel = sName ? `no shift time (${sName})` : 'no shift time';
+      }
+    } else {
+      standardShiftRange = 'Hourly';
+      shiftLabel = 'Hourly';
+    }
+
     rows.push({
       staffId: st.id,
       name: displayName,
@@ -495,7 +548,8 @@ export function buildInTimeGridModel(
       isHourly,
       hasShift,
       offDaysPerMonth: offDays,
-      shiftLabel: st.shift?.label || (isHourly ? 'Hourly' : 'No Shift'),
+      shiftLabel,
+      standardShiftRange,
       shiftStart: st.shift?.start_time || null,
       shiftEnd: st.shift?.end_time || null,
       days,

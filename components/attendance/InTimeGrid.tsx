@@ -295,7 +295,7 @@ export default function InTimeGrid({
   // Helper for desktop table cell background & text color
   const getCellClasses = (cell: DayCellData) => {
     if (cell.isHourly) {
-      return 'bg-slate-800/60 border border-white/10 text-slate-200';
+      return 'bg-white border border-slate-300 text-slate-900';
     }
     switch (cell.colorCode) {
       case 'green':
@@ -313,6 +313,12 @@ export default function InTimeGrid({
 
   // Helper for mobile dot color
   const getDotClasses = (cell: DayCellData) => {
+    if (cell.isHourly) {
+      if (cell.hasPunch) {
+        return 'bg-white border border-slate-300 text-slate-900 font-bold';
+      }
+      return 'border border-white/10 bg-transparent text-slate-600 font-semibold';
+    }
     if (cell.hasPunch) {
       switch (cell.colorCode) {
         case 'green':
@@ -521,10 +527,14 @@ export default function InTimeGrid({
             <span>&gt;30m Late (Red)</span>
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-slate-800 text-slate-300 border border-slate-700 flex items-center gap-0.5">
-              L <Check size={9} className="text-emerald-400 stroke-[3]" />
+            <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-slate-800 text-slate-300 border border-slate-700">
+              L
             </span>
-            <span>Approved Leave</span>
+            <span>L = approved leave</span>
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-sm bg-white border border-slate-300"></span>
+            <span>Hourly / No shift</span>
           </span>
           <span className="flex items-center gap-1.5">
             <span className="w-2.5 h-2.5 rounded-sm bg-[#BFBFBF]"></span>
@@ -617,10 +627,10 @@ export default function InTimeGrid({
                     Status
                   </th>
                   <th className="p-1.5 text-center min-w-[65px] border-r border-white/10 text-[10px] font-black text-amber-300 uppercase tracking-wider bg-[#181B26]" title="Fines issued (Rs)">
-                    Fines (₹)
+                    Fines (Rs)
                   </th>
                   <th className="p-1.5 text-center min-w-[65px] border-r border-white/10 text-[10px] font-black text-sky-300 uppercase tracking-wider bg-[#181B26]" title="Fines waived (Rs)">
-                    Waived (₹)
+                    Waived (Rs)
                   </th>
                   <th className="p-1.5 text-center min-w-[52px] text-[10px] font-black text-amber-400 uppercase tracking-wider bg-[#181B26]" title="Free passes left">
                     Passes
@@ -663,7 +673,7 @@ export default function InTimeGrid({
                               }`}
                               title={row.place !== null ? `Rank #${row.place}` : 'Hourly / Left / New (Not ranked)'}
                             >
-                              {row.place !== null ? `#${row.place}` : '—'}
+                              {row.place !== null ? `#${row.place}` : '-'}
                             </span>
                             <span className={`font-bold text-white truncate ${zoomStyles.nameFont}`} title={row.name}>
                               {row.name}
@@ -672,11 +682,11 @@ export default function InTimeGrid({
 
                           {!zoomStyles.subHidden && (
                             <div className="flex items-center justify-between text-[9px] text-slate-400">
-                              <span className="truncate max-w-[110px]" title={row.department}>
+                              <span className="truncate max-w-[105px]" title={row.department}>
                                 {row.department}
                               </span>
-                              <span className="font-mono text-slate-500 text-[8.5px]">
-                                {row.shiftLabel}
+                              <span className="font-mono text-slate-300 font-bold text-[8.5px]">
+                                {row.standardShiftRange}
                               </span>
                             </div>
                           )}
@@ -753,11 +763,10 @@ export default function InTimeGrid({
                             >
                               {zoomStyles.showTimeText ? (
                                 <div
-                                  className="rounded-lg py-1 px-0.5 bg-slate-800/80 border border-slate-700/60 text-slate-300 font-black text-[9px] flex items-center justify-center gap-0.5 shadow-sm"
+                                  className="rounded-lg py-1 px-0.5 bg-slate-800/80 border border-slate-700/60 text-slate-300 font-black text-[9px] flex items-center justify-center shadow-sm"
                                   title="Approved Leave"
                                 >
                                   <span>L</span>
-                                  <Check size={10} className="text-emerald-400 stroke-[3]" />
                                 </div>
                               ) : (
                                 <div
@@ -833,22 +842,24 @@ export default function InTimeGrid({
                         {row.leaveDays}
                       </td>
                       <td className={`p-1.5 text-center border-r border-white/10 font-mono font-bold text-white ${zoomStyles.summaryFont}`}>
-                        {!row.hasShift || row.isNew ? '—' : row.targetDays}
+                        {!row.hasShift || row.isHourly || row.isNew ? '-' : row.targetDays}
                       </td>
                       <td className="p-1.5 text-center border-r border-white/10">
                         <div className="flex flex-col items-center justify-center gap-0.5">
                           <span
                             className={`px-2 py-0.5 rounded text-[9px] font-black uppercase tracking-tight whitespace-nowrap ${
-                              row.statusBadge === 'FULL TARGET' || row.statusBadge === 'ON TRACK'
-                                ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30'
-                                : row.statusBadge === 'NO SHIFT SET'
+                              row.isHourly || row.statusBadge === 'NO SHIFT SET' || row.statusBadge === 'LEFT'
                                 ? 'bg-slate-800 text-slate-400 border border-slate-700/50'
+                                : row.statusBadge === 'NEW'
+                                ? 'bg-sky-950 text-sky-400 border border-sky-500/30'
+                                : row.statusBadge === 'FULL TARGET' || row.statusBadge === 'ON TRACK'
+                                ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30'
                                 : 'bg-rose-950 text-rose-400 border border-rose-500/30'
                             }`}
                           >
                             {row.statusBadge}
                           </span>
-                          {row.isCurrentMonth && row.progressText && row.hasShift && (
+                          {row.isCurrentMonth && row.progressText && row.hasShift && !row.isHourly && (
                             <span className="text-[8.5px] font-mono text-slate-400 font-semibold whitespace-nowrap">
                               {row.progressText}
                             </span>
@@ -856,10 +867,10 @@ export default function InTimeGrid({
                         </div>
                       </td>
                       <td className={`p-1.5 text-center border-r border-white/10 font-mono font-bold text-amber-300 ${zoomStyles.summaryFont}`}>
-                        ₹{row.finesIssued}
+                        Rs {row.finesIssued.toLocaleString('en-IN')}
                       </td>
                       <td className={`p-1.5 text-center border-r border-white/10 font-mono font-bold text-sky-300 ${zoomStyles.summaryFont}`}>
-                        ₹{row.finesWaived}
+                        Rs {row.finesWaived.toLocaleString('en-IN')}
                       </td>
                       <td className={`p-1.5 text-center font-mono font-black text-amber-400 ${zoomStyles.summaryFont}`}>
                         {row.freePassesLeft}
@@ -898,13 +909,13 @@ export default function InTimeGrid({
                             : 'bg-black/30 text-slate-500 border border-white/5 text-[9px]'
                         }`}
                       >
-                        {row.place !== null ? `#${row.place}` : '—'}
+                        {row.place !== null ? `#${row.place}` : '-'}
                       </span>
                       <h4 className="text-sm font-bold text-white truncate">{row.name}</h4>
                     </div>
                     <p className="text-[10px] text-slate-400 mt-0.5">
                       {row.branchId === 'daily' ? 'Daily' : 'Hyper'} • {row.department} •{' '}
-                      <span className="font-mono text-slate-500">{row.shiftLabel}</span>
+                      <span className="font-mono text-slate-300 font-bold">{row.standardShiftRange}</span>
                     </p>
                   </div>
 
@@ -912,16 +923,18 @@ export default function InTimeGrid({
                   <div className="flex flex-col items-end gap-1 shrink-0">
                     <span
                       className={`px-2 py-0.5 rounded text-[9.5px] font-black uppercase tracking-tight ${
-                        row.statusBadge === 'FULL TARGET' || row.statusBadge === 'ON TRACK'
-                          ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30'
-                          : row.statusBadge === 'NO SHIFT SET'
+                        row.isHourly || row.statusBadge === 'NO SHIFT SET' || row.statusBadge === 'LEFT'
                           ? 'bg-slate-800 text-slate-400 border border-slate-700/50'
+                          : row.statusBadge === 'NEW'
+                          ? 'bg-sky-950 text-sky-400 border border-sky-500/30'
+                          : row.statusBadge === 'FULL TARGET' || row.statusBadge === 'ON TRACK'
+                          ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30'
                           : 'bg-rose-950 text-rose-400 border border-rose-500/30'
                       }`}
                     >
                       {row.statusBadge}
                     </span>
-                    {row.isCurrentMonth && row.progressText && row.hasShift && (
+                    {row.isCurrentMonth && row.progressText && row.hasShift && !row.isHourly && (
                       <span className="text-[9px] font-mono text-slate-400 font-semibold">
                         {row.progressText}
                       </span>
@@ -993,7 +1006,7 @@ export default function InTimeGrid({
                   <div className="bg-rose-950/30 border border-rose-500/20 rounded-lg p-1.5">
                     <div className="text-[9px] text-rose-400 font-bold uppercase">Fines</div>
                     <div className="text-xs font-black text-rose-300 font-mono">
-                      ₹{row.finesIssued}
+                      Rs {row.finesIssued.toLocaleString('en-IN')}
                     </div>
                   </div>
                 </div>
@@ -1029,12 +1042,16 @@ export default function InTimeGrid({
                   >
                     {activeStaffDetail.place !== null
                       ? `Rank #${activeStaffDetail.place}`
-                      : 'No Shift / Unranked'}
+                      : '-'}
                   </span>
                   <h3 className="text-lg font-black text-white tracking-tight">
                     {activeStaffDetail.name}
                   </h3>
                 </div>
+
+                <p className="text-xs font-mono text-slate-300 font-bold mt-0.5">
+                  {activeStaffDetail.standardShiftRange}
+                </p>
 
                 <p className="text-xs text-slate-400 font-medium mt-1">
                   {activeStaffDetail.branchId === 'daily' ? 'Daily' : 'Hyper'} •{' '}
@@ -1048,7 +1065,7 @@ export default function InTimeGrid({
                   <span className="px-2 py-0.5 rounded bg-black/40 border border-white/10 font-mono">
                     Offs: {activeStaffDetail.offDaysPerMonth}d/mo
                   </span>
-                  {activeStaffDetail.hasShift && (
+                  {activeStaffDetail.hasShift && !activeStaffDetail.isHourly && (
                     <span className="px-2 py-0.5 rounded bg-black/40 border border-white/10 font-mono">
                       Target: {activeStaffDetail.targetDays}d
                     </span>
@@ -1058,16 +1075,18 @@ export default function InTimeGrid({
                 <div className="mt-2.5 flex flex-wrap items-center gap-2">
                   <span
                     className={`px-2.5 py-1 rounded-lg text-xs font-black uppercase tracking-wide inline-block ${
-                      activeStaffDetail.statusBadge === 'FULL TARGET' || activeStaffDetail.statusBadge === 'ON TRACK'
-                        ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30'
-                        : activeStaffDetail.statusBadge === 'NO SHIFT SET'
+                      activeStaffDetail.isHourly || activeStaffDetail.statusBadge === 'NO SHIFT SET' || activeStaffDetail.statusBadge === 'LEFT'
                         ? 'bg-slate-800 text-slate-400 border border-slate-700/50'
+                        : activeStaffDetail.statusBadge === 'NEW'
+                        ? 'bg-sky-950 text-sky-400 border border-sky-500/30'
+                        : activeStaffDetail.statusBadge === 'FULL TARGET' || activeStaffDetail.statusBadge === 'ON TRACK'
+                        ? 'bg-emerald-950 text-emerald-400 border border-emerald-500/30'
                         : 'bg-rose-950 text-rose-400 border border-rose-500/30'
                     }`}
                   >
                     {activeStaffDetail.statusBadge}
                   </span>
-                  {activeStaffDetail.isCurrentMonth && activeStaffDetail.progressText && activeStaffDetail.hasShift && (
+                  {activeStaffDetail.isCurrentMonth && activeStaffDetail.progressText && activeStaffDetail.hasShift && !activeStaffDetail.isHourly && (
                     <span className="text-xs font-mono text-slate-300 font-bold">
                       {activeStaffDetail.progressText}
                     </span>
@@ -1174,13 +1193,13 @@ export default function InTimeGrid({
                 <div className="bg-black/30 border border-white/5 rounded-xl p-2">
                   <span className="text-[10px] text-slate-400 block font-semibold">Issued</span>
                   <span className="text-sm font-black text-amber-300 font-mono">
-                    ₹{activeStaffDetail.finesIssued}
+                    Rs {activeStaffDetail.finesIssued.toLocaleString('en-IN')}
                   </span>
                 </div>
                 <div className="bg-black/30 border border-white/5 rounded-xl p-2">
                   <span className="text-[10px] text-slate-400 block font-semibold">Waived</span>
                   <span className="text-sm font-black text-sky-300 font-mono">
-                    ₹{activeStaffDetail.finesWaived}
+                    Rs {activeStaffDetail.finesWaived.toLocaleString('en-IN')}
                   </span>
                 </div>
                 <div className="bg-black/30 border border-white/5 rounded-xl p-2">
@@ -1300,17 +1319,15 @@ export default function InTimeGrid({
               <div className="flex justify-between py-1 border-b border-white/5">
                 <span className="text-slate-400">Scheduled Shift:</span>
                 <span className="font-mono text-slate-300">
-                  {selectedCell.staff.shiftStart
-                    ? `${selectedCell.staff.shiftStart} – ${selectedCell.staff.shiftEnd}`
-                    : selectedCell.staff.shiftLabel}
+                  {selectedCell.staff.shiftLabel}
                 </span>
               </div>
 
-              {selectedCell.cell.overrideShiftStart && (
+              {(selectedCell.cell.overrideShiftStart || selectedCell.cell.overrideShiftEnd) && (
                 <div className="flex justify-between py-1 border-b border-white/5 bg-sky-950/30 px-2 rounded">
-                  <span className="text-sky-300 font-bold">Override Shift Start:</span>
+                  <span className="text-sky-300 font-bold">Shift that day:</span>
                   <span className="font-mono text-sky-200">
-                    {selectedCell.cell.overrideShiftStart}
+                    {selectedCell.cell.overrideShiftStart || selectedCell.staff.shiftStart} – {selectedCell.cell.overrideShiftEnd || selectedCell.staff.shiftEnd || ''} (Override)
                   </span>
                 </div>
               )}
