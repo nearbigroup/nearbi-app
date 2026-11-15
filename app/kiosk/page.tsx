@@ -7,7 +7,7 @@ import { createNotification } from '@/lib/notifications';
 import { useRouter } from 'next/navigation';
 import { Check, LogOut, Camera, AlertCircle, UserCheck, Timer, AlertTriangle, Coffee, RotateCcw, CircleCheck, Users } from 'lucide-react';
 import { calculateOTMinutes, calculateActualHours, calculateActualHoursWithBreaks, calculateEarlyLeaveMinutes, calculateLateMinutes, calculateMinutesWorked } from '@/lib/salary';
-import { getFineSettings } from '@/lib/fineSettings';
+import { getFineSettings, calculateYellowLateFine } from '@/lib/fineSettings';
 import { DEPARTMENTS } from '@/lib/data';
 
 const getMinutes = (timeStr: string) => {
@@ -996,19 +996,23 @@ export default function KioskPage() {
           const settings = await getFineSettings(supabase);
 
           if (colorCode === 'yellow') {
-            // Count yellow passes
-            const startOfMonth = `${todayStr.substring(0, 8)}01`;
-            const { count } = await supabase
+            // Count distinct earlier yellow days in this month (strictly before today)
+            const startOfMonth = `${todayStr.substring(0, 7)}-01`;
+            const { data: earlierYellowRecords } = await supabase
               .from('attendance')
-              .select('*', { count: 'exact', head: true })
+              .select('date')
               .eq('staff_id', staff.id)
               .eq('color_code', 'yellow')
-              .gte('date', startOfMonth);
+              .gte('date', startOfMonth)
+              .lt('date', todayStr);
 
-            const passesUsed = count || 0;
-            if (passesUsed >= settings.yellow_free_passes) {
-              fineAmount = Number(settings.yellow_fine);
-            }
+            const earlierDates = (earlierYellowRecords || []).map((r: any) => r.date);
+            const { fineAmount: yellowFine } = calculateYellowLateFine(
+              earlierDates,
+              Number(settings.yellow_free_passes || 4),
+              Number(settings.yellow_fine || 20)
+            );
+            fineAmount = yellowFine;
           } else if (colorCode === 'orange') {
             fineAmount = Number(settings.orange_fine);
           } else if (colorCode === 'red') {

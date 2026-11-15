@@ -1034,15 +1034,20 @@ export default function SettingsPage() {
       // Sort attRecords by date chronologically
       attRecords.sort((a, b) => a.date.localeCompare(b.date));
 
-      // Fetch all staff with shifts
+      // Fetch all staff with shifts and pay_types
       const staffIds = [...new Set(attRecords.map(a => a.staff_id))];
       const { data: staffData } = await supabase
         .from('staff')
-        .select('id, shift_id, shift:shifts(start_time)')
+        .select('id, shift_id, pay_type, shift:shifts(start_time)')
         .in('id', staffIds);
 
       const staffShiftMap = new Map<string, string>();
+      const hourlyStaffSet = new Set<string>();
       staffData?.forEach((s: any) => {
+        const isHourly = s.pay_type === 'hourly' || !s.shift_id;
+        if (isHourly) {
+          hourlyStaffSet.add(s.id);
+        }
         const shift = Array.isArray(s.shift) ? s.shift[0] : s.shift;
         staffShiftMap.set(s.id, shift?.start_time || '09:00');
       });
@@ -1054,27 +1059,29 @@ export default function SettingsPage() {
       const { data: exemptions } = await supabase.from('staff_fine_exemptions').select('staff_id');
       const exemptSet = new Set(exemptions?.map(e => e.staff_id) || []);
 
-      // Fetch existing fines for the month
+      // Fetch existing fines for the month (including waived and fine_amount)
       const { data: existingFines } = await supabase
         .from('late_fines')
-        .select('id, staff_id, date, confirmed')
+        .select('id, staff_id, date, confirmed, waived, fine_amount')
         .gte('date', firstDay)
         .lte('date', lastDay);
 
-      const fineMap = new Map<string, { id: string; confirmed: boolean }>();
+      const fineMap = new Map<string, { id: string; confirmed: boolean; waived: boolean; fine_amount: number }>();
       existingFines?.forEach(f => {
-        fineMap.set(`${f.staff_id}_${f.date}`, { id: f.id, confirmed: f.confirmed });
+        fineMap.set(`${f.staff_id}_${f.date}`, {
+          id: f.id,
+          confirmed: !!f.confirmed,
+          waived: !!f.waived,
+          fine_amount: Number(f.fine_amount || 0),
+        });
       });
 
       let total = 0;
-      let corrected = 0;
-      let deleted = 0;
-      let skipped = 0;
-
-      const parseMins = (t: string) => {
-        const [h, m] = t.split(':').map(Number);
-        return h * 60 + m;
-      };
+      let finesCreated = 0;
+      let finesRepriced = 0;
+      let finesVoided = 0;
+      let skippedConfirmed = 0;
+      let skippedWaived = 0;
 
       const yellowCountMap = new Map<string, number>();
 
@@ -1083,8 +1090,9 @@ export default function SettingsPage() {
         total++;
         setRecalcProgress(`Processing ${i + 1} / ${attRecords.length}...`);
 
+        const isHourly = hourlyStaffSet.has(rec.staff_id);
         const shiftStart = staffShiftMap.get(rec.staff_id) || '09:00';
-        const correctMinutesLate = calculateLateMinutes(rec.check_in_time, shiftStart);
+        const correctMinutesLate = isHourly ? 0 : calculateLateMinutes(rec.check_in_time, shiftStart);
         let correctColorCode = 'green';
         let correctStatus: string = 'present';
 
@@ -1107,21 +1115,28 @@ export default function SettingsPage() {
             .eq('id', rec.id);
         }
 
+        // Never touch or create fines for hourly staff
+        if (isHourly) {
+          continue;
+        }
+
         const fineKey = `${rec.staff_id}_${rec.date}`;
         const existingFine = fineMap.get(fineKey);
 
         if (correctMinutesLate === 0) {
-          // Staff was not late — delete unconfirmed fine
+          // Staff was not late — delete unconfirmed & non-waived fine
           if (existingFine) {
             if (existingFine.confirmed) {
-              skipped++;
+              skippedConfirmed++;
+            } else if (existingFine.waived) {
+              skippedWaived++;
             } else {
               await supabase.from('late_fines').delete().eq('id', existingFine.id);
-              deleted++;
+              finesVoided++;
             }
           }
         } else if (!exemptSet.has(rec.staff_id)) {
-          // Staff was late — upsert fine
+          // Staff was late — evaluate fine
           let fineAmount = 0;
           if (correctColorCode === 'yellow') {
             const currentYellows = yellowCountMap.get(rec.staff_id) || 0;
@@ -1137,44 +1152,82 @@ export default function SettingsPage() {
 
           if (fineAmount > 0) {
             if (existingFine?.confirmed) {
-              skipped++;
-            } else {
+              skippedConfirmed++;
+            } else if (existingFine?.waived) {
+              skippedWaived++;
+            } else if (!existingFine) {
               await supabase.from('late_fines').upsert({
                 staff_id: rec.staff_id,
                 date: rec.date,
                 late_minutes: correctMinutesLate,
                 color_code: correctColorCode,
                 fine_amount: fineAmount,
-                waived: false,
                 month: monthStr,
               }, { onConflict: 'staff_id,date' });
-              corrected++;
+              finesCreated++;
+            } else if (existingFine.fine_amount !== fineAmount) {
+              await supabase.from('late_fines').upsert({
+                staff_id: rec.staff_id,
+                date: rec.date,
+                late_minutes: correctMinutesLate,
+                color_code: correctColorCode,
+                fine_amount: fineAmount,
+                month: monthStr,
+              }, { onConflict: 'staff_id,date' });
+              finesRepriced++;
             }
           } else {
-            // Delete fine if it became 0 due to pass
+            // Delete fine if it became 0 due to free pass
             if (existingFine) {
               if (existingFine.confirmed) {
-                skipped++;
+                skippedConfirmed++;
+              } else if (existingFine.waived) {
+                skippedWaived++;
               } else {
                 await supabase.from('late_fines').delete().eq('id', existingFine.id);
-                deleted++;
+                finesVoided++;
               }
             }
           }
         } else {
-          // Staff was exempt — delete unconfirmed fine if exists
+          // Staff was exempt — delete unconfirmed & non-waived fine if exists
           if (existingFine) {
             if (existingFine.confirmed) {
-              skipped++;
+              skippedConfirmed++;
+            } else if (existingFine.waived) {
+              skippedWaived++;
             } else {
               await supabase.from('late_fines').delete().eq('id', existingFine.id);
-              deleted++;
+              finesVoided++;
             }
           }
         }
       }
 
-      setRecalcResult({ total, corrected, deleted, skipped });
+      // Write ONE audit_log entry for recalculation_run
+      await supabase.from('audit_log').insert({
+        action_type: 'recalculation_run',
+        performed_by: user?.email || 'adminnearbi@gmail.com',
+        performed_by_role: user?.role || 'admin',
+        target_description: `Month ${monthStr}`,
+        old_value: null,
+        new_value: JSON.stringify({
+          month: monthStr,
+          created: finesCreated,
+          repriced: finesRepriced,
+          voided: finesVoided,
+          skipped_confirmed: skippedConfirmed,
+          skipped_waived: skippedWaived,
+        }),
+        notes: `Month: ${monthStr}, Mode: settings_month_recalculate, Created: ${finesCreated}, Re-priced: ${finesRepriced}, Voided: ${finesVoided}, Skipped confirmed: ${skippedConfirmed}, Skipped waived: ${skippedWaived}`
+      });
+
+      setRecalcResult({
+        total,
+        corrected: finesCreated + finesRepriced,
+        deleted: finesVoided,
+        skipped: skippedConfirmed + skippedWaived,
+      });
       showToast('Recalculation complete!');
     } catch (err: any) {
       console.error('Recalculate fines error:', err);

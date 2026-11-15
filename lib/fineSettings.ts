@@ -47,3 +47,51 @@ export async function getFineSettings(supabaseClient: any): Promise<FineSettings
     return { ...DEFAULT_FINE_SETTINGS };
   }
 }
+
+/**
+ * Pure function to calculate yellow late occurrence and fine amount.
+ *
+ * Rules:
+ * - Count distinct EARLIER dates in the same month where staff had a yellow late punch.
+ * - Current punch date is ignored (only dates strictly < current punch date in the same month are counted).
+ * - occurrence = (number of earlier distinct yellow dates in the same month) + 1.
+ * - Fine is applied only if occurrence > yellow_free_passes.
+ */
+export function calculateYellowLateFine(
+  earlierYellowDates: string[],
+  freePasses: number,
+  yellowFine: number
+): { occurrence: number; fineAmount: number; isFreePass: boolean } {
+  const uniqueEarlierDates = new Set(earlierYellowDates);
+  const occurrence = uniqueEarlierDates.size + 1;
+  const isFreePass = occurrence <= freePasses;
+  return {
+    occurrence,
+    fineAmount: isFreePass ? 0 : yellowFine,
+    isFreePass,
+  };
+}
+
+/**
+ * Filter an array of attendance records to find earlier distinct yellow dates in the same month.
+ * Strictly ignores punchDate itself, any date outside the month of punchDate, and any date >= punchDate.
+ */
+export function getEarlierYellowDates(
+  attendanceRecords: { date: string; color_code?: string | null }[],
+  punchDate: string
+): string[] {
+  const monthPrefix = punchDate.substring(0, 7);
+  const distinctDates = new Set<string>();
+
+  for (const rec of attendanceRecords) {
+    if (
+      rec.color_code === 'yellow' &&
+      rec.date.startsWith(monthPrefix) &&
+      rec.date < punchDate
+    ) {
+      distinctDates.add(rec.date);
+    }
+  }
+
+  return Array.from(distinctDates);
+}

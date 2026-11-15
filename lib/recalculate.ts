@@ -183,10 +183,13 @@ export async function recalculateStaffAttendance(options: RecalculationOptions):
 
     if (isFineLocked) {
       finesConfirmedUntouched++;
+      if (newColorCode === 'yellow') {
+        yellowPassCount++;
+      }
       continue;
     }
 
-    if (exemption || newColorCode === 'green' || newLateMins <= 5) {
+    if (exemption || newColorCode === 'green') {
       if (existingFine) {
         await supabase
           .from('late_fines')
@@ -216,7 +219,6 @@ export async function recalculateStaffAttendance(options: RecalculationOptions):
             late_minutes: newLateMins,
             color_code: newColorCode,
             fine_amount: fineAmount,
-            waived: false,
             month: monthStr
           }, { onConflict: 'staff_id,date' });
 

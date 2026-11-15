@@ -13,7 +13,7 @@ import { DEPARTMENTS } from '@/lib/data';
 import { calculateOTMinutes, calculateActualHours, calculateEarlyLeaveDeduction, calculateEarlyLeaveMinutes, calculateLateMinutes, autoCloseCheckouts, calculateBonusDays } from '@/lib/salary';
 import { recalculateStaffAttendance } from '@/lib/recalculate';
 import { formatTime12hr } from '@/lib/utils';
-import { getFineSettings, DEFAULT_FINE_SETTINGS } from '@/lib/fineSettings';
+import { getFineSettings, DEFAULT_FINE_SETTINGS, calculateYellowLateFine } from '@/lib/fineSettings';
 
 
 
@@ -790,9 +790,28 @@ export default function AttendancePage() {
 
       if (addStatus === 'late') {
         let fineAmount = 0;
-        if (color_code === 'yellow') fineAmount = Number(fineSettings.yellow_fine);
-        else if (color_code === 'orange') fineAmount = Number(fineSettings.orange_fine);
-        else if (color_code === 'red') fineAmount = Number(fineSettings.red_fine);
+        if (color_code === 'yellow') {
+          const monthPrefix = addDate.substring(0, 7);
+          const { data: earlierYellows } = await supabase
+            .from('attendance')
+            .select('date')
+            .eq('staff_id', addStaffId)
+            .eq('color_code', 'yellow')
+            .gte('date', `${monthPrefix}-01`)
+            .lt('date', addDate);
+
+          const earlierDates = (earlierYellows || []).map((r: any) => r.date);
+          const { fineAmount: yellowFine } = calculateYellowLateFine(
+            earlierDates,
+            Number(fineSettings.yellow_free_passes || 4),
+            Number(fineSettings.yellow_fine || 20)
+          );
+          fineAmount = yellowFine;
+        } else if (color_code === 'orange') {
+          fineAmount = Number(fineSettings.orange_fine);
+        } else if (color_code === 'red') {
+          fineAmount = Number(fineSettings.red_fine);
+        }
 
         if (fineAmount > 0 && !selectedStaff.is_trial) {
           const [year, monthStr] = addDate.split('-');
