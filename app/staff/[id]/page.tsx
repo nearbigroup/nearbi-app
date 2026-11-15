@@ -4,7 +4,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
-import { getFineSettings } from '@/lib/fineSettings';
+import { getFineSettings, isExemptFromLateFines } from '@/lib/fineSettings';
 import { 
   ArrowLeft, 
   Calendar as CalendarIcon, 
@@ -756,7 +756,8 @@ export default function StaffProfilePage() {
       if (attError) throw attError;
 
       let fineAmount = 0;
-      if (finalStatus === 'late') {
+      const staffExempt = isExemptFromLateFines(staff);
+      if (finalStatus === 'late' && !staffExempt) {
         const { data: exemption } = await supabase
           .from('staff_fine_exemptions')
           .select('id')
@@ -788,7 +789,7 @@ export default function StaffProfilePage() {
         }
       }
 
-      if (fineAmount > 0) {
+      if (fineAmount > 0 && !staffExempt) {
         const [y, m] = dateStr.split('-');
         const monthStr = `${y}-${m}`;
         const { error: fineErr } = await supabase.from('late_fines').upsert({

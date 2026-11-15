@@ -445,8 +445,8 @@ export function buildInTimeGridModel(
       }
     }
 
-    // Fines calculations for staff
-    const staffFines = finesByStaff.get(st.id) || [];
+    // Fines calculations for staff (hourly / no-shift staff are exempt from late fines)
+    const staffFines = isHourly ? [] : (finesByStaff.get(st.id) || []);
     const finesIssued = staffFines.reduce(
       (sum, f) => sum + Number(f.fine_amount || 0),
       0
@@ -514,7 +514,7 @@ export function buildInTimeGridModel(
       }
     }
 
-    const freePassesLeft = Math.max(0, fineSettings.yellow_free_passes - freePassesUsed);
+    const freePassesLeft = isHourly ? 0 : Math.max(0, fineSettings.yellow_free_passes - freePassesUsed);
 
     let standardShiftRange = '';
     let shiftLabel = '';

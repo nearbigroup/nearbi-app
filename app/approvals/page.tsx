@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
 import { supabase, fetchAllPages } from '@/lib/supabase';
+import { isExemptFromLateFines } from '@/lib/fineSettings';
 import { createAuditLog, writeAuditLog } from '@/lib/audit';
 import { Check, X, RefreshCw, CheckSquare, Edit2 } from 'lucide-react';
 import Link from 'next/link';
@@ -140,7 +141,7 @@ export default function ApprovalsPage() {
 
       for (const att of attWithOT || []) {
         if (!att.staff) continue;
-        if (att.staff.pay_type === 'hourly') continue;
+        if (isExemptFromLateFines(att.staff)) continue;
         if (user?.role === 'nearbi_homes_supervisor') {
           if (att.staff.branch_id !== 'hypermarket' || att.staff.department !== 'Nearbi Homes') continue;
         } else if (userBranch && att.staff.branch_id !== userBranch) {
@@ -182,8 +183,8 @@ export default function ApprovalsPage() {
 
       const { data: adjData, error: adjErr } = await adjQuery;
       if (adjErr) throw adjErr;
-      // Filter out orphan records where staff object is null and hourly staff
-      const validAdjustments = (adjData || []).filter((a) => a.staff !== null && a.staff.pay_type !== 'hourly');
+      // Filter out orphan records where staff object is null and hourly / no-shift staff
+      const validAdjustments = (adjData || []).filter((a) => a.staff !== null && !isExemptFromLateFines(a.staff));
       setAdjustments(validAdjustments as unknown as Adjustment[]);
 
       // 2. Fetch pending fines (waived=false and confirmed=false)
@@ -201,8 +202,8 @@ export default function ApprovalsPage() {
 
       const { data: fineData, error: fineErr } = await fineQuery;
       if (fineErr) throw fineErr;
-      // Filter out orphan records where staff object is null and hourly staff
-      const validFines = (fineData || []).filter((f) => f.staff !== null && f.staff.pay_type !== 'hourly');
+      // Filter out orphan records where staff object is null and hourly / no-shift staff
+      const validFines = (fineData || []).filter((f) => f.staff !== null && !isExemptFromLateFines(f.staff));
       setFines(validFines as unknown as LateFine[]);
 
       // 3. Fetch corresponding attendance records for adjustments to show details

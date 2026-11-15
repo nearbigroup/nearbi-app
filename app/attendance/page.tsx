@@ -13,7 +13,7 @@ import { DEPARTMENTS } from '@/lib/data';
 import { calculateOTMinutes, calculateActualHours, calculateEarlyLeaveDeduction, calculateEarlyLeaveMinutes, calculateLateMinutes, autoCloseCheckouts, calculateBonusDays } from '@/lib/salary';
 import { recalculateStaffAttendance } from '@/lib/recalculate';
 import { formatTime12hr } from '@/lib/utils';
-import { getFineSettings, DEFAULT_FINE_SETTINGS, calculateYellowLateFine } from '@/lib/fineSettings';
+import { getFineSettings, DEFAULT_FINE_SETTINGS, calculateYellowLateFine, isExemptFromLateFines } from '@/lib/fineSettings';
 
 
 
@@ -788,7 +788,7 @@ export default function AttendancePage() {
 
       if (insertErr) throw insertErr;
 
-      if (addStatus === 'late') {
+      if (addStatus === 'late' && !isExemptFromLateFines(selectedStaff)) {
         let fineAmount = 0;
         if (color_code === 'yellow') {
           const monthPrefix = addDate.substring(0, 7);
@@ -813,7 +813,7 @@ export default function AttendancePage() {
           fineAmount = Number(fineSettings.red_fine);
         }
 
-        if (fineAmount > 0 && !selectedStaff.is_trial) {
+        if (fineAmount > 0 && !selectedStaff.is_trial && !isExemptFromLateFines(selectedStaff)) {
           const [year, monthStr] = addDate.split('-');
           await supabase.from('late_fines').insert({
             staff_id: addStaffId,
@@ -1655,7 +1655,7 @@ export default function AttendancePage() {
         const shiftStart = row.shift.start_time || '09:00';
         const shiftEnd = row.shift.end_time || '18:00';
 
-        const isHourly = row.pay_type === 'hourly';
+        const isHourly = isExemptFromLateFines(row);
 
         let minutesLate = isHourly ? 0 : calculateLateMinutes(row.inTime, shiftStart);
         let status: 'present' | 'late' = (!isHourly && minutesLate > 0) ? 'late' : 'present';

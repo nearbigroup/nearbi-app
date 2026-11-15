@@ -7,7 +7,7 @@ import {
   getDaysInMonth
 } from './salary';
 import { writeAuditLog } from './audit';
-import { getFineSettings } from './fineSettings';
+import { getFineSettings, isExemptFromLateFines } from './fineSettings';
 
 export interface RecalculationOptions {
   staffId: string;
@@ -119,11 +119,13 @@ export async function recalculateStaffAttendance(options: RecalculationOptions):
   const sortedRecords = [...(attRecords || [])].sort((a, b) => a.date.localeCompare(b.date));
   let yellowPassCount = 0;
 
+  const isStaffExempt = isExemptFromLateFines(staff);
+
   for (const r of sortedRecords) {
     if (!r.check_in_time) continue;
     recordsProcessed++;
 
-    const newLateMins = calculateLateMinutes(r.check_in_time, shift.start_time);
+    const newLateMins = isStaffExempt ? 0 : calculateLateMinutes(r.check_in_time, shift.start_time);
     const newColorCode: 'green' | 'yellow' | 'orange' | 'red' =
       newLateMins === 0 ? 'green' :
       newLateMins <= 15 ? 'yellow' :
@@ -189,7 +191,7 @@ export async function recalculateStaffAttendance(options: RecalculationOptions):
       continue;
     }
 
-    if (exemption || newColorCode === 'green') {
+    if (exemption || isStaffExempt || newColorCode === 'green') {
       if (existingFine) {
         await supabase
           .from('late_fines')

@@ -11,7 +11,7 @@ import * as XLSX from 'xlsx';
 import { DEPARTMENTS } from '@/lib/data';
 import { calculateLateMinutes, calculateOTMinutes, calculateEarlyLeaveMinutes } from '@/lib/salary';
 import { recalculateStaffAttendance } from '@/lib/recalculate';
-import { getFineSettings } from '@/lib/fineSettings';
+import { getFineSettings, isExemptFromLateFines } from '@/lib/fineSettings';
 
 
 interface Shift {
@@ -241,9 +241,13 @@ export default function StaffPage() {
 
     const { data: staffData } = await supabase
       .from('staff')
-      .select('ot_threshold_minutes')
+      .select('ot_threshold_minutes, pay_type, shift_id')
       .eq('id', staffId)
       .single();
+
+    if (isExemptFromLateFines(staffData)) {
+      return 0;
+    }
 
     // Fetch all attendance for this month
     const { data: attRecords, error: attErr } = await supabase

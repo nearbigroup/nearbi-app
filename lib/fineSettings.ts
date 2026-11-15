@@ -95,3 +95,20 @@ export function getEarlierYellowDates(
 
   return Array.from(distinctDates);
 }
+
+/**
+ * Pure function: Determines whether a staff member is exempt from late fines.
+ * A staff member is exempt if:
+ * 1. staff object is null/undefined
+ * 2. pay_type is 'hourly'
+ * 3. shift_id is null, undefined, or empty string
+ */
+export function isExemptFromLateFines(
+  staff: { pay_type?: string | null; shift_id?: string | null } | null | undefined
+): boolean {
+  if (!staff) return true;
+  if (staff.pay_type === 'hourly') return true;
+  if (!staff.shift_id || String(staff.shift_id).trim() === '') return true;
+  return false;
+}
+

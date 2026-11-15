@@ -7,7 +7,7 @@ import { createNotification } from '@/lib/notifications';
 import { useRouter } from 'next/navigation';
 import { Check, LogOut, Camera, AlertCircle, UserCheck, Timer, AlertTriangle, Coffee, RotateCcw, CircleCheck, Users } from 'lucide-react';
 import { calculateOTMinutes, calculateActualHours, calculateActualHoursWithBreaks, calculateEarlyLeaveMinutes, calculateLateMinutes, calculateMinutesWorked } from '@/lib/salary';
-import { getFineSettings, calculateYellowLateFine } from '@/lib/fineSettings';
+import { getFineSettings, calculateYellowLateFine, isExemptFromLateFines } from '@/lib/fineSettings';
 import { DEPARTMENTS } from '@/lib/data';
 
 const getMinutes = (timeStr: string) => {
@@ -927,7 +927,7 @@ export default function KioskPage() {
         const now = new Date();
         const checkInTimeStr = now.toTimeString().split(' ')[0].substring(0, 5); // "HH:MM"
 
-        const isHourly = staff.pay_type === 'hourly';
+        const isHourly = isExemptFromLateFines(staff);
         const shiftStartStr = staff.shift?.start_time || staff.shifts?.start_time || '09:00'; // "HH:MM"
         const [sh, sm] = shiftStartStr.split(':').map(Number);
         const shiftMins = sh * 60 + sm;
@@ -1054,7 +1054,7 @@ export default function KioskPage() {
         }
 
         // Insert late fine if any
-        if (fineAmount > 0 && !staff.is_trial) {
+        if (fineAmount > 0 && !staff.is_trial && !isExemptFromLateFines(staff)) {
           await supabase.from('late_fines').upsert({
             staff_id: staff.id,
             date: todayStr,

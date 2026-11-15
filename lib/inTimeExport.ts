@@ -171,9 +171,9 @@ export async function exportInTimePDF(
         r.approvedLeaveDays,
         r.hasShift && !r.isNew ? r.targetDays : '—',
         statusStr,
-        r.finesIssued > 0 ? `Rs ${r.finesIssued.toLocaleString('en-IN')}` : 'Rs 0',
-        r.finesWaived > 0 ? `Rs ${r.finesWaived.toLocaleString('en-IN')}` : 'Rs 0',
-        r.freePassesLeft,
+        r.isHourly ? '—' : (r.finesIssued > 0 ? `Rs ${r.finesIssued.toLocaleString('en-IN')}` : 'Rs 0'),
+        r.isHourly ? '—' : (r.finesWaived > 0 ? `Rs ${r.finesWaived.toLocaleString('en-IN')}` : 'Rs 0'),
+        r.isHourly ? '—' : r.freePassesLeft,
       ];
     });
 
@@ -506,7 +506,9 @@ export async function exportInTimePDF(
 
         const placeStr = r.place !== null ? `#${r.place}` : '-';
         const bannerLeft = `${r.name} (${r.department}) | Shift: ${r.shiftLabel} | Target: ${r.targetDays} | Status: ${r.statusText} | Rank: ${placeStr}`;
-        const bannerRight = `Fines: Rs ${r.finesIssued.toLocaleString('en-IN')} | Waived: Rs ${r.finesWaived.toLocaleString('en-IN')} | Passes: ${r.freePassesUsed} used, ${r.freePassesLeft} left`;
+        const bannerRight = r.isHourly
+          ? 'Hourly (exempt from late fines)'
+          : `Fines: Rs ${r.finesIssued.toLocaleString('en-IN')} | Waived: Rs ${r.finesWaived.toLocaleString('en-IN')} | Passes: ${r.freePassesUsed} used, ${r.freePassesLeft} left`;
 
         doc.text(bannerLeft, 13, currentY + 4.5);
         doc.setFont('helvetica', 'normal');
@@ -736,9 +738,9 @@ export async function exportInTimeExcel(
         r.approvedLeaveDays,
         r.hasShift && !r.isNew ? r.targetDays : '—',
         statusStr,
-        r.finesIssued > 0 ? `Rs ${r.finesIssued.toLocaleString('en-IN')}` : 'Rs 0',
-        r.finesWaived > 0 ? `Rs ${r.finesWaived.toLocaleString('en-IN')}` : 'Rs 0',
-        r.freePassesLeft,
+        r.isHourly ? '—' : (r.finesIssued > 0 ? `Rs ${r.finesIssued.toLocaleString('en-IN')}` : 'Rs 0'),
+        r.isHourly ? '—' : (r.finesWaived > 0 ? `Rs ${r.finesWaived.toLocaleString('en-IN')}` : 'Rs 0'),
+        r.isHourly ? '—' : r.freePassesLeft,
       ];
 
       const row = summarySheet.addRow(rowValues);

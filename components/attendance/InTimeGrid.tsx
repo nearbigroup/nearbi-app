@@ -867,13 +867,13 @@ export default function InTimeGrid({
                         </div>
                       </td>
                       <td className={`p-1.5 text-center border-r border-white/10 font-mono font-bold text-amber-300 ${zoomStyles.summaryFont}`}>
-                        Rs {row.finesIssued.toLocaleString('en-IN')}
+                        {row.isHourly ? '—' : `Rs ${row.finesIssued.toLocaleString('en-IN')}`}
                       </td>
                       <td className={`p-1.5 text-center border-r border-white/10 font-mono font-bold text-sky-300 ${zoomStyles.summaryFont}`}>
-                        Rs {row.finesWaived.toLocaleString('en-IN')}
+                        {row.isHourly ? '—' : `Rs ${row.finesWaived.toLocaleString('en-IN')}`}
                       </td>
                       <td className={`p-1.5 text-center font-mono font-black text-amber-400 ${zoomStyles.summaryFont}`}>
-                        {row.freePassesLeft}
+                        {row.isHourly ? '—' : row.freePassesLeft}
                       </td>
                     </tr>
                   ))
@@ -1006,7 +1006,7 @@ export default function InTimeGrid({
                   <div className="bg-rose-950/30 border border-rose-500/20 rounded-lg p-1.5">
                     <div className="text-[9px] text-rose-400 font-bold uppercase">Fines</div>
                     <div className="text-xs font-black text-rose-300 font-mono">
-                      Rs {row.finesIssued.toLocaleString('en-IN')}
+                      {row.isHourly ? '—' : `Rs ${row.finesIssued.toLocaleString('en-IN')}`}
                     </div>
                   </div>
                 </div>
@@ -1193,19 +1193,19 @@ export default function InTimeGrid({
                 <div className="bg-black/30 border border-white/5 rounded-xl p-2">
                   <span className="text-[10px] text-slate-400 block font-semibold">Issued</span>
                   <span className="text-sm font-black text-amber-300 font-mono">
-                    Rs {activeStaffDetail.finesIssued.toLocaleString('en-IN')}
+                    {activeStaffDetail.isHourly ? '—' : `Rs ${activeStaffDetail.finesIssued.toLocaleString('en-IN')}`}
                   </span>
                 </div>
                 <div className="bg-black/30 border border-white/5 rounded-xl p-2">
                   <span className="text-[10px] text-slate-400 block font-semibold">Waived</span>
                   <span className="text-sm font-black text-sky-300 font-mono">
-                    Rs {activeStaffDetail.finesWaived.toLocaleString('en-IN')}
+                    {activeStaffDetail.isHourly ? '—' : `Rs ${activeStaffDetail.finesWaived.toLocaleString('en-IN')}`}
                   </span>
                 </div>
                 <div className="bg-black/30 border border-white/5 rounded-xl p-2">
                   <span className="text-[10px] text-slate-400 block font-semibold">Passes Left</span>
                   <span className="text-sm font-black text-emerald-300 font-mono">
-                    {activeStaffDetail.freePassesLeft} / {model.fineSettings.yellow_free_passes}
+                    {activeStaffDetail.isHourly ? '—' : `${activeStaffDetail.freePassesLeft} / ${model.fineSettings.yellow_free_passes}`}
                   </span>
                 </div>
               </div>
