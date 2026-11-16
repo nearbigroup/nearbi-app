@@ -287,39 +287,30 @@ export default function StaffProfilePage() {
         { key: 'driving_licence_photo', path: p.driving_licence_photo_url }
       ];
 
-      const urls: Record<string, string> = {};
-      for (const doc of docsToSign) {
-        if (doc.path) {
-          if (doc.path.startsWith('http')) {
-            urls[doc.key] = doc.path;
-          } else {
-            try {
-              const { data } = await supabase.storage.from('staff-documents').createSignedUrl(doc.path, 3600);
-              if (data?.signedUrl) {
-                urls[doc.key] = data.signedUrl;
-              }
-            } catch (e) {
-              console.error(e);
-            }
-          }
-        }
-      }
-
       const certs = staff?.staff_documents || [];
-      for (const cert of certs) {
-        if (cert.doc_url) {
-          if (cert.doc_url.startsWith('http')) {
-            urls[`cert_${cert.id}`] = cert.doc_url;
-          } else {
-            try {
-              const { data } = await supabase.storage.from('staff-documents').createSignedUrl(cert.doc_url, 3600);
-              if (data?.signedUrl) {
-                urls[`cert_${cert.id}`] = data.signedUrl;
-              }
-            } catch (e) {
-              console.error(e);
-            }
+      const allDocs = [
+        ...docsToSign.filter((d) => !!d.path),
+        ...certs.filter((c: any) => !!c.doc_url).map((c: any) => ({ key: `cert_${c.id}`, path: c.doc_url }))
+      ];
+
+      const signedEntries = await Promise.all(
+        allDocs.map(async (doc) => {
+          if (!doc.path) return null;
+          if (doc.path.startsWith('http')) return [doc.key, doc.path];
+          try {
+            const { data } = await supabase.storage.from('staff-documents').createSignedUrl(doc.path, 3600);
+            if (data?.signedUrl) return [doc.key, data.signedUrl];
+          } catch (e) {
+            console.error(e);
           }
+          return null;
+        })
+      );
+
+      const urls: Record<string, string> = {};
+      for (const entry of signedEntries) {
+        if (entry) {
+          urls[entry[0]] = entry[1];
         }
       }
 
@@ -525,34 +516,40 @@ export default function StaffProfilePage() {
         .eq('ot_approved', false);
       setPendingOT(otData || []);
 
-      const { data: lfData } = await supabase
-        .from('late_fines')
-        .select('*')
-        .eq('staff_id', id)
-        .eq('confirmed', false)
-        .eq('waived', false);
+      const [
+        { data: lfData },
+        { data: sfData },
+        { data: lvData },
+        { data: logsData }
+      ] = await Promise.all([
+        supabase
+          .from('late_fines')
+          .select('*')
+          .eq('staff_id', id)
+          .eq('confirmed', false)
+          .eq('waived', false),
+        supabase
+          .from('special_fines')
+          .select('*')
+          .eq('staff_id', id)
+          .eq('confirmed', false)
+          .eq('waived', false),
+        supabase
+          .from('leave_requests')
+          .select('*')
+          .eq('staff_id', id)
+          .eq('status', 'pending'),
+        supabase
+          .from('audit_logs')
+          .select('*')
+          .or(`record_id.eq.${id},reason.ilike.%${id}%`)
+          .order('created_at', { ascending: false })
+          .limit(20)
+      ]);
+
       setPendingLateFines(lfData || []);
-
-      const { data: sfData } = await supabase
-        .from('special_fines')
-        .select('*')
-        .eq('staff_id', id)
-        .eq('confirmed', false)
-        .eq('waived', false);
       setPendingSpecialFines(sfData || []);
-
-      const { data: lvData } = await supabase
-        .from('leave_requests')
-        .select('*')
-        .eq('staff_id', id)
-        .eq('status', 'pending');
       setPendingLeaves(lvData || []);
-
-      const { data: logsData } = await supabase
-        .from('audit_logs')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(100);
 
       const filteredLogs = logsData ? logsData.filter((log: any) => {
         if (log.record_id === id) return true;
@@ -1262,7 +1259,7 @@ export default function StaffProfilePage() {
     fetchStaffData();
   }, [id]);
 
-  // Fetch Month-dependent Data
+  // Fetch Month-dependent Data in parallel
   const fetchMonthData = async () => {
     if (!staff) return;
     try {
@@ -1273,101 +1270,104 @@ export default function StaffProfilePage() {
       const firstDay = `${year}-${String(month).padStart(2, '0')}-01`;
       const lastDay = `${year}-${String(month).padStart(2, '0')}-${String(new Date(year, month, 0).getDate()).padStart(2, '0')}`;
 
-      // 1. Fetch Attendance
-      const { data: monthAtt } = await supabase
-        .from('attendance')
-        .select('*')
-        .eq('staff_id', id)
-        .gte('date', firstDay)
-        .lte('date', lastDay)
-        .order('date', { ascending: true });
+      const [
+        { data: monthAtt },
+        { data: lfData },
+        { data: sfData },
+        { data: breakData },
+        { data: psData }
+      ] = await Promise.all([
+        supabase
+          .from('attendance')
+          .select('*')
+          .eq('staff_id', id)
+          .gte('date', firstDay)
+          .lte('date', lastDay)
+          .order('date', { ascending: true }),
+        supabase
+          .from('late_fines')
+          .select('*')
+          .eq('staff_id', id)
+          .eq('month', selectedMonth),
+        supabase
+          .from('special_fines')
+          .select('*')
+          .eq('staff_id', id)
+          .eq('month', selectedMonth),
+        supabase
+          .from('break_logs')
+          .select('*')
+          .eq('staff_id', id)
+          .gte('date', firstDay)
+          .lte('date', lastDay),
+        supabase
+          .from('performance_scores')
+          .select('*')
+          .eq('staff_id', id)
+          .eq('month', selectedMonth)
+          .maybeSingle()
+      ]);
+
       setAttendance(monthAtt || []);
-
-      // 2. Fetch Late Fines
-      const { data: lfData } = await supabase
-        .from('late_fines')
-        .select('*')
-        .eq('staff_id', id)
-        .eq('month', selectedMonth);
       setLateFines(lfData || []);
-
-      // 3. Fetch Special Fines
-      const { data: sfData } = await supabase
-        .from('special_fines')
-        .select('*')
-        .eq('staff_id', id)
-        .eq('month', selectedMonth);
       setSpecialFines(sfData || []);
-
-      // 4. Fetch Break Logs
-      const { data: breakData } = await supabase
-        .from('break_logs')
-        .select('*')
-        .eq('staff_id', id)
-        .gte('date', firstDay)
-        .lte('date', lastDay);
       setBreaks(breakData || []);
-
-      // 5. Fetch Performance Score
-      const { data: psData } = await supabase
-        .from('performance_scores')
-        .select('*')
-        .eq('staff_id', id)
-        .eq('month', selectedMonth)
-        .maybeSingle();
       setPerfScore(psData || null);
     } catch (err) {
       console.error('Error fetching month data:', err);
     }
   };
 
-  // Fetch Non-month dependent logs
+  // Fetch Non-month dependent logs in parallel
   const fetchLogs = async () => {
     if (!staff) return;
     try {
-      // 1. Leave Requests
-      const { data: leaveData } = await supabase
-        .from('leave_requests')
-        .select('*')
-        .eq('staff_id', id)
-        .order('date', { ascending: false });
+      const isOpsOrAdmin = user?.role === 'admin' || user?.role === 'ops_manager';
+      const isOps = user?.role === 'ops_manager';
+
+      const [
+        { data: leaveData },
+        salRes,
+        notesRes,
+        { data: swapsData },
+        { data: alertsData }
+      ] = await Promise.all([
+        supabase
+          .from('leave_requests')
+          .select('*')
+          .eq('staff_id', id)
+          .order('date', { ascending: false }),
+        isOpsOrAdmin
+          ? supabase
+              .from('salary_confirmations')
+              .select('*')
+              .eq('staff_id', id)
+              .order('month', { ascending: false })
+              .limit(3)
+          : Promise.resolve({ data: [] }),
+        isOps
+          ? supabase
+              .from('staff_notes')
+              .select('*')
+              .eq('staff_id', id)
+              .order('created_at', { ascending: false })
+          : Promise.resolve({ data: [] }),
+        supabase
+          .from('shift_swap_requests')
+          .select('*, requester:requested_by(name), colleague:requested_with(name)')
+          .or(`requested_by.eq.${id},requested_with.eq.${id}`)
+          .order('swap_date', { ascending: false }),
+        supabase
+          .from('staff_alerts')
+          .select('*')
+          .eq('staff_id', id)
+          .order('flagged_at', { ascending: false })
+      ]);
+
       setLeaves(leaveData || []);
-
-      // 2. Salary Summary (Last 3 months)
-      if (user?.role === 'admin' || user?.role === 'ops_manager') {
-        const { data: salData } = await supabase
-          .from('salary_confirmations')
-          .select('*')
-          .eq('staff_id', id)
-          .order('month', { ascending: false })
-          .limit(3);
-        setSalaryConfirmations(salData || []);
-      }
-
-      // 3. Private Notes (Ops Manager only)
-      if (user?.role === 'ops_manager') {
-        const { data: notesData } = await supabase
-          .from('staff_notes')
-          .select('*')
-          .eq('staff_id', id)
-          .order('created_at', { ascending: false });
-        setNotes(notesData || []);
-      }
-
-      // 4. Shift Swap History
-      const { data: swapsData } = await supabase
-        .from('shift_swap_requests')
-        .select('*, requester:requested_by(name), colleague:requested_with(name)')
-        .or(`requested_by.eq.${id},requested_with.eq.${id}`)
-        .order('swap_date', { ascending: false });
+      if (salRes?.data) setSalaryConfirmations(salRes.data);
+      if (notesRes?.data) setNotes(notesRes.data);
       setSwapsHistory(swapsData || []);
-
-      // 5. Staff Alerts History
-      const { data: alertsData } = await supabase
-        .from('staff_alerts')
-        .select('*')
-        .eq('staff_id', id)
-        .order('flagged_at', { ascending: false });
       setAlertsHistory(alertsData || []);
     } catch (err) {
       console.error('Error fetching logs:', err);

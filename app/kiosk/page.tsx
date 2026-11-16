@@ -252,49 +252,43 @@ export default function KioskPage() {
         return;
       }
 
-      const { count: checkedInCount, error: ciErr } = await supabase
-        .from('attendance')
-        .select('*', { count: 'exact', head: true })
-        .eq('date', todayStr)
-        .in('staff_id', staffIds)
-        .not('check_in_time', 'is', null);
+      const [ciRes, lateRes, coRes, breakRes] = await Promise.all([
+        supabase
+          .from('attendance')
+          .select('id', { count: 'exact', head: true })
+          .eq('date', todayStr)
+          .in('staff_id', staffIds)
+          .not('check_in_time', 'is', null),
+        supabase
+          .from('attendance')
+          .select('id', { count: 'exact', head: true })
+          .eq('date', todayStr)
+          .in('staff_id', staffIds)
+          .eq('status', 'late'),
+        supabase
+          .from('attendance')
+          .select('id', { count: 'exact', head: true })
+          .eq('date', todayStr)
+          .in('staff_id', staffIds)
+          .not('check_out_time', 'is', null),
+        supabase
+          .from('break_logs')
+          .select('id', { count: 'exact', head: true })
+          .eq('date', todayStr)
+          .is('break_end', null)
+          .in('staff_id', staffIds)
+      ]);
 
-      if (ciErr) throw ciErr;
-
-      const { count: lateCount, error: lateErr } = await supabase
-        .from('attendance')
-        .select('*', { count: 'exact', head: true })
-        .eq('date', todayStr)
-        .in('staff_id', staffIds)
-        .eq('status', 'late');
-
-      if (lateErr) throw lateErr;
-
-      const { count: checkedOutCount, error: coErr } = await supabase
-        .from('attendance')
-        .select('*', { count: 'exact', head: true })
-        .eq('date', todayStr)
-        .in('staff_id', staffIds)
-        .not('check_out_time', 'is', null);
-
-      if (coErr) throw coErr;
-
-      // Fetch open breaks count today
-      const { count: onBreakCount, error: breakErr } = await supabase
-        .from('break_logs')
-        .select('*', { count: 'exact', head: true })
-        .eq('date', todayStr)
-        .is('break_end', null)
-        .in('staff_id', staffIds);
-
-      if (breakErr) throw breakErr;
-      const onBreak = onBreakCount || 0;
+      if (ciRes.error) throw ciRes.error;
+      if (lateRes.error) throw lateRes.error;
+      if (coRes.error) throw coRes.error;
+      if (breakRes.error) throw breakRes.error;
 
       setStats({
-        checkedIn: checkedInCount || 0,
-        late: lateCount || 0,
-        checkedOut: checkedOutCount || 0,
-        onBreak
+        checkedIn: ciRes.count || 0,
+        late: lateRes.count || 0,
+        checkedOut: coRes.count || 0,
+        onBreak: breakRes.count || 0
       });
     } catch (err) {
       console.error('Error fetching kiosk stats:', err);

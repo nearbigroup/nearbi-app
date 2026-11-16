@@ -1746,19 +1746,28 @@ export default function StaffPage() {
       return updated;
     });
 
-    // Realtime channel
+    // Realtime channel with debounce
+    let debounceTimer: NodeJS.Timeout | null = null;
+    const debouncedFetchStaff = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        fetchStaff();
+      }, 2500);
+    };
+
     const channel = supabase
       .channel('staff-realtime-updates')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'staff' },
         () => {
-          fetchStaff();
+          debouncedFetchStaff();
         }
       )
       .subscribe();
 
     return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
       channel.unsubscribe();
     };
   }, [userBranch]);

@@ -1872,133 +1872,102 @@ export default function AttendancePage() {
     try {
       const todayStr = selectedDate;
 
-      // 1. Fetch staff
-      try {
-        let staffQuery = supabase.from('staff').select('*, shift:shifts(*)').eq('active', true).eq('is_resigned', false).order('name');
-        if (user?.role === 'nearbi_homes_supervisor') {
-          staffQuery = staffQuery.eq('branch_id', 'hypermarket').eq('department', 'Nearbi Homes');
-        } else if (userBranch) {
-          staffQuery = staffQuery.eq('branch_id', userBranch);
-        }
-        const { data: sData, error: sErr } = await staffQuery;
-        if (sErr) {
-          console.error('Error fetching staff:', sErr);
-          setErrorMsg('Could not load staff list.');
-          setStaff([]);
-        } else {
-          console.log('Staff count:', sData?.length);
-          const normalizedStaff = (sData || []).map((s: any) => {
-            let normalizedShift = null;
-            if (s.shift) {
-              normalizedShift = Array.isArray(s.shift) ? s.shift[0] : s.shift;
-            } else if (s.shifts) {
-              normalizedShift = Array.isArray(s.shifts) ? s.shifts[0] : s.shifts;
-            }
-            return {
-              ...s,
-              shift: normalizedShift
-            };
-          });
-          setStaff(normalizedStaff as unknown as StaffMember[]);
-          setErrorMsg('');
-        }
-      } catch (err: any) {
-        console.error('Exception fetching staff:', err);
-        setErrorMsg('Could not load staff list.');
-        setStaff([]);
+      let staffQuery = supabase.from('staff').select('*, shift:shifts(*)').eq('active', true).eq('is_resigned', false).order('name');
+      if (user?.role === 'nearbi_homes_supervisor') {
+        staffQuery = staffQuery.eq('branch_id', 'hypermarket').eq('department', 'Nearbi Homes');
+      } else if (userBranch) {
+        staffQuery = staffQuery.eq('branch_id', userBranch);
       }
 
-      // 2. Fetch today's attendance
-      try {
-        const { data: attRecords, error: aErr } = await supabase
-          .from('attendance')
-          .select('*')
-          .eq('date', todayStr);
-        if (aErr) {
-          console.error('Attendance load error:', aErr);
-          throw aErr;
-        }
+      const monthKey = selectedDate.substring(0, 7);
+      const firstDay = `${monthKey}-01`;
+      const [yr, mo] = monthKey.split('-').map(Number);
+      const lastDayNum = new Date(yr, mo, 0).getDate();
+      const lastDay = `${yr}-${String(mo).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
+
+      // Run independent attendance queries in parallel
+      const [
+        { data: sData, error: sErr },
+        { data: attRecords, error: aErr },
+        { data: fData, error: fErr },
+        { data: adjData, error: adjErr },
+        { data: breakData, error: breakErr },
+        fsData,
+        { data: monthAtt, error: mAttErr }
+      ] = await Promise.all([
+        staffQuery,
+        supabase.from('attendance').select('*').eq('date', todayStr),
+        supabase.from('late_fines').select('*').eq('date', todayStr),
+        supabase.from('attendance_adjustments').select('*').eq('date', todayStr),
+        supabase.from('break_logs').select('*').eq('date', todayStr),
+        getFineSettings(supabase).catch(err => {
+          console.error('Exception fetching fine settings:', err);
+          return null;
+        }),
+        supabase.from('attendance').select('staff_id, date, check_in_time, day_type').gte('date', firstDay).lte('date', lastDay)
+      ]);
+
+      let normalizedStaff: StaffMember[] = [];
+      if (sErr) {
+        console.error('Error fetching staff:', sErr);
+        setErrorMsg('Could not load staff list.');
+        setStaff([]);
+      } else {
+        console.log('Staff count:', sData?.length);
+        normalizedStaff = (sData || []).map((s: any) => {
+          let normalizedShift = null;
+          if (s.shift) {
+            normalizedShift = Array.isArray(s.shift) ? s.shift[0] : s.shift;
+          } else if (s.shifts) {
+            normalizedShift = Array.isArray(s.shifts) ? s.shifts[0] : s.shifts;
+          }
+          return {
+            ...s,
+            shift: normalizedShift
+          };
+        }) as unknown as StaffMember[];
+        setStaff(normalizedStaff);
+        setErrorMsg('');
+      }
+
+      if (aErr) {
+        console.error('Attendance load error:', aErr);
+        setErrorMsg('Could not load data. Check connection.');
+      } else {
         console.log('Attendance records:', attRecords?.length);
         console.log('Sample att record:', attRecords?.[0]);
         setAttendance(attRecords || []);
-      } catch (err: any) {
-        console.error('Attendance fetch error:', err);
-        setErrorMsg('Could not load data. Check connection.');
       }
 
-      // 3. Fetch today's late fines
-      try {
-        let finesQuery = supabase.from('late_fines').select('*').eq('date', todayStr);
-        const { data: fData, error: fErr } = await finesQuery;
-        if (fErr) {
-          console.error('Error fetching late fines:', fErr);
-          setFines([]);
-        } else {
-          setFines(fData || []);
-        }
-      } catch (err: any) {
-        console.error('Exception fetching late fines:', err);
+      if (fErr) {
+        console.error('Error fetching late fines:', fErr);
         setFines([]);
+      } else {
+        setFines(fData || []);
       }
 
-      // 4. Fetch today's adjustments
-      try {
-        let adjustmentsQuery = supabase.from('attendance_adjustments').select('*').eq('date', todayStr);
-        const { data: adjData, error: adjErr } = await adjustmentsQuery;
-        if (adjErr) {
-          console.error('Error fetching adjustments:', adjErr);
-          setAdjustments([]);
-        } else {
-          setAdjustments(adjData || []);
-        }
-      } catch (err: any) {
-        console.error('Exception fetching adjustments:', err);
+      if (adjErr) {
+        console.error('Error fetching adjustments:', adjErr);
         setAdjustments([]);
+      } else {
+        setAdjustments(adjData || []);
       }
 
-      // 5. Fetch today's break logs
-      try {
-        const { data: breakData, error: breakErr } = await supabase
-          .from('break_logs')
-          .select('*')
-          .eq('date', todayStr);
-        if (breakErr) {
-          console.error('Error fetching break logs:', breakErr);
-          setBreakLogs([]);
-        } else {
-          setBreakLogs(breakData || []);
-        }
-      } catch (err: any) {
-        console.error('Exception fetching break logs:', err);
+      if (breakErr) {
+        console.error('Error fetching break logs:', breakErr);
         setBreakLogs([]);
+      } else {
+        setBreakLogs(breakData || []);
       }
 
-      // 6. Fetch fine settings
-      try {
-        const fsData = await getFineSettings(supabase);
+      if (fsData) {
         setFineSettings(fsData);
-      } catch (err) {
-        console.error('Exception fetching fine settings:', err);
       }
 
-      // 7. Fetch selected month's attendance for weekly off balance calculations
-      try {
-        const monthKey = selectedDate.substring(0, 7);
-        const firstDay = `${monthKey}-01`;
-        const [yr, mo] = monthKey.split('-').map(Number);
-        const lastDayNum = new Date(yr, mo, 0).getDate();
-        const lastDay = `${yr}-${String(mo).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
-
-        const { data: monthAtt } = await supabase
-          .from('attendance')
-          .select('staff_id, date, check_in_time, day_type')
-          .gte('date', firstDay)
-          .lte('date', lastDay);
-
+      if (!mAttErr && monthAtt && normalizedStaff.length > 0) {
         const balances: Record<string, { earned: number; used: number; remaining: number }> = {};
-        
-        staff.forEach((s) => {
-          const staffAtt = monthAtt?.filter(a => a.staff_id === s.id) || [];
+        normalizedStaff.forEach((s) => {
+          const staffAtt = monthAtt.filter(a => a.staff_id === s.id);
           const daysWorked = staffAtt.filter(
             a => a.check_in_time !== null && a.day_type !== 'weekly_off' && a.day_type !== 'holiday'
           ).length;
@@ -2010,12 +1979,8 @@ export default function AttendancePage() {
 
           balances[s.id] = { earned, used, remaining };
         });
-
         setWeeklyOffBalances(balances);
-      } catch (err) {
-        console.error('Error computing weekly off balances:', err);
       }
-
 
     } catch (err: any) {
       console.error('Attendance fetch error:', err);
@@ -2089,26 +2054,35 @@ export default function AttendancePage() {
     setLoading(true);
     fetchData();
 
-    // Realtime attendance channel (FIX 2 - Step 4)
+    // Realtime attendance channel with debounce
+    let debounceTimer: NodeJS.Timeout | null = null;
+    const debouncedFetch = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        fetchData();
+      }, 2500);
+    };
+
     const channel = supabase
       .channel('attendance-realtime')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'attendance' },
         () => {
-          fetchData();
+          debouncedFetch();
         }
       )
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'break_logs' },
         () => {
-          fetchData();
+          debouncedFetch();
         }
       )
       .subscribe();
 
     return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
       supabase.removeChannel(channel);
     };
   }, [userBranch, selectedDate]);

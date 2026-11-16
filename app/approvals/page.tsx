@@ -139,37 +139,47 @@ export default function ApprovalsPage() {
           .range(start, end)
       );
 
-      for (const att of attWithOT || []) {
-        if (!att.staff) continue;
-        if (isExemptFromLateFines(att.staff)) continue;
+      const eligibleOT = (attWithOT || []).filter((att) => {
+        if (!att.staff) return false;
+        if (isExemptFromLateFines(att.staff)) return false;
         if (user?.role === 'nearbi_homes_supervisor') {
-          if (att.staff.branch_id !== 'hypermarket' || att.staff.department !== 'Nearbi Homes') continue;
+          if (att.staff.branch_id !== 'hypermarket' || att.staff.department !== 'Nearbi Homes') return false;
         } else if (userBranch && att.staff.branch_id !== userBranch) {
-          continue;
+          return false;
         }
+        return true;
+      });
 
-        const { data: existing } = await supabase
+      if (eligibleOT.length > 0) {
+        const staffIds = Array.from(new Set(eligibleOT.map((a) => a.staff_id)));
+        const dates = Array.from(new Set(eligibleOT.map((a) => a.date)));
+
+        const { data: existingAdj } = await supabase
           .from('attendance_adjustments')
-          .select('id')
-          .eq('staff_id', att.staff_id)
-          .eq('date', att.date)
-          .eq('type', 'ot')
-          .limit(1);
+          .select('staff_id, date')
+          .in('staff_id', staffIds)
+          .in('date', dates)
+          .eq('type', 'ot');
 
-        if (!existing || existing.length === 0) {
+        const existingSet = new Set((existingAdj || []).map((a) => `${a.staff_id}_${a.date}`));
+        const toInsert = eligibleOT
+          .filter((a) => !existingSet.has(`${a.staff_id}_${a.date}`))
+          .map((a) => ({
+            staff_id: a.staff_id,
+            date: a.date,
+            type: 'ot',
+            minutes: a.ot_minutes,
+            status: 'pending'
+          }));
+
+        if (toInsert.length > 0) {
           await supabase
             .from('attendance_adjustments')
-            .upsert({
-              staff_id: att.staff_id,
-              date: att.date,
-              type: 'ot',
-              minutes: att.ot_minutes,
-              status: 'pending'
-            }, { onConflict: 'staff_id,date,type', ignoreDuplicates: true });
+            .upsert(toInsert, { onConflict: 'staff_id,date,type', ignoreDuplicates: true });
         }
       }
 
-      // 1. Fetch pending adjustments (OT / Early In)
+      // 1. Fetch pending adjustments (OT / Early In) and 2. Pending fines in parallel
       let adjQuery = supabase
         .from('attendance_adjustments')
         .select('*, staff!inner(*, shift:shifts(*))')
@@ -181,13 +191,6 @@ export default function ApprovalsPage() {
         adjQuery = adjQuery.eq('staff.branch_id', userBranch);
       }
 
-      const { data: adjData, error: adjErr } = await adjQuery;
-      if (adjErr) throw adjErr;
-      // Filter out orphan records where staff object is null and hourly / no-shift staff
-      const validAdjustments = (adjData || []).filter((a) => a.staff !== null && !isExemptFromLateFines(a.staff));
-      setAdjustments(validAdjustments as unknown as Adjustment[]);
-
-      // 2. Fetch pending fines (waived=false and confirmed=false)
       let fineQuery = supabase
         .from('late_fines')
         .select('*, staff!inner(*)')
@@ -200,9 +203,18 @@ export default function ApprovalsPage() {
         fineQuery = fineQuery.eq('staff.branch_id', userBranch);
       }
 
-      const { data: fineData, error: fineErr } = await fineQuery;
+      const [{ data: adjData, error: adjErr }, { data: fineData, error: fineErr }] = await Promise.all([
+        adjQuery,
+        fineQuery
+      ]);
+
+      if (adjErr) throw adjErr;
       if (fineErr) throw fineErr;
+
       // Filter out orphan records where staff object is null and hourly / no-shift staff
+      const validAdjustments = (adjData || []).filter((a) => a.staff !== null && !isExemptFromLateFines(a.staff));
+      setAdjustments(validAdjustments as unknown as Adjustment[]);
+
       const validFines = (fineData || []).filter((f) => f.staff !== null && !isExemptFromLateFines(f.staff));
       setFines(validFines as unknown as LateFine[]);
 
@@ -261,14 +273,22 @@ export default function ApprovalsPage() {
     }
     fetchApprovals();
 
-    // Subscribe to updates
+    // Subscribe to updates with debounce
+    let debounceTimer: NodeJS.Timeout | null = null;
+    const debouncedFetch = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        fetchApprovals();
+      }, 2500);
+    };
+
     const adjChannel = supabase
       .channel('adjustments-approvals')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'attendance_adjustments' },
         () => {
-          fetchApprovals();
+          debouncedFetch();
         }
       )
       .subscribe();
@@ -279,12 +299,13 @@ export default function ApprovalsPage() {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'late_fines' },
         () => {
-          fetchApprovals();
+          debouncedFetch();
         }
       )
       .subscribe();
 
     return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
       adjChannel.unsubscribe();
       fineChannel.unsubscribe();
     };

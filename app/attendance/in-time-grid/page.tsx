@@ -4,7 +4,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
 import { supabase } from '@/lib/supabase';
-import { fetchAllAttendance, getDaysInMonth } from '@/lib/salary';
+import { getDaysInMonth } from '@/lib/salary';
 import { getFineSettings } from '@/lib/fineSettings';
 import {
   buildInTimeGridModel,
@@ -21,6 +21,26 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 
+async function fetchInTimeAttendance(supabaseClient: any, startDate: string, endDate: string) {
+  let allRows: AttendanceRawRecord[] = [];
+  let page = 0;
+  const pageSize = 1000;
+  while (true) {
+    const { data, error } = await supabaseClient
+      .from('attendance')
+      .select('id, staff_id, date, check_in_time, check_out_time, status, day_type, minutes_late, color_code, override_shift_start, override_shift_end')
+      .gte('date', startDate)
+      .lte('date', endDate)
+      .range(page * pageSize, (page + 1) * pageSize - 1);
+
+    if (error || !data || data.length === 0) break;
+    allRows = allRows.concat(data);
+    if (data.length < pageSize) break;
+    page++;
+  }
+  return allRows;
+}
+
 async function fetchAllLateFines(supabaseClient: any, startDate: string, endDate: string) {
   let allRows: LateFineRawRecord[] = [];
   let page = 0;
@@ -28,7 +48,7 @@ async function fetchAllLateFines(supabaseClient: any, startDate: string, endDate
   while (true) {
     const { data, error } = await supabaseClient
       .from('late_fines')
-      .select('*')
+      .select('id, staff_id, date, late_minutes, color_code, fine_amount, waived, waived_amount, waived_by, waived_reason, confirmed')
       .gte('date', startDate)
       .lte('date', endDate)
       .range(page * pageSize, (page + 1) * pageSize - 1);
@@ -112,15 +132,24 @@ export default function InTimeGridPage() {
         staffQuery = staffQuery.eq('branch_id', userBranch);
       }
 
-      const { data: staffData, error: staffErr } = await staffQuery.order('name');
-      if (staffErr) throw staffErr;
+      // Run all independent grid queries in parallel
+      const [
+        { data: staffData, error: staffErr },
+        rawAttendance,
+        rawFines,
+        rawLeaves,
+        fineSettingsData,
+        { data: exemptionsData }
+      ] = await Promise.all([
+        staffQuery.order('name'),
+        fetchInTimeAttendance(supabase, startDate, endDate),
+        fetchAllLateFines(supabase, startDate, endDate),
+        fetchAllLeaveRequests(supabase, startDate, endDate),
+        getFineSettings(supabase),
+        supabase.from('staff_fine_exemptions').select('staff_id')
+      ]);
 
-      // 2. Fetch all attendance with pagination
-      const rawAttendance: AttendanceRawRecord[] = await fetchAllAttendance(
-        supabase,
-        startDate,
-        endDate
-      );
+      if (staffErr) throw staffErr;
 
       // Filter staff list:
       // Active staff are kept as normal.
@@ -144,28 +173,6 @@ export default function InTimeGridPage() {
             is_new: isNew,
           };
         });
-
-      // 3. Fetch late_fines with pagination
-      const rawFines: LateFineRawRecord[] = await fetchAllLateFines(
-        supabase,
-        startDate,
-        endDate
-      );
-
-      // 4. Fetch approved leave requests
-      const rawLeaves: LeaveRequestRawRecord[] = await fetchAllLeaveRequests(
-        supabase,
-        startDate,
-        endDate
-      );
-
-      // 5. Fetch fine settings
-      const fineSettingsData = await getFineSettings(supabase);
-
-      // 6. Fetch staff fine exemptions
-      const { data: exemptionsData } = await supabase
-        .from('staff_fine_exemptions')
-        .select('staff_id');
       const exemptStaffIds = new Set<string>(
         (exemptionsData || []).map((e: any) => e.staff_id)
       );

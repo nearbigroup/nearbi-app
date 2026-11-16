@@ -60,33 +60,67 @@ export default function BulkConfirmTab({
         staffQuery = staffQuery.eq('branch_id', userBranch);
       }
 
-      const { data: staffData, error: staffError } = await staffQuery.order('name');
-         
-      if (staffError) throw staffError;
-      if (!staffData) return;
-
-      // 2. Fetch OT minutes and other details from attendance for this month
       const year = parseInt(month.split('-')[0]);
       const monthNum = parseInt(month.split('-')[1]);
       const startDate = `${month}-01`;
       const lastDayNum = new Date(year, monthNum, 0).getDate();
       const endDate = `${year}-${String(monthNum).padStart(2, '0')}-${String(lastDayNum).padStart(2, '0')}`;
-      const attData = await fetchAllAttendance(supabase, startDate, endDate);
-      setAttendanceRecords(attData || []);
 
-      // Fetch approved leaves
-      const { data: leaveData, error: leaveError } = await fetchAllPages((start, end) =>
-        supabase
-          .from('leave_requests')
-          .select('*')
-          .eq('status', 'approved')
-          .gte('date', startDate)
-          .lte('date', endDate)
-          .range(start, end)
-      );
+      // Run all independent queries in parallel
+      const [
+        { data: staffData, error: staffError },
+        attData,
+        { data: leaveData, error: leaveError },
+        { data: confData, error: confError },
+        { data: lfData, error: lfError },
+        { data: sfData, error: sfError }
+      ] = await Promise.all([
+        staffQuery.order('name'),
+        fetchAllAttendance(supabase, startDate, endDate),
+        fetchAllPages((start, end) =>
+          supabase
+            .from('leave_requests')
+            .select('*')
+            .eq('status', 'approved')
+            .gte('date', startDate)
+            .lte('date', endDate)
+            .range(start, end)
+        ),
+        fetchAllPages((start, end) =>
+          supabase
+            .from('salary_confirmations')
+            .select('*')
+            .eq('month', month)
+            .range(start, end)
+        ),
+        fetchAllPages((start, end) =>
+          supabase
+            .from('late_fines')
+            .select('*')
+            .eq('month', month)
+            .range(start, end)
+        ),
+        fetchAllPages((start, end) =>
+          supabase
+            .from('special_fines')
+            .select('*')
+            .eq('month', month)
+            .range(start, end)
+        )
+      ]);
 
+      if (staffError) throw staffError;
+      if (!staffData) return;
       if (leaveError) throw leaveError;
+      if (confError) throw confError;
+      if (lfError) throw lfError;
+      if (sfError) throw sfError;
+
+      setAttendanceRecords(attData || []);
       setLeaveRequests(leaveData || []);
+      if (confData) setConfirmations(confData);
+      setLateFines(lfData || []);
+      setSpecialFines(sfData || []);
 
       const otMap: Record<string, number> = {};
       if (attData) {
@@ -103,40 +137,6 @@ export default function BulkConfirmTab({
       }));
 
       setStaffList(staffWithOT as unknown as Staff[]);
-
-      // 3. Fetch existing confirmations
-      const { data: confData, error: confError } = await fetchAllPages((start, end) =>
-        supabase
-          .from('salary_confirmations')
-          .select('*')
-          .eq('month', month)
-          .range(start, end)
-      );
-
-      if (confError) throw confError;
-      if (confData) setConfirmations(confData);
-
-      // 4. Fetch late fines
-      const { data: lfData, error: lfError } = await fetchAllPages((start, end) =>
-        supabase
-          .from('late_fines')
-          .select('*')
-          .eq('month', month)
-          .range(start, end)
-      );
-      if (lfError) throw lfError;
-      setLateFines(lfData || []);
-
-      // 5. Fetch special fines
-      const { data: sfData, error: sfError } = await fetchAllPages((start, end) =>
-        supabase
-          .from('special_fines')
-          .select('*')
-          .eq('month', month)
-          .range(start, end)
-      );
-      if (sfError) throw sfError;
-      setSpecialFines(sfData || []);
 
     } catch (err) {
       console.error(err);
