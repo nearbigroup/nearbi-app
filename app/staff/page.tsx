@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
+import { canWrite } from '@/lib/roles';
 import { supabase, fetchAllPages } from '@/lib/supabase';
 import { createAuditLog, writeAuditLog } from '@/lib/audit';
 import { Search, Plus, Trash2, Edit2, Eye, EyeOff, Lock, X, AlertTriangle, Users, AlertCircle, RefreshCw, Cake, Download, Upload, Check, Phone, FileText, Award, TrendingUp, TrendingDown, Calendar, Clock, DollarSign, Star, ChevronDown, ChevronUp, BarChart2 } from 'lucide-react';
@@ -2589,7 +2590,7 @@ export default function StaffPage() {
             <Download size={16} strokeWidth={1.5} />
             <span>Download Template</span>
           </button>
-          {(user?.role === 'admin' || user?.role === 'ops_manager' || user?.role === 'staff_executive') && (
+          {canWrite(user?.role) && (user?.role === 'admin' || user?.role === 'ops_manager' || user?.role === 'staff_executive') && (
             <button
               onClick={handleExportStaff}
               className="bg-white border border-[#E8E8E8] text-[#1A1A1A] hover:bg-[#F8F8F8] px-3.5 py-2 rounded-[12px] text-xs font-bold flex items-center space-x-1.5 transition-all shadow-sm active:scale-95 cursor-pointer"
@@ -2618,7 +2619,7 @@ export default function StaffPage() {
               </button>
             </>
           )}
-          {(user?.role === 'admin' || user?.role === 'ops_manager' || user?.role === 'staff_executive') && (
+          {canWrite(user?.role) && (user?.role === 'admin' || user?.role === 'ops_manager' || user?.role === 'staff_executive') && (
             <button
               onClick={handleOpenAddPanel}
               className="bg-[#1A1A1A] text-white hover:bg-[#333333] font-bold px-4 py-2 rounded-[12px] text-sm flex items-center space-x-1.5 active:scale-95 transition-all shadow-md"
@@ -2677,7 +2678,7 @@ export default function StaffPage() {
       </div>
 
       {/* Bulk Delete / Selection Bar */}
-      {user?.role === 'admin' && (
+      {canWrite(user?.role) && user?.role === 'admin' && (
         <div className="flex flex-wrap items-center justify-between gap-2 bg-[#F8F8F8] border border-[#E8E8E8] rounded-xl p-3 shadow-sm select-none">
           <div className="flex items-center space-x-2">
             <button
@@ -2816,7 +2817,7 @@ export default function StaffPage() {
                           <Award size={14} strokeWidth={1.5} />
                         </button>
                       )}
-                      {(user?.role === 'admin' || user?.role === 'ops_manager') && (
+                      {canWrite(user?.role) && (user?.role === 'admin' || user?.role === 'ops_manager') && (
                         <button
                           onClick={() => handleOpenEditStaff(s)}
                           className="p-1.5 text-[#555555] hover:text-[#1A1A1A] hover:bg-[#F2F2F2] rounded-lg transition-all cursor-pointer"
@@ -2825,7 +2826,7 @@ export default function StaffPage() {
                           <Edit2 size={14} strokeWidth={1.5} />
                         </button>
                       )}
-                      {user?.role === 'admin' && (
+                      {canWrite(user?.role) && user?.role === 'admin' && (
                         <button
                           onClick={() => {
                             setSingleDeleteConfirmText('');
@@ -2952,7 +2953,7 @@ export default function StaffPage() {
                         ) : (
                           <div className="text-[10px] text-[var(--text-muted)] italic font-semibold font-sans">No DOB recorded</div>
                         )}
-                        {(user?.role === 'admin' || user?.role === 'ops_manager') && (
+                        {canWrite(user?.role) && (user?.role === 'admin' || user?.role === 'ops_manager') && (
                           <button
                             type="button"
                             onClick={(e) => {
@@ -3041,7 +3042,7 @@ export default function StaffPage() {
                     })()}
 
                     {/* Fine button */}
-                    {user?.role !== 'admin' && (user?.role === 'ops_manager' || user?.role === 'staff_executive') && (
+                    {canWrite(user?.role) && user?.role !== 'admin' && (user?.role === 'ops_manager' || user?.role === 'staff_executive') && (
                       <div className="mt-2.5 flex justify-end">
                         <button
                           onClick={(e) => {

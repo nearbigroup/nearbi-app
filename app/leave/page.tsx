@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
+import { canWrite } from '@/lib/roles';
 import { supabase, fetchAllPages } from '@/lib/supabase';
 import { createAuditLog } from '@/lib/audit';
 import { RefreshCw, Calendar, Check, X } from 'lucide-react';
@@ -537,7 +538,7 @@ export default function LeavePage() {
 
               {/* Actions row */}
               {activeTab === 'pending' ? (
-                user?.role === 'partner_viewer' || user?.role === 'nearbi_homes_supervisor' ? (
+                !canWrite(user?.role) || user?.role === 'nearbi_homes_supervisor' ? (
                   <div className="text-center py-2.5 text-xs text-[#999] font-bold border border-[#E8E8E8] rounded-[12px] bg-[#F8F8F8]">
                     Pending Approval (Read Only)
                   </div>

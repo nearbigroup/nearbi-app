@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth-context';
+import { canWrite } from '@/lib/roles';
 import { supabase, fetchAllPages } from '@/lib/supabase';
 import { createAuditLog, writeAuditLog } from '@/lib/audit';
 import { Clock, RefreshCw, CircleCheck, CircleX, AlertTriangle, X, AlertCircle, Download, Upload, Check, List, LayoutGrid, MoreVertical, Plus, Camera, Flag, User, Calendar } from 'lucide-react';
@@ -88,7 +89,7 @@ interface Adjustment {
 export default function AttendancePage() {
   const router = useRouter();
   const { user, userBranch, canSeeAllBranches } = useAuth();
-  const canEdit = user?.role === 'admin' || user?.role === 'ops_manager' || (user?.role === 'staff_executive' && user?.branch !== null);
+  const canEdit = canWrite(user?.role) && (user?.role === 'admin' || user?.role === 'ops_manager' || (user?.role === 'staff_executive' && user?.branch !== null));
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   
@@ -3303,7 +3304,7 @@ export default function AttendancePage() {
 
           {/* Bottom actions bar */}
           <div className="flex flex-col items-center space-y-4 pb-4 z-10 w-full max-w-md mx-auto" onClick={(e) => e.stopPropagation()}>
-            {selectedPhoto.attendanceId && (user?.role === 'admin' || user?.role === 'ops_manager') && (
+            {selectedPhoto.attendanceId && canWrite(user?.role) && (user?.role === 'admin' || user?.role === 'ops_manager') && (
               <div className="w-full bg-white/10 backdrop-blur border border-white/20 rounded-[14px] p-4 text-white text-xs space-y-3">
                 {selectedPhoto.photo_flagged ? (
                   <div className="space-y-2 text-left">
@@ -4323,7 +4324,7 @@ export default function AttendancePage() {
       )}
 
       {/* Add Attendance Record Bottom Sheet */}
-      {addModalOpen && (
+      {canWrite(user?.role) && addModalOpen && (
         <div className="fixed inset-0 z-[12000] flex items-end justify-center">
           <div
             className="absolute inset-0 bg-black/60 backdrop-blur-sm"
@@ -4443,7 +4444,7 @@ export default function AttendancePage() {
         </div>
       )}
       {/* Floating Action Button */}
-      {(user?.role === 'admin' || user?.role === 'ops_manager' || (user?.role === 'staff_executive' && user?.branch !== null)) && (
+      {canWrite(user?.role) && (user?.role === 'admin' || user?.role === 'ops_manager' || (user?.role === 'staff_executive' && user?.branch !== null)) && (
         <button
           onClick={() => {
             setAddStaffId('');

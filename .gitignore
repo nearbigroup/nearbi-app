@@ -36,6 +36,11 @@ yarn-error.log*
 # vercel
 .vercel
 
+# performance baselines
+/perf_baseline/
+/perf_after/
+/nearbi-export-tests/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts

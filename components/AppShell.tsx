@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useRef } from 'react';
 import { useAuth } from '@/lib/auth-context';
+import { canWrite } from '@/lib/roles';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
@@ -73,7 +74,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
-    if (!user || pathname === '/' || pathname === '/kiosk') return;
+    if (!user || pathname === '/' || pathname === '/kiosk' || !canWrite(user.role)) return;
 
     fetchUnreadCount();
 
@@ -144,7 +145,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     { label: 'Staff', path: '/staff', icon: <Users size={22} strokeWidth={1.5} /> },
     { label: 'Leave', path: '/leave', icon: <ClipboardList size={22} strokeWidth={1.5} /> },
     ...(!isStaffExec ? [{ label: 'Salary', path: '/salary', icon: <Wallet size={22} strokeWidth={1.5} /> }] : []),
-    { label: 'Approvals', path: '/approvals', icon: <CheckSquare size={22} strokeWidth={1.5} /> },
+    ...(canWrite(user.role) ? [{ label: 'Approvals', path: '/approvals', icon: <CheckSquare size={22} strokeWidth={1.5} /> }] : []),
     ...(showResignations ? [{ label: 'Resign', path: '/resignations', icon: <UserMinus size={22} strokeWidth={1.5} /> }] : []),
     ...(user.role === 'admin' ? [{ label: 'History', path: '/audit-history', icon: <History size={22} strokeWidth={1.5} /> }] : []),
     ...(user.role === 'admin' || user.role === 'ops_manager' ? [{ label: 'SOP', path: '/sop-tasks', icon: <ClipboardCheck size={22} strokeWidth={1.5} /> }] : []),

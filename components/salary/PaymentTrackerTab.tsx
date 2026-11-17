@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase, fetchAllPages } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth-context';
+import { canWrite } from '@/lib/roles';
 import { Staff, SalaryConfirmation, SalaryPayment } from './types';
 import { formatCurrency, getCurrentMonthStr, formatMonthDisplay } from './utils';
 import { Check, X } from 'lucide-react';
@@ -266,7 +267,7 @@ export default function PaymentTrackerTab({ selectedMonth }: { selectedMonth?: s
                   <div className="text-sm font-bold text-[var(--warning)] mb-2">
                     {formatCurrency(displayAmount)}
                   </div>
-                  {user?.role === 'partner_viewer' || user?.role === 'nearbi_homes_supervisor' ? (
+                  {!canWrite(user?.role) || user?.role === 'nearbi_homes_supervisor' ? (
                     <span className="text-[10px] text-gray-500 font-bold uppercase tracking-wider bg-gray-100 border border-gray-200 px-2 py-1 rounded">
                       Unpaid
                     </span>
@@ -331,7 +332,7 @@ export default function PaymentTrackerTab({ selectedMonth }: { selectedMonth?: s
       </div>
 
       {/* Payment Slide-up Drawer Form */}
-      {selectedStaff && (
+      {canWrite(user?.role) && selectedStaff && (
         <div className="fixed inset-0 z-[11000] flex flex-col justify-end">
           <div
             className="absolute inset-0 bg-black/50 backdrop-blur-sm"

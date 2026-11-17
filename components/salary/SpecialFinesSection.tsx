@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { supabase, fetchAllPages } from '@/lib/supabase';
 import { createAuditLog } from '@/lib/audit';
 import { useAuth } from '@/lib/auth-context';
+import { canWrite } from '@/lib/roles';
 import { Edit2, Check, X, ShieldAlert, Trash2 } from 'lucide-react';
 import { formatCurrency } from './utils';
 
@@ -250,7 +251,7 @@ export default function SpecialFinesSection({
     );
   };
 
-  const canManage = user?.role === 'admin' || user?.role === 'ops_manager';
+  const canManage = canWrite(user?.role) && (user?.role === 'admin' || user?.role === 'ops_manager');
   const hasPending = fines.some(f => !f.confirmed && !f.waived);
 
   if (loading) {
@@ -397,7 +398,7 @@ export default function SpecialFinesSection({
         </table>
       </div>
       {/* Waive Fine Bottom Sheet */}
-      {waiveModalOpen && selectedFineForWaive && (
+      {canManage && waiveModalOpen && selectedFineForWaive && (
         <div className="fixed inset-0 z-[12000] flex items-end justify-center">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-xs" onClick={() => { setWaiveModalOpen(false); setSelectedFineForWaive(null); }} />
           <div className="bg-white rounded-t-3xl shadow-2xl relative z-10 p-5 w-full max-w-md border-t border-[#E8E8E8] flex flex-col space-y-4 text-[#1A1A1A] animate-in slide-in-from-bottom duration-250">

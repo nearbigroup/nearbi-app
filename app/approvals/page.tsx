@@ -2,6 +2,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
+import { canWrite } from '@/lib/roles';
+import { useRouter } from 'next/navigation';
 import { supabase, fetchAllPages } from '@/lib/supabase';
 import { isExemptFromLateFines } from '@/lib/fineSettings';
 import { createAuditLog, writeAuditLog } from '@/lib/audit';
@@ -86,8 +88,15 @@ interface AttendanceRecord {
 }
 
 export default function ApprovalsPage() {
-  const { user, userBranch } = useAuth();
+  const { user, userBranch, isLoading } = useAuth();
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<ApprovalTab>('ot');
+
+  useEffect(() => {
+    if (!isLoading && user && !canWrite(user.role)) {
+      router.replace('/dashboard');
+    }
+  }, [user, isLoading, router]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState('');
   const [toastMsg, setToastMsg] = useState('');
@@ -264,6 +273,7 @@ export default function ApprovalsPage() {
   };
 
   useEffect(() => {
+    if (!user || !canWrite(user.role)) return;
     setLoading(true);
     if (userBranch) {
       autoCloseCheckouts(userBranch);
@@ -844,6 +854,10 @@ export default function ApprovalsPage() {
       year: 'numeric',
     });
   };
+
+  if (!canWrite(user?.role)) {
+    return null;
+  }
 
   return (
     <div className="space-y-5 pb-6">

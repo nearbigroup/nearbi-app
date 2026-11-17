@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase, fetchAllPages } from '@/lib/supabase';
 import { useAuth } from '@/lib/auth-context';
+import { canWrite } from '@/lib/roles';
 import { calculateSalary, calculateHourlySalary, calculateMinutesWorked, calculateBonusDays, fetchAllAttendance } from '@/lib/salary';
 import { Staff, SalaryConfirmation } from './types';
 import { formatCurrency, getCurrentMonthStr, formatMonthDisplay } from './utils';
@@ -555,7 +556,7 @@ export default function BulkConfirmTab({
               <AlertCircle size={16} />
               <span>There are {count} pending late fines totaling {formatCurrency(total)}.</span>
             </div>
-            {user?.role !== 'partner_viewer' && user?.role !== 'nearbi_homes_supervisor' && (
+            {canWrite(user?.role) && user?.role !== 'nearbi_homes_supervisor' && (
               <button
                 onClick={handleConfirmAllFines}
                 disabled={confirmingFines}
@@ -598,7 +599,7 @@ export default function BulkConfirmTab({
       </div>
 
       {/* Select All / Checkbox controls */}
-      {user?.role !== 'partner_viewer' && user?.role !== 'nearbi_homes_supervisor' && (
+      {canWrite(user?.role) && user?.role !== 'nearbi_homes_supervisor' && (
         <div className="flex justify-between items-center bg-white border border-[#E8E8E8] rounded-xl p-3 print:hidden shadow-sm">
           <label className="flex items-center space-x-2.5 text-xs font-bold text-[#1A1A1A] cursor-pointer">
             <input
@@ -633,7 +634,7 @@ export default function BulkConfirmTab({
             >
               {/* Profile Card Header */}
               <div className="flex items-center space-x-3">
-                {!isConfirmed && user?.role !== 'partner_viewer' && user?.role !== 'nearbi_homes_supervisor' && (
+                {!isConfirmed && canWrite(user?.role) && user?.role !== 'nearbi_homes_supervisor' && (
                   <input
                     type="checkbox"
                     checked={selectedStaffIds.includes(s.id)}
@@ -819,7 +820,7 @@ export default function BulkConfirmTab({
       </div>
 
       {/* Action triggers */}
-      {user?.role === 'partner_viewer' || user?.role === 'nearbi_homes_supervisor' ? (
+      {!canWrite(user?.role) || user?.role === 'nearbi_homes_supervisor' ? (
         <div className="w-full bg-[#F2F2F2] border border-[#E8E8E8] text-[#999] font-bold text-center py-3.5 rounded-xl print:hidden text-xs flex items-center justify-center space-x-1.5">
           <span>Salary Confirmations (Read Only Mode)</span>
         </div>
@@ -838,7 +839,7 @@ export default function BulkConfirmTab({
         </div>
       )}
       {/* Bulk Action Bottom Bar */}
-      {selectedStaffIds.length > 0 && user?.role !== 'partner_viewer' && user?.role !== 'nearbi_homes_supervisor' && (
+      {selectedStaffIds.length > 0 && canWrite(user?.role) && user?.role !== 'nearbi_homes_supervisor' && (
         <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[10000] bg-[#1A1A1A] text-white border border-white/10 rounded-full px-6 py-3.5 shadow-2xl flex items-center justify-between space-x-6 animate-in slide-in-from-bottom duration-300">
           <span className="text-xs font-extrabold tracking-wide whitespace-nowrap">
             {selectedStaffIds.length} staff selected

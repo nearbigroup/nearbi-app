@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useAuth, VALID_USERS } from '@/lib/auth-context';
+import { canWrite } from '@/lib/roles';
 import { supabase } from '@/lib/supabase';
 import bcrypt from 'bcryptjs';
 import { useRouter } from 'next/navigation';
@@ -501,13 +502,19 @@ export default function SettingsPage() {
   };
 
   useEffect(() => {
-    if (isLoading || !canSeeSalaryBreakdown) return;
-    setLoading(true);
-    fetchData();
-  }, [isLoading, canSeeSalaryBreakdown]);
+    if (!isLoading && user && !canWrite(user.role)) {
+      router.replace('/dashboard');
+    }
+  }, [user, isLoading, router]);
 
   useEffect(() => {
-    if (isLoading || !canSeeSalaryBreakdown) return;
+    if (isLoading || !user || !canWrite(user.role) || !canSeeSalaryBreakdown) return;
+    setLoading(true);
+    fetchData();
+  }, [isLoading, user, canSeeSalaryBreakdown]);
+
+  useEffect(() => {
+    if (isLoading || !user || !canWrite(user.role) || !canSeeSalaryBreakdown) return;
     const loadScopedBreaks = async () => {
       try {
         const queryBranch = selectedBreakBranch === 'all' ? 'daily' : selectedBreakBranch;
@@ -1248,6 +1255,10 @@ export default function SettingsPage() {
   }
 
   // Security gate
+  if (!canWrite(user?.role)) {
+    return null;
+  }
+
   if (!canSeeSalaryBreakdown) {
     return (
       <div className="min-h-[70vh] flex flex-col items-center justify-center p-6 text-center select-none">

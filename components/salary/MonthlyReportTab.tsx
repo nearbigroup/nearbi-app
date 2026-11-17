@@ -8,6 +8,7 @@ import { Download } from 'lucide-react';
 import { calculateSalary, calculateLateSalaryDeduction, calculateBonusDays, fetchAllAttendance } from '@/lib/salary';
 import XLSX from 'xlsx-js-style';
 import { useAuth } from '@/lib/auth-context';
+import { canWrite } from '@/lib/roles';
 import { jsPDF } from 'jspdf';
 import 'jspdf-autotable';
 import ExcelJS from 'exceljs';
@@ -1860,39 +1861,41 @@ export default function MonthlyReportTab({
           </select>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
-          <button
-            onClick={handleDetailedExport}
-            className="w-full min-h-[44px] bg-emerald-600 text-white font-bold text-xs rounded-xl flex items-center justify-center space-x-1.5 active:scale-95 transition-all shadow hover:bg-emerald-700 cursor-pointer"
-          >
-            <Download size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
-            <span>Detailed Export (Daily In/Out)</span>
-          </button>
+        {canWrite(user?.role) && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+            <button
+              onClick={handleDetailedExport}
+              className="w-full min-h-[44px] bg-emerald-600 text-white font-bold text-xs rounded-xl flex items-center justify-center space-x-1.5 active:scale-95 transition-all shadow hover:bg-emerald-700 cursor-pointer"
+            >
+              <Download size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
+              <span>Detailed Export (Daily In/Out)</span>
+            </button>
 
-          <button
-            onClick={handleMonthlySummaryExport}
-            className="w-full min-h-[44px] bg-blue-600 text-white font-bold text-xs rounded-xl flex items-center justify-center space-x-1.5 active:scale-95 transition-all shadow hover:bg-blue-700 cursor-pointer"
-          >
-            <Download size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
-            <span>Monthly Summary</span>
-          </button>
+            <button
+              onClick={handleMonthlySummaryExport}
+              className="w-full min-h-[44px] bg-blue-600 text-white font-bold text-xs rounded-xl flex items-center justify-center space-x-1.5 active:scale-95 transition-all shadow hover:bg-blue-700 cursor-pointer"
+            >
+              <Download size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
+              <span>Monthly Summary</span>
+            </button>
 
-          <button
-            onClick={handleExportPDF}
-            className="w-full min-h-[44px] bg-[#1A1A1A] text-white font-bold text-xs rounded-xl flex items-center justify-center space-x-1.5 active:scale-95 transition-all shadow hover:bg-[#333333] cursor-pointer"
-          >
-            <Download size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
-            <span>Download PDF Report</span>
-          </button>
+            <button
+              onClick={handleExportPDF}
+              className="w-full min-h-[44px] bg-[#1A1A1A] text-white font-bold text-xs rounded-xl flex items-center justify-center space-x-1.5 active:scale-95 transition-all shadow hover:bg-[#333333] cursor-pointer"
+            >
+              <Download size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
+              <span>Download PDF Report</span>
+            </button>
 
-          <button
-            onClick={handleExportExcel}
-            className="w-full min-h-[44px] bg-indigo-600 text-white font-bold text-xs rounded-xl flex items-center justify-center space-x-1.5 active:scale-95 transition-all shadow hover:bg-indigo-700 cursor-pointer"
-          >
-            <Download size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
-            <span>Download Excel Report</span>
-          </button>
-        </div>
+            <button
+              onClick={handleExportExcel}
+              className="w-full min-h-[44px] bg-indigo-600 text-white font-bold text-xs rounded-xl flex items-center justify-center space-x-1.5 active:scale-95 transition-all shadow hover:bg-indigo-700 cursor-pointer"
+            >
+              <Download size={18} strokeWidth={1.5} style={{ color: 'currentColor' }} />
+              <span>Download Excel Report</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {confirmations.length === 0 && (

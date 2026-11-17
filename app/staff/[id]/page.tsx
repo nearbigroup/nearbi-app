@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth-context';
+import { canWrite } from '@/lib/roles';
 import { supabase } from '@/lib/supabase';
 import { getFineSettings, isExemptFromLateFines } from '@/lib/fineSettings';
 import { 
@@ -1681,7 +1682,7 @@ export default function StaffProfilePage() {
       </div>
 
       {/* Pending Actions & Audit Log Panel */}
-      {(pendingOT.length > 0 || pendingLateFines.length > 0 || pendingSpecialFines.length > 0 || pendingLeaves.length > 0 || auditLogs.length > 0) && (() => {
+      {canWrite(user?.role) && (pendingOT.length > 0 || pendingLateFines.length > 0 || pendingSpecialFines.length > 0 || pendingLeaves.length > 0 || auditLogs.length > 0) && (() => {
         const totalPending = pendingOT.length + pendingLateFines.length + pendingSpecialFines.length + pendingLeaves.length;
         return (
           <div className="bg-[rgba(251,191,36,0.06)] border border-[rgba(251,191,36,0.18)] rounded-[18px] p-4 space-y-3.5 card-entry">
@@ -1909,7 +1910,7 @@ export default function StaffProfilePage() {
         </div>
 
         {/* Resignation Actions */}
-        {(user?.role === 'admin' || user?.role === 'ops_manager' || user?.role === 'staff_executive') && (
+        {canWrite(user?.role) && (user?.role === 'admin' || user?.role === 'ops_manager' || user?.role === 'staff_executive') && (
           <div className="border-t border-[var(--border-strong)] pt-3.5 flex justify-end">
             {!staff.resignation_id ? (
               <button
@@ -3177,7 +3178,7 @@ export default function StaffProfilePage() {
       </div>
 
       {/* Note Addition Sheet (Modal) */}
-      {addNoteModalOpen && (
+      {canWrite(user?.role) && addNoteModalOpen && (
         <div className="fixed inset-0 z-[12000] flex items-end justify-center">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setAddNoteModalOpen(false)} />
           <div className="bg-[var(--bg-surface)] rounded-t-3xl shadow-2xl relative z-10 p-5 w-full max-w-md border-t border-[var(--border-strong)] animate-slide-up flex flex-col space-y-4">
@@ -3755,7 +3756,7 @@ export default function StaffProfilePage() {
       )}
 
       {/* Initiate Resignation Modal */}
-      {resignationModalOpen && (
+      {canWrite(user?.role) && resignationModalOpen && (
         <div className="fixed inset-0 z-[12000] flex items-end justify-center">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setResignationModalOpen(false)} />
           <div className="bg-white rounded-t-3xl shadow-2xl relative z-10 p-5 w-full max-w-md border-t border-[#E8E8E8] animate-slide-up flex flex-col space-y-4 text-[#1A1A1A]">

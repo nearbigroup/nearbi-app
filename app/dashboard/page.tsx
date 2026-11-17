@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth-context';
+import { canWrite } from '@/lib/roles';
 import { supabase, fetchAllPages } from '@/lib/supabase';
 import { createNotification } from '@/lib/notifications';
 import { createAuditLog } from '@/lib/audit';
@@ -454,7 +455,9 @@ export default function DashboardPage() {
 
   const fetchDashboardData = async () => {
     try {
-      await autoProcessResignations();
+      if (canWrite(user?.role)) {
+        await autoProcessResignations();
+      }
       // Auto-close checkouts for ops_manager
       if (user?.role === 'ops_manager') {
         try {
@@ -704,8 +707,10 @@ export default function DashboardPage() {
 
       // Reuse verifiedStaff and attData for exceptions, absent alerts, and birthdays
       await fetchExceptions(verifiedStaff, attData || []);
-      checkAndCreateAbsentAlerts(verifiedStaff, attData || []);
-      checkAndCreateBirthdayNotifications(verifiedStaff);
+      if (canWrite(user?.role)) {
+        checkAndCreateAbsentAlerts(verifiedStaff, attData || []);
+        checkAndCreateBirthdayNotifications(verifiedStaff);
+      }
     } catch (err: any) {
       console.error(err);
       setErrorMsg('Could not load data. Check connection.');
@@ -854,6 +859,11 @@ export default function DashboardPage() {
     setLoading(true);
     fetchDashboardData();
 
+    // Skip 120s background polling and realtime subscriptions for read-only roles (e.g. partner_viewer)
+    if (!canWrite(user?.role)) {
+      return;
+    }
+
     // Poll every 120s instead of 60s, skipping if tab is hidden
     const interval = setInterval(() => {
       if (typeof document !== 'undefined' && document.hidden) return;
@@ -881,7 +891,7 @@ export default function DashboardPage() {
       if (debounceTimer) clearTimeout(debounceTimer);
       attendanceChannel.unsubscribe();
     };
-  }, [userBranch]);
+  }, [userBranch, user?.role]);
 
   // Format current date: "Friday, 20 May 2026"
   const getFormattedDate = () => {
@@ -1991,20 +2001,34 @@ export default function DashboardPage() {
 
               {/* Pending approvals alert */}
               {pendingApprovalsCount > 0 && (
-                <Link
-                  href="/approvals"
-                  className="block bg-white border border-[#E8E8E8] border-l-[4px] border-l-[#1A1A1A] rounded-[14px] p-4 text-left active:bg-[#F8F8F8] transition-colors shadow-sm"
-                >
-                  <div className="font-bold text-[#1A1A1A] text-xs flex items-center justify-between">
-                    <span className="flex items-center text-[#1A1A1A]">
-                      <CheckSquare size={16} strokeWidth={1.5} className="mr-1.5 flex-shrink-0 text-[#1A1A1A]" />
-                      {pendingApprovalsCount} OT/early-in approvals pending
-                    </span>
-                    <span className="text-[10px] uppercase font-bold text-[#999999] tracking-wider flex items-center">
-                      Review <ChevronRight size={14} strokeWidth={1.5} className="ml-0.5" />
-                    </span>
+                canWrite(user?.role) ? (
+                  <Link
+                    href="/approvals"
+                    className="block bg-white border border-[#E8E8E8] border-l-[4px] border-l-[#1A1A1A] rounded-[14px] p-4 text-left active:bg-[#F8F8F8] transition-colors shadow-sm"
+                  >
+                    <div className="font-bold text-[#1A1A1A] text-xs flex items-center justify-between">
+                      <span className="flex items-center text-[#1A1A1A]">
+                        <CheckSquare size={16} strokeWidth={1.5} className="mr-1.5 flex-shrink-0 text-[#1A1A1A]" />
+                        {pendingApprovalsCount} OT/early-in approvals pending
+                      </span>
+                      <span className="text-[10px] uppercase font-bold text-[#999999] tracking-wider flex items-center">
+                        Review <ChevronRight size={14} strokeWidth={1.5} className="ml-0.5" />
+                      </span>
+                    </div>
+                  </Link>
+                ) : (
+                  <div className="block bg-white border border-[#E8E8E8] border-l-[4px] border-l-[#1A1A1A] rounded-[14px] p-4 text-left shadow-sm">
+                    <div className="font-bold text-[#1A1A1A] text-xs flex items-center justify-between">
+                      <span className="flex items-center text-[#1A1A1A]">
+                        <CheckSquare size={16} strokeWidth={1.5} className="mr-1.5 flex-shrink-0 text-[#1A1A1A]" />
+                        {pendingApprovalsCount} OT/early-in approvals pending
+                      </span>
+                      <span className="text-[10px] uppercase font-bold text-[#999999] tracking-wider">
+                        View Only
+                      </span>
+                    </div>
                   </div>
-                </Link>
+                )
               )}
             </div>
           )}
@@ -2068,12 +2092,13 @@ export default function DashboardPage() {
           })()}
 
           {/* Quick Actions */}
-          <div>
-            <h4 className="text-[#999999] text-[11px] font-black uppercase tracking-wider mb-3">
-              Quick Actions
-            </h4>
-            
-            <div className="grid grid-cols-2 gap-3">
+          {canWrite(user?.role) && (
+            <div>
+              <h4 className="text-[#999999] text-[11px] font-black uppercase tracking-wider mb-3">
+                Quick Actions
+              </h4>
+              
+              <div className="grid grid-cols-2 gap-3">
               <Link
                 href="/attendance"
                 className="bg-white border border-[#E8E8E8] rounded-[14px] p-4 flex flex-col items-center justify-center text-center hover:bg-[#F8F8F8] active:scale-[0.98] transition-all shadow-sm group"
@@ -2226,6 +2251,7 @@ export default function DashboardPage() {
               </Link>
             </div>
           </div>
+          )}
         </>
       )}
       {/* WhatsApp Template Dialog Modal */}
